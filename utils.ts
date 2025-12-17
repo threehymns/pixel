@@ -1,5 +1,6 @@
 
-import { PixelGrid, Position, ProjectState } from './types';
+
+import { PixelGrid, Position, ProjectState, Layer, Frame, SavedPalette } from './types';
 
 export const getIndex = (x: number, y: number, width: number): number => {
   return y * width + x;
@@ -357,6 +358,217 @@ export const parseASE = async (buffer: ArrayBuffer): Promise<string[]> => {
   return colors;
 };
 
+// --- Aseprite File Parser ---
+
+async function decompress(data: Uint8Array): Promise<Uint8Array> {
+  const ds = new DecompressionStream('deflate');
+  const writer = ds.writable.getWriter();
+  writer.write(data);
+  writer.close();
+  return new Uint8Array(await new Response(ds.readable).arrayBuffer());
+}
+
+export const parseAsepriteFile = async (buffer: ArrayBuffer, fileName: string): Promise<ProjectState> => {
+  const view = new DataView(buffer);
+  
+  // Header
+  const magic = view.getUint16(4, true);
+  if (magic !== 0xA5E0) throw new Error("Invalid .ase file");
+  
+  const numFrames = view.getUint16(6, true);
+  const width = view.getUint16(8, true);
+  const height = view.getUint16(10, true);
+  const colorDepth = view.getUint16(12, true);
+  const flags = view.getUint32(14, true);
+  const transparentIndex = view.getUint8(28);
+  
+  let offset = 128;
+  
+  const layers: Layer[] = [];
+  const frames: Frame[] = [];
+  let palette: string[] = []; 
+  const layerInfo: { id: string, type: number, visible: boolean }[] = [];
+
+  for (let f = 0; f < numFrames; f++) {
+    const frameStart = offset;
+    const frameBytes = view.getUint32(offset, true);
+    const frameMagic = view.getUint16(offset + 4, true);
+    if (frameMagic !== 0xF1FA) throw new Error("Invalid frame magic");
+    
+    const oldChunks = view.getUint16(offset + 6, true);
+    const newChunks = view.getUint32(offset + 12, true);
+    const chunkCount = newChunks === 0 ? oldChunks : newChunks;
+    
+    offset += 16;
+    
+    // Init frame data with empty grids
+    const frameData: Record<string, (string|null)[]> = {};
+    layerInfo.forEach(l => {
+        frameData[l.id] = new Array(width * height).fill(null);
+    });
+    
+    for (let c = 0; c < chunkCount; c++) {
+      const chunkStart = offset;
+      const chunkSize = view.getUint32(offset, true);
+      const chunkType = view.getUint16(offset + 4, true);
+      const chunkDataOffset = offset + 6;
+      
+      // Layer Chunk (0x2004)
+      if (chunkType === 0x2004 && f === 0) {
+          const flags = view.getUint16(chunkDataOffset, true);
+          const type = view.getUint16(chunkDataOffset + 2, true);
+          const nameLen = view.getUint16(chunkDataOffset + 14, true);
+          const name = new TextDecoder().decode(new Uint8Array(buffer, chunkDataOffset + 16, nameLen));
+          
+          const id = `layer-${layerInfo.length + 1}`;
+          const visible = (flags & 1) !== 0;
+          const locked = (flags & 4) !== 0;
+          
+          layerInfo.push({ id, type, visible });
+          layers.push({ id, name, visible, locked });
+          
+          // Initialize grid for this layer
+          frameData[id] = new Array(width * height).fill(null);
+      }
+      // Cel Chunk (0x2005)
+      else if (chunkType === 0x2005) {
+          const layerIndex = view.getUint16(chunkDataOffset, true);
+          const x = view.getInt16(chunkDataOffset + 2, true);
+          const y = view.getInt16(chunkDataOffset + 4, true);
+          const opacity = view.getUint8(chunkDataOffset + 6);
+          const celType = view.getUint16(chunkDataOffset + 7, true);
+          
+          const layer = layerInfo[layerIndex];
+          if (layer) {
+              const targetGrid = frameData[layer.id] || new Array(width * height).fill(null);
+              frameData[layer.id] = targetGrid;
+              
+              if (celType === 2) { // Compressed Image
+                  const w = view.getUint16(chunkDataOffset + 22, true);
+                  const h = view.getUint16(chunkDataOffset + 24, true);
+                  const dataStart = chunkDataOffset + 26;
+                  const dataLen = (chunkStart + chunkSize) - dataStart;
+                  const compressed = new Uint8Array(buffer, dataStart, dataLen);
+                  
+                  const decompressed = await decompress(compressed);
+                  
+                  // Blit pixels
+                  for (let cy = 0; cy < h; cy++) {
+                      for (let cx = 0; cx < w; cx++) {
+                          const destX = x + cx;
+                          const destY = y + cy;
+                          if (destX >= 0 && destX < width && destY >= 0 && destY < height) {
+                              const idx = cy * w + cx;
+                              let color: string | null = null;
+                              
+                              if (colorDepth === 32) {
+                                  const r = decompressed[idx * 4];
+                                  const g = decompressed[idx * 4 + 1];
+                                  const b = decompressed[idx * 4 + 2];
+                                  const a = decompressed[idx * 4 + 3];
+                                  if (a > 0) {
+                                      color = rgbToHex(r, g, b);
+                                  }
+                              } else if (colorDepth === 8) {
+                                  const cIdx = decompressed[idx];
+                                  if (cIdx !== transparentIndex) {
+                                      color = palette[cIdx];
+                                  }
+                              } else if (colorDepth === 16) {
+                                  const val = decompressed[idx * 2];
+                                  const alpha = decompressed[idx * 2 + 1];
+                                  if (alpha > 0) {
+                                      color = rgbToHex(val, val, val);
+                                  }
+                              }
+
+                              if (color) targetGrid[destY * width + destX] = color;
+                          }
+                      }
+                  }
+              }
+          }
+      }
+      // Palette Chunk (0x2019)
+      else if (chunkType === 0x2019) {
+        const firstIndex = view.getUint32(chunkDataOffset + 4, true);
+        const lastIndex = view.getUint32(chunkDataOffset + 8, true);
+        let palOffset = chunkDataOffset + 20;
+        
+        for (let i = firstIndex; i <= lastIndex; i++) {
+            const entryFlags = view.getUint16(palOffset, true);
+            const r = view.getUint8(palOffset + 2);
+            const g = view.getUint8(palOffset + 3);
+            const b = view.getUint8(palOffset + 4);
+            // const a = view.getUint8(palOffset + 5);
+            
+            palOffset += 6;
+            if (entryFlags & 1) {
+                const nameLen = view.getUint16(palOffset, true);
+                palOffset += 2 + nameLen;
+            }
+            
+            while(palette.length <= i) palette.push('#000000');
+            palette[i] = rgbToHex(r, g, b);
+        }
+      }
+      // Old Palette (0x0004 or 0x0011)
+      else if (chunkType === 0x0004 || chunkType === 0x0011) {
+         const numPackets = view.getUint16(chunkDataOffset, true);
+         let palOffset = chunkDataOffset + 2;
+         let currentIdx = 0;
+         for(let p=0; p<numPackets; p++) {
+             const skip = view.getUint8(palOffset++);
+             let count = view.getUint8(palOffset++);
+             if (count === 0) count = 256;
+             currentIdx += skip;
+             for(let k=0; k<count; k++) {
+                 const r = view.getUint8(palOffset++);
+                 const g = view.getUint8(palOffset++);
+                 const b = view.getUint8(palOffset++);
+                 while(palette.length <= currentIdx) palette.push('#000000');
+                 palette[currentIdx] = rgbToHex(r, g, b);
+                 currentIdx++;
+             }
+         }
+      }
+      
+      offset = chunkStart + chunkSize;
+    }
+    
+    frames.push({
+        id: `frame-${f+1}`,
+        layerData: frameData
+    });
+  }
+
+  return {
+    id: `project-${Date.now()}`,
+    title: fileName.replace(/\.(ase|aseprite)$/, ''),
+    width,
+    height,
+    layers: layers.length ? layers.slice().reverse() : [{id:'l1', name:'Layer 1', visible:true, locked:false}],
+    frames,
+    activeLayerId: layers.length ? layers[0].id : 'l1',
+    activeFrameIndex: 0,
+    palette: palette.length ? palette : ['#000000', '#ffffff'],
+    paletteLibrary: palette.length ? [{id:'imported', name:'Imported', colors: palette}] : [],
+    activePaletteId: palette.length ? 'imported' : '',
+    primaryColor: palette[0] || '#ffffff',
+    secondaryColor: palette[1] || '#000000',
+    tool: 'pencil',
+    brushSize: 1,
+    brushShape: 'square',
+    fillContiguous: true,
+    pixelPerfect: false,
+    zoom: width > 64 ? 4 : 16,
+    onionSkin: false,
+    showGrid: false,
+    selection: null,
+    selectionMode: 'replace'
+  };
+};
+
 export const extractColorsFromPNG = (file: File): Promise<string[]> => {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -383,7 +595,16 @@ export const extractColorsFromPNG = (file: File): Promise<string[]> => {
 
 export const fileToProjectState = (file: File): Promise<ProjectState> => {
   return new Promise((resolve, reject) => {
-    const isJSON = file.name.toLowerCase().endsWith('.json');
+    const name = file.name.toLowerCase();
+
+    if (name.endsWith('.ase') || name.endsWith('.aseprite')) {
+        file.arrayBuffer().then(buffer => {
+            parseAsepriteFile(buffer, file.name).then(resolve).catch(reject);
+        }).catch(reject);
+        return;
+    }
+
+    const isJSON = name.endsWith('.json');
     
     if (isJSON) {
       const reader = new FileReader();
