@@ -118,7 +118,7 @@ export default function App() {
         />
 
         <div className="flex-1"></div>
-        {!isHome && <div className="text-muted-foreground">{state.width}x{state.height} px</div>}
+        {!isHome && <div className="text-muted-foreground">{state.width}x{state.height} px | {Math.round(state.zoom * 100)}%</div>}
       </div>
 
       {/* Tab Strip */}
@@ -286,7 +286,7 @@ export default function App() {
               onResizeStart={layout.startLeftResize}
             />
 
-            <div className="flex-1 flex flex-col relative bg-[oklch(0.145_0_0)] min-w-0">
+            <div className="flex-1 flex flex-col relative bg-[oklch(0.145_0_0)] min-w-0 overflow-hidden">
                 <Canvas 
                   state={state}
                   onDrawStart={canvasTools.handleDrawStart}
@@ -294,6 +294,7 @@ export default function App() {
                   onDrawEnd={canvasTools.handleDrawEnd}
                   onSelectionUpdate={(sel) => updateState({...state, selection: sel}, { action: 'Select Area', tool: state.tool })}
                   onMovePixels={canvasTools.handleMovePixels}
+                  onZoom={(z) => updateState({...state, zoom: z})}
                 />
             </div>
 

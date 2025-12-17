@@ -1,4 +1,5 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+
+import React, { useRef, useEffect, useState, useCallback, useLayoutEffect } from 'react';
 import { ProjectState, Position } from '../types';
 import { 
   drawCheckeredBackground, getIndex, getCoords,
@@ -12,6 +13,7 @@ interface CanvasProps {
   onDrawEnd: () => void;
   onSelectionUpdate: (sel: Set<number> | null) => void;
   onMovePixels: (newSelection: Set<number>, offset: Position) => void;
+  onZoom: (zoom: number) => void;
 }
 
 export const Canvas: React.FC<CanvasProps> = ({ 
@@ -20,9 +22,13 @@ export const Canvas: React.FC<CanvasProps> = ({
   onDraw, 
   onDrawEnd,
   onSelectionUpdate,
-  onMovePixels
+  onMovePixels,
+  onZoom
 }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  
+  // Interaction State
   const [isDrawing, setIsDrawing] = useState(false);
   const [cursorPos, setCursorPos] = useState<{x: number, y: number} | null>(null);
   
@@ -37,6 +43,17 @@ export const Canvas: React.FC<CanvasProps> = ({
   const [moveOffset, setMoveOffset] = useState<Position>({x: 0, y: 0});
   const [floatingPixels, setFloatingPixels] = useState<Map<number, string | null> | null>(null);
 
+  // Gesture State
+  const gestureState = useRef({
+      startZoom: state.zoom,
+      startDist: 0,
+      startCenter: { x: 0, y: 0 },
+      startScroll: { x: 0, y: 0 }
+  });
+  
+  // Scroll Restoration for Zoom
+  const pendingScrollRef = useRef<{ left: number, top: number } | null>(null);
+
   // Marching Ants Animation
   useEffect(() => {
     let animId: number;
@@ -48,18 +65,30 @@ export const Canvas: React.FC<CanvasProps> = ({
     return () => cancelAnimationFrame(animId);
   }, []);
 
-  const getPixelCoords = useCallback((e: React.MouseEvent | MouseEvent) => {
+  // Restore scroll after zoom render
+  useLayoutEffect(() => {
+      if (containerRef.current && pendingScrollRef.current) {
+          containerRef.current.scrollLeft = pendingScrollRef.current.left;
+          containerRef.current.scrollTop = pendingScrollRef.current.top;
+          pendingScrollRef.current = null;
+      }
+  }, [state.zoom, state.width, state.height]);
+
+  const getPixelCoords = useCallback((clientX: number, clientY: number) => {
     if (!canvasRef.current) return null;
     const rect = canvasRef.current.getBoundingClientRect();
     const scale = state.zoom;
-    const x = Math.floor((e.clientX - rect.left) / scale);
-    const y = Math.floor((e.clientY - rect.top) / scale);
+    const x = Math.floor((clientX - rect.left) / scale);
+    const y = Math.floor((clientY - rect.top) / scale);
     return { x, y };
   }, [state.zoom]);
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.button !== 0) return;
-    const coords = getPixelCoords(e);
+  // -- Interaction Logic (Shared Mouse/Touch) --
+
+  const handlePointerDown = (clientX: number, clientY: number, button: number = 0) => {
+    if (button !== 0) return; // Only left click or touch
+    
+    const coords = getPixelCoords(clientX, clientY);
     if (!coords) return;
     const { x, y } = coords;
 
@@ -69,7 +98,6 @@ export const Canvas: React.FC<CanvasProps> = ({
       setMoveStart({x, y});
       setMoveOffset({x: 0, y: 0});
       
-      // Capture pixels under selection for preview
       const frame = state.frames[state.activeFrameIndex];
       const layerData = frame.layerData[state.activeLayerId];
       if (layerData) {
@@ -82,13 +110,11 @@ export const Canvas: React.FC<CanvasProps> = ({
       return;
     }
 
-    // Poly Lasso Logic
     if (state.tool === 'poly-lasso-select') {
       setPolyPoints(prev => [...prev, { x, y }]);
       return;
     }
 
-    // Selection Tools Logic
     if (['rect-select', 'ellipse-select', 'lasso-select'].includes(state.tool)) {
       setIsDrawing(true);
       setStartPos({ x, y });
@@ -96,7 +122,6 @@ export const Canvas: React.FC<CanvasProps> = ({
       return;
     }
 
-    // Magic Wand
     if (state.tool === 'magic-wand') {
       if (x < 0 || x >= state.width || y < 0 || y >= state.height) return;
       const frame = state.frames[state.activeFrameIndex];
@@ -116,8 +141,8 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
   };
 
-  const handleMouseMove = (e: React.MouseEvent) => {
-    const coords = getPixelCoords(e);
+  const handlePointerMove = (clientX: number, clientY: number) => {
+    const coords = getPixelCoords(clientX, clientY);
     setCursorPos(coords);
     if (!coords) return;
     const { x, y } = coords;
@@ -131,7 +156,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       if (state.tool === 'lasso-select') {
         setPolyPoints(prev => [...prev, { x, y }]);
       } else if (['rect-select', 'ellipse-select'].includes(state.tool)) {
-        // Just trigger render updates via state
+        // Rerender trigger
       } else if (['pencil', 'eraser'].includes(state.tool)) {
         if (x >= 0 && x < state.width && y >= 0 && y < state.height) {
              onDraw(x, y);
@@ -140,27 +165,8 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
   };
 
-  const combineSelection = (newSelection: Set<number>) => {
-    let finalSel = new Set<number>();
-    const current = state.selection || new Set<number>();
-
-    switch (state.selectionMode) {
-      case 'replace': finalSel = newSelection; break;
-      case 'add': finalSel = new Set([...current, ...newSelection]); break;
-      case 'subtract': 
-        finalSel = new Set([...current]);
-        newSelection.forEach(i => finalSel.delete(i));
-        break;
-      case 'intersect':
-        newSelection.forEach(i => { if (current.has(i)) finalSel.add(i); });
-        break;
-    }
-    onSelectionUpdate(finalSel.size > 0 ? finalSel : null);
-  };
-
-  const handleMouseUp = () => {
+  const handlePointerUp = () => {
     if (isMoving && moveStart && state.selection && floatingPixels) {
-      // Commit move
       onMovePixels(state.selection, moveOffset);
       setIsMoving(false);
       setMoveStart(null);
@@ -192,6 +198,217 @@ export const Canvas: React.FC<CanvasProps> = ({
     setPolyPoints([]);
   };
 
+  const combineSelection = (newSelection: Set<number>) => {
+    let finalSel = new Set<number>();
+    const current = state.selection || new Set<number>();
+
+    switch (state.selectionMode) {
+      case 'replace': finalSel = newSelection; break;
+      case 'add': finalSel = new Set([...current, ...newSelection]); break;
+      case 'subtract': 
+        finalSel = new Set([...current]);
+        newSelection.forEach(i => finalSel.delete(i));
+        break;
+      case 'intersect':
+        newSelection.forEach(i => { if (current.has(i)) finalSel.add(i); });
+        break;
+    }
+    onSelectionUpdate(finalSel.size > 0 ? finalSel : null);
+  };
+
+  // -- Gesture Event Handlers --
+
+  const handleWheel = useCallback((e: WheelEvent) => {
+    // Zoom Logic
+    if (e.ctrlKey) {
+        e.preventDefault();
+        const container = containerRef.current;
+        if (!container) return;
+
+        const rect = container.getBoundingClientRect();
+        // Mouse Position relative to viewport
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+
+        // Current scroll + Mouse Position = Position in content
+        const contentX = container.scrollLeft + mx;
+        const contentY = container.scrollTop + my;
+
+        const currentTotalWidth = state.width * state.zoom;
+        const currentTotalHeight = state.height * state.zoom;
+
+        // Ratios (0.0 - 1.0)
+        const rx = contentX / Math.max(1, currentTotalWidth);
+        const ry = contentY / Math.max(1, currentTotalHeight);
+
+        // Calculate New Zoom
+        const delta = -e.deltaY;
+        const factor = delta > 0 ? 1.1 : 0.9;
+        let newZoom = state.zoom * factor;
+        newZoom = Math.min(Math.max(newZoom, 0.1), 128);
+
+        // Predict New Dimensions
+        const newTotalWidth = state.width * newZoom;
+        const newTotalHeight = state.height * newZoom;
+
+        // Calculate Desired Scroll to maintain ratio
+        // newContentX = newTotalWidth * rx
+        // newScrollLeft = newContentX - mx
+        const newScrollLeft = (newTotalWidth * rx) - mx;
+        const newScrollTop = (newTotalHeight * ry) - my;
+
+        pendingScrollRef.current = { left: newScrollLeft, top: newScrollTop };
+        onZoom(newZoom);
+    }
+    // Pan logic handled natively by overflow: auto
+  }, [state.zoom, state.width, state.height, onZoom]);
+
+  const handleTouchStart = useCallback((e: TouchEvent) => {
+     if (e.touches.length === 2) {
+         e.preventDefault(); // Prevent native browser zoom
+         const t1 = e.touches[0];
+         const t2 = e.touches[1];
+         const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+         const cx = (t1.clientX + t2.clientX) / 2;
+         const cy = (t1.clientY + t2.clientY) / 2;
+         
+         if (containerRef.current) {
+            gestureState.current = {
+                startZoom: state.zoom,
+                startDist: dist,
+                startCenter: { x: cx, y: cy },
+                startScroll: { x: containerRef.current.scrollLeft, y: containerRef.current.scrollTop }
+            };
+         }
+     } else if (e.touches.length === 1) {
+         // Single touch: Drawing
+         e.preventDefault(); // Prevent scrolling
+         handlePointerDown(e.touches[0].clientX, e.touches[0].clientY);
+     }
+  }, [state.zoom]);
+
+  const handleTouchMove = useCallback((e: TouchEvent) => {
+      if (e.touches.length === 2 && containerRef.current) {
+         e.preventDefault();
+         const t1 = e.touches[0];
+         const t2 = e.touches[1];
+         const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+         const cx = (t1.clientX + t2.clientX) / 2;
+         const cy = (t1.clientY + t2.clientY) / 2;
+         
+         const { startZoom, startDist, startCenter, startScroll } = gestureState.current;
+
+         // Zoom
+         const scaleFactor = dist / Math.max(1, startDist);
+         let newZoom = startZoom * scaleFactor;
+         newZoom = Math.min(Math.max(newZoom, 0.1), 128);
+
+         // Pan (Drag)
+         // Delta of center point
+         const dx = cx - startCenter.x;
+         const dy = cy - startCenter.y;
+         
+         // Update Scroll directly for Pan (immediate feedback)
+         // Note: We are not updating state for Pan, just scrolling
+         containerRef.current.scrollLeft = startScroll.x - dx;
+         containerRef.current.scrollTop = startScroll.y - dy;
+
+         // For Zoom, we need to update state, but also correct scroll
+         // However, doing both simultaneously (Pan+Zoom) via state + manual scroll is complex.
+         // Simple approach: Trigger Zoom state update, rely on calculated scroll correction for zoom
+         // But Pan is manual.
+         
+         // Let's defer Zoom update to prevent thrashing, OR update it.
+         // If we update Zoom, container resizes, and we lose our simple Pan math.
+         // We will only Zoom if distance changed significantly?
+         // OR update both.
+         
+         // Calculate Zoom Pivot Correction similar to Wheel
+         // This is hard to sync with React render cycle for smooth 60fps pinch.
+         // Standard web app pinch-zoom on canvas often uses CSS transform for "preview" then commits on end.
+         // Given the constraints, let's just update zoom state and rely on our center calculation.
+         
+         // Recalculate Scroll for Zoom centered at 'cx, cy'
+         // We have manual scroll 'startScroll.x - dx'. 
+         // Let's just update Zoom. The Pan might feel slightly detached if we don't compensate.
+         
+         // Actually, simpler 2-finger logic: 
+         // 1. Calculate new Zoom.
+         // 2. Adjust scroll to keep content center stable.
+         
+         // Only update if zoom changed enough to avoid jitter?
+         if (Math.abs(newZoom - state.zoom) > 0.05) {
+             const container = containerRef.current;
+             const rect = container.getBoundingClientRect();
+             // Center relative to container
+             const mx = cx - rect.left;
+             const my = cy - rect.top;
+             const contentX = container.scrollLeft + mx;
+             const contentY = container.scrollTop + my;
+             
+             const rx = contentX / (state.width * state.zoom);
+             const ry = contentY / (state.height * state.zoom);
+             
+             const newTotalW = state.width * newZoom;
+             const newTotalH = state.height * newZoom;
+             
+             const newScrollLeft = (newTotalW * rx) - mx - dx; // Include pan delta here?
+             const newScrollTop = (newTotalH * ry) - my - dy;
+
+             pendingScrollRef.current = { left: newScrollLeft, top: newScrollTop };
+             onZoom(newZoom);
+             
+             // Update gesture start state to current to avoid accumulation errors
+             gestureState.current.startZoom = newZoom;
+             gestureState.current.startDist = dist;
+             // Don't reset center/scroll as that would break the continuous drag reference
+             // But resizing breaks the reference frame anyway.
+         } else {
+             // Just Pan
+             containerRef.current.scrollLeft = startScroll.x - dx;
+             containerRef.current.scrollTop = startScroll.y - dy;
+         }
+
+      } else if (e.touches.length === 1) {
+          e.preventDefault();
+          handlePointerMove(e.touches[0].clientX, e.touches[0].clientY);
+      }
+  }, [state.zoom, state.width, state.height, onZoom]);
+
+  const handleTouchEnd = useCallback((e: TouchEvent) => {
+      // Logic to finalize or cleanup
+      if (e.touches.length === 0) {
+          handlePointerUp();
+      }
+  }, []);
+
+  // Attach Listeners
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    // React's onWheel is passive by default, but we need preventDefault for pinch-zoom
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    container.addEventListener('touchstart', handleTouchStart, { passive: false });
+    container.addEventListener('touchmove', handleTouchMove, { passive: false });
+    container.addEventListener('touchend', handleTouchEnd);
+
+    return () => {
+        container.removeEventListener('wheel', handleWheel);
+        container.removeEventListener('touchstart', handleTouchStart);
+        container.removeEventListener('touchmove', handleTouchMove);
+        container.removeEventListener('touchend', handleTouchEnd);
+    };
+  }, [handleWheel, handleTouchStart, handleTouchMove, handleTouchEnd]);
+
+  // -- Mouse Event Wrappers --
+  const handleMouseDown = (e: React.MouseEvent) => {
+      handlePointerDown(e.clientX, e.clientY, e.button);
+  };
+  const handleMouseMove = (e: React.MouseEvent) => {
+      handlePointerMove(e.clientX, e.clientY);
+  };
+
   const handleDoubleClick = () => {
     if (state.tool === 'poly-lasso-select' && polyPoints.length > 2) {
       const newSel = getPolygonSelection(polyPoints, state.width, state.height);
@@ -218,6 +435,10 @@ export const Canvas: React.FC<CanvasProps> = ({
         if (color && (!skipIndices || !skipIndices.has(i))) {
           const { x, y } = getCoords(i, state.width);
           ctx.fillStyle = color;
+          // Use Math.round to prevent sub-pixel blurring gaps if zoom is float
+          // But allow float size for smooth zoom.
+          // To make it look good, we can slightly overdraw or just accept float.
+          // 'fillRect' with floats does sub-pixel AA.
           ctx.fillRect((x + offset.x) * state.zoom, (y + offset.y) * state.zoom, state.zoom, state.zoom);
         }
       });
@@ -372,7 +593,10 @@ export const Canvas: React.FC<CanvasProps> = ({
   }, [state, cursorPos, dashOffset, startPos, polyPoints, isMoving, moveOffset, floatingPixels]);
 
   return (
-    <div className="flex-1 bg-[oklch(0.145_0_0)] overflow-auto flex items-center justify-center relative p-8 shadow-inner border-l border-r border-background">
+    <div 
+        ref={containerRef}
+        className="flex-1 bg-[oklch(0.145_0_0)] overflow-auto flex items-center justify-center relative p-8 shadow-inner border-l border-r border-background touch-none"
+    >
       <canvas
         ref={canvasRef}
         width={state.width * state.zoom}
@@ -380,8 +604,8 @@ export const Canvas: React.FC<CanvasProps> = ({
         className="shadow-2xl bg-white pixelated"
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={() => { setCursorPos(null); handleMouseUp(); }}
+        onMouseUp={handlePointerUp}
+        onMouseLeave={() => { setCursorPos(null); handlePointerUp(); }}
         onDoubleClick={handleDoubleClick}
         style={{
             cursor: ['rect-select', 'ellipse-select', 'lasso-select', 'poly-lasso-select', 'magic-wand'].includes(state.tool) ? 'crosshair' : (state.tool === 'move' ? 'move' : (state.tool === 'pencil' ? 'none' : 'default'))
