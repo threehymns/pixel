@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PixelForge Studio</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: ["class"],
+        theme: {
+          extend: {
+            colors: {
+              border: "var(--border)",
+              input: "var(--input)",
+              ring: "var(--ring)",
+              background: "var(--background)",
+              foreground: "var(--foreground)",
+              primary: {
+                DEFAULT: "var(--primary)",
+                foreground: "var(--primary-foreground)",
+              },
+              secondary: {
+                DEFAULT: "var(--secondary)",
+                foreground: "var(--secondary-foreground)",
+              },
+              destructive: {
+                DEFAULT: "var(--destructive)",
+                foreground: "var(--destructive-foreground)",
+              },
+              muted: {
+                DEFAULT: "var(--muted)",
+                foreground: "var(--muted-foreground)",
+              },
+              accent: {
+                DEFAULT: "var(--accent)",
+                foreground: "var(--accent-foreground)",
+              },
+              popover: {
+                DEFAULT: "var(--popover)",
+                foreground: "var(--popover-foreground)",
+              },
+              card: {
+                DEFAULT: "var(--card)",
+                foreground: "var(--card-foreground)",
+              },
+            },
+            borderRadius: {
+              lg: "var(--radius)",
+              md: "calc(var(--radius) - 2px)",
+              sm: "calc(var(--radius) - 4px)",
+            },
+          },
+        },
+      }
+    </script>
+    <style>
+      :root {
+        /* Base Dark Theme (OKLCH) */
+        
+        /* #171717 */
+        --background: oklch(0.18 0 0);
+        /* #e5e5e5 */
+        --foreground: oklch(0.92 0 0);
+
+        /* #2b2b2b */
+        --card: oklch(0.26 0 0);
+        --card-foreground: oklch(0.92 0 0);
+
+        /* #2b2b2b */
+        --popover: oklch(0.26 0 0);
+        --popover-foreground: oklch(0.92 0 0);
+
+        /* #3b82f6 */
+        --primary: oklch(0.63 0.19 258);
+        --primary-foreground: oklch(1 0 0);
+
+        /* #3f3f3f */
+        --secondary: oklch(0.35 0 0);
+        --secondary-foreground: oklch(0.92 0 0);
+
+        /* #262626 */
+        --muted: oklch(0.24 0 0);
+        --muted-foreground: oklch(0.70 0 0);
+
+        /* #4a4a4a */
+        --accent: oklch(0.39 0 0);
+        --accent-foreground: oklch(0.92 0 0);
+
+        /* #ef4444 */
+        --destructive: oklch(0.64 0.21 25);
+        --destructive-foreground: oklch(1 0 0);
+
+        /* #3f3f3f */
+        --border: oklch(0.35 0 0);
+        
+        /* #525252 */
+        --input: oklch(0.42 0 0);
+        
+        --ring: oklch(0.63 0.19 258);
+        
+        --radius: 0.5rem;
+      }
+
+      /* Custom scrollbar for that desktop-app feel */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: var(--muted);
+      }
+      ::-webkit-scrollbar-thumb {
+        background: var(--input);
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: oklch(0.55 0 0);
+      }
+      body {
+        background-color: var(--background);
+        color: var(--foreground);
+        overflow: hidden; /* Prevent body scroll */
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      }
+      .pixelated {
+        image-rendering: pixelated;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3",
+    "lucide-react": "https://esm.sh/lucide-react@^0.561.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/"
+  }
+}
+</script>
+</head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
