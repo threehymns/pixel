@@ -5,7 +5,7 @@ import { Folder, FolderOpen, File, Image, ChevronRight, ChevronDown, GripVertica
 
 interface FileTreeProps {
   rootHandle: FileSystemDirectoryHandle | null;
-  onFileOpen: (file: File) => void;
+  onFileOpen: (file: File, handle?: FileSystemFileHandle) => void;
   width: number;
   onResizeStart: (e: React.MouseEvent) => void;
   onOpenFolder: () => void;
@@ -14,7 +14,7 @@ interface FileTreeProps {
 interface TreeNodeProps {
   handle: FileSystemHandle;
   depth: number;
-  onFileOpen: (file: File) => void;
+  onFileOpen: (file: File, handle?: FileSystemFileHandle) => void;
 }
 
 const TreeNode: React.FC<TreeNodeProps> = ({ handle, depth, onFileOpen }) => {
@@ -57,7 +57,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({ handle, depth, onFileOpen }) => {
       if (fileHandle.name.match(/\.(json|png|jpg|jpeg|gif|ase|gpl)$/i)) {
           try {
              const file = await fileHandle.getFile();
-             onFileOpen(file);
+             onFileOpen(file, fileHandle);
           } catch(e) {
              console.error("Failed to open file", e);
           }

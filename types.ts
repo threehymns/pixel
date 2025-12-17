@@ -69,6 +69,9 @@ export interface ProjectState {
   // Selection
   selection: Set<number> | null;
   selectionMode: SelectionMode;
+
+  // File System
+  fileHandle?: FileSystemFileHandle;
 }
 
 export interface RecentProject {
@@ -100,6 +103,13 @@ export interface Command {
 }
 
 // --- File System Access API Types (Partial) ---
+export interface FileSystemWritableFileStream extends WritableStream {
+  write(data: BufferSource | Blob | string): Promise<void>;
+  seek(position: number): Promise<void>;
+  truncate(size: number): Promise<void>;
+  close(): Promise<void>;
+}
+
 export interface FileSystemHandle {
   kind: 'file' | 'directory';
   name: string;
@@ -109,6 +119,7 @@ export interface FileSystemHandle {
 export interface FileSystemFileHandle extends FileSystemHandle {
   kind: 'file';
   getFile(): Promise<File>;
+  createWritable(options?: { keepExistingData?: boolean }): Promise<FileSystemWritableFileStream>;
 }
 
 export interface FileSystemDirectoryHandle extends FileSystemHandle {
@@ -116,4 +127,13 @@ export interface FileSystemDirectoryHandle extends FileSystemHandle {
   values(): AsyncIterableIterator<FileSystemHandle>;
   getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<FileSystemDirectoryHandle>;
   getFileHandle(name: string, options?: { create?: boolean }): Promise<FileSystemFileHandle>;
+}
+
+export interface FileSystemSaveFilePickerOptions {
+    types?: {
+        description: string;
+        accept: Record<string, string[]>;
+    }[];
+    excludeAcceptAllOption?: boolean;
+    suggestedName?: string;
 }

@@ -1,8 +1,8 @@
 
 import { useState, useCallback, useEffect } from 'react';
-import { ProjectState, Frame, Layer, SavedPalette, PixelGrid, HistoryEntry, ToolType, RecentProject } from '../types';
+import { ProjectState, Frame, Layer, SavedPalette, PixelGrid, HistoryEntry, ToolType, RecentProject, FileSystemFileHandle } from '../types';
 import { INITIAL_STATE, DEFAULT_PALETTE, GAMEBOY_PALETTE } from '../constants';
-import { parseASE, parseGPL, extractColorsFromPNG, fileToProjectState } from '../utils';
+import { parseASE, parseGPL, extractColorsFromPNG, fileToProjectState, renderFrameToCanvas } from '../utils';
 
 interface ProjectInstance {
   data: ProjectState;
@@ -21,15 +21,12 @@ export function useProject() {
       const stored = localStorage.getItem('pixel-forge-recents');
       if (stored) {
         const parsed = JSON.parse(stored);
-        // Basic hydration fix: Sets inside JSON are usually arrays, need to handle if ProjectState uses Sets.
-        // ProjectState uses `selection: Set<number> | null`. JSON.parse will make it an array or object.
-        // We should convert it back to Set if we want to be strict, but for "opening" a file, 
-        // usually selection is cleared. Let's sanitize.
         const sanitized = parsed.map((p: RecentProject) => ({
              ...p,
              data: {
                  ...p.data,
-                 selection: null // Clear selection on reload to avoid Set/Array issues
+                 selection: null,
+                 fileHandle: undefined // Do not restore handles from localstorage
              }
         }));
         setRecentProjects(sanitized);
@@ -41,19 +38,17 @@ export function useProject() {
 
   const saveRecents = useCallback((list: RecentProject[]) => {
       try {
-          // Serialize. Note: Sets need to be handled if we wanted to persist them, 
-          // but for recent files we can drop selection.
           const cleanList = list.map(r => ({
               ...r,
               data: {
                   ...r.data,
-                  selection: null // Drop selection
+                  selection: null,
+                  fileHandle: undefined // Ensure no handle serialization attempts
               }
           }));
           localStorage.setItem('pixel-forge-recents', JSON.stringify(cleanList));
       } catch (e) {
           console.warn("LocalStorage full, cannot save recent project", e);
-          // Optional: try to remove oldest
       }
   }, []);
 
@@ -80,8 +75,6 @@ export function useProject() {
           return;
       }
 
-      // Add to projects
-      // We need to clone it to avoid reference issues and ensure clean state
       const newProjectState = { ...recent.data, selection: null };
       
       setProjects(prev => [...prev, {
@@ -97,10 +90,9 @@ export function useProject() {
       localStorage.removeItem('pixel-forge-recents');
   }, []);
 
-  // Helper to get active instance
   const activeIndex = projects.findIndex(p => p.data.id === activeProjectId);
   const activeInstance = activeIndex >= 0 ? projects[activeIndex] : {
-      data: INITIAL_STATE, // Fallback dummy state to prevent crashes when on Home
+      data: INITIAL_STATE, 
       history: [],
       historyIndex: 0
   };
@@ -133,12 +125,16 @@ export function useProject() {
     addToRecents(newProject);
   }, [projects.length, addToRecents]);
 
-  const loadProjectFromFile = useCallback(async (file: File) => {
+  const loadProjectFromFile = useCallback(async (file: File, handle?: FileSystemFileHandle) => {
     try {
       const newState = await fileToProjectState(file);
-      // Ensure unique ID and valid defaults
       newState.id = `project-${Date.now()}`;
       
+      // If loaded with a file handle (e.g. from FileTree), store it in state
+      if (handle) {
+          newState.fileHandle = handle;
+      }
+
       if (!newState.paletteLibrary || newState.paletteLibrary.length === 0) {
           newState.paletteLibrary = [DEFAULT_PALETTE, GAMEBOY_PALETTE];
           newState.activePaletteId = DEFAULT_PALETTE.id;
@@ -157,79 +153,12 @@ export function useProject() {
     }
   }, [addToRecents]);
 
-  const saveProject = useCallback(() => {
-    if (activeProjectId === 'home') return;
-    
-    // Update recents on save to capture latest state
-    addToRecents(state);
-
-    const jsonString = JSON.stringify(state, (key, value) => {
-        if (key === 'selection' && value instanceof Set) return Array.from(value);
-        if (key === 'selection' && value === null) return null;
-        return value;
-    }, 2);
-    
-    const blob = new Blob([jsonString], { type: 'application/json' });
-    const href = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = href;
-    link.download = `${state.title.replace(/\s+/g, '_')}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(href);
-  }, [state, activeProjectId, addToRecents]);
-
-  const closeProject = useCallback((id: string) => {
-    // Determine new active project BEFORE removing the old one
-    let nextActiveId = activeProjectId;
-    
-    if (activeProjectId === id) {
-        // We are closing the active one
-        const idx = projects.findIndex(p => p.data.id === id);
-        const remaining = projects.filter(p => p.data.id !== id);
-        
-        if (remaining.length > 0) {
-            // Switch to previous one, or first one
-            const newIdx = Math.max(0, idx - 1);
-            nextActiveId = remaining[newIdx].data.id;
-        } else {
-            // No projects left
-            nextActiveId = 'home';
-        }
-    }
-
-    setProjects(prev => prev.filter(p => p.data.id !== id));
-    setActiveProjectId(nextActiveId);
-  }, [activeProjectId, projects]);
-
-  const switchTab = useCallback((direction: 'next' | 'prev') => {
-      // If on home, move to first or last
-      if (activeProjectId === 'home') {
-          if (projects.length > 0) {
-              setActiveProjectId(direction === 'next' ? projects[0].data.id : projects[projects.length - 1].data.id);
-          }
-          return;
-      }
-
-      const idx = projects.findIndex(p => p.data.id === activeProjectId);
-      if (idx === -1) return;
-      
-      let newIdx = direction === 'next' ? idx + 1 : idx - 1;
-      
-      if (newIdx >= projects.length) newIdx = 0;
-      if (newIdx < 0) newIdx = projects.length - 1;
-      
-      setActiveProjectId(projects[newIdx].data.id);
-  }, [activeProjectId, projects]);
-
-  // --- State Updates with History (Scoped to Active Project) ---
-
+  // State update wrapper needs to be defined before saveProjectAs for visibility
   const updateState = useCallback((
       newState: ProjectState, 
       historyConfig?: { action: string, tool?: ToolType }
   ) => {
-    if (activeProjectId === 'home') return; // Cannot update state on Home
+    if (activeProjectId === 'home') return;
 
     setProjects(prev => prev.map(p => {
       if (p.data.id !== activeProjectId) return p;
@@ -245,7 +174,7 @@ export function useProject() {
             tool: historyConfig.tool,
             timestamp: Date.now()
         });
-        if (newHistory.length > 50) newHistory.shift(); // Limit history depth
+        if (newHistory.length > 50) newHistory.shift(); 
         newIndex = newHistory.length - 1;
       }
 
@@ -256,6 +185,171 @@ export function useProject() {
       };
     }));
   }, [activeProjectId]);
+
+  const saveProjectAs = useCallback(async () => {
+    if (activeProjectId === 'home') return;
+
+    // Fallback if File System Access API is not supported (e.g. Firefox default)
+    // @ts-ignore
+    if (typeof window.showSaveFilePicker !== 'function') {
+        const jsonString = JSON.stringify(state, (key, value) => {
+            if (key === 'selection' && value instanceof Set) return Array.from(value);
+            if (key === 'selection' && value === null) return null;
+            if (key === 'fileHandle') return undefined;
+            return value;
+        }, 2);
+        
+        const blob = new Blob([jsonString], { type: 'application/json' });
+        const href = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = href;
+        link.download = `${state.title.replace(/\s+/g, '_')}.json`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(href);
+        return;
+    }
+
+    try {
+        const options = {
+            suggestedName: state.title,
+            types: [
+                {
+                    description: 'PixelForge Project (*.json)',
+                    accept: { 'application/json': ['.json'] }
+                },
+                {
+                    description: 'PNG Image (*.png)',
+                    accept: { 'image/png': ['.png'] }
+                }
+            ]
+        };
+
+        // @ts-ignore
+        const handle = await window.showSaveFilePicker(options);
+        const name = handle.name.toLowerCase();
+        
+        if (name.endsWith('.png')) {
+             const canvas = renderFrameToCanvas(state, state.activeFrameIndex);
+             const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
+             if (!blob) throw new Error("Failed to render PNG");
+             
+             const writable = await handle.createWritable();
+             await writable.write(blob);
+             await writable.close();
+             
+             const newState = { ...state, title: handle.name, fileHandle: handle };
+             updateState(newState, { action: 'Save As PNG' });
+             addToRecents(newState);
+             alert(`Exported to ${handle.name}`);
+        } else {
+             // Default to JSON logic
+             const jsonString = JSON.stringify(state, (key, value) => {
+                     if (key === 'selection' && value instanceof Set) return Array.from(value);
+                     if (key === 'selection' && value === null) return null;
+                     if (key === 'fileHandle') return undefined; 
+                     return value;
+             }, 2);
+             const writable = await handle.createWritable();
+             await writable.write(jsonString);
+             await writable.close();
+
+             const newState = { ...state, title: handle.name, fileHandle: handle };
+             updateState(newState, { action: 'Save As' });
+             addToRecents(newState);
+             alert(`Saved project to ${handle.name}`);
+        }
+        
+    } catch (e) {
+         if ((e as Error).name !== 'AbortError') {
+            console.error("Save As failed", e);
+            alert("Failed to save.");
+        }
+    }
+  }, [state, activeProjectId, updateState, addToRecents]);
+
+  const saveProject = useCallback(async () => {
+    if (activeProjectId === 'home') return;
+    
+    // If no handle (unsaved), redirect to Save As
+    if (!state.fileHandle) {
+        await saveProjectAs();
+        return;
+    }
+
+    addToRecents(state);
+
+    try {
+        const name = state.fileHandle.name.toLowerCase();
+        
+        if (name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg')) {
+           const canvas = renderFrameToCanvas(state, state.activeFrameIndex);
+           const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
+           if (!blob) throw new Error("Failed to render PNG");
+           
+           const writable = await state.fileHandle.createWritable();
+           await writable.write(blob);
+           await writable.close();
+           alert(`Saved ${state.fileHandle.name}`);
+           return;
+        }
+        
+        if (name.endsWith('.json')) {
+            const jsonString = JSON.stringify(state, (key, value) => {
+                if (key === 'selection' && value instanceof Set) return Array.from(value);
+                if (key === 'selection' && value === null) return null;
+                if (key === 'fileHandle') return undefined; // Skip handle
+                return value;
+            }, 2);
+            const writable = await state.fileHandle.createWritable();
+            await writable.write(jsonString);
+            await writable.close();
+            alert(`Saved ${state.fileHandle.name}`);
+            return;
+        }
+        
+        // Handle logic for existing file handle but unknown extension? 
+        // Fallback to Save As
+        await saveProjectAs();
+
+    } catch (e) {
+        console.error("Save failed", e);
+        alert("Failed to save project.");
+    }
+
+  }, [state, activeProjectId, addToRecents, saveProjectAs]);
+
+  const closeProject = useCallback((id: string) => {
+    let nextActiveId = activeProjectId;
+    if (activeProjectId === id) {
+        const idx = projects.findIndex(p => p.data.id === id);
+        const remaining = projects.filter(p => p.data.id !== id);
+        if (remaining.length > 0) {
+            const newIdx = Math.max(0, idx - 1);
+            nextActiveId = remaining[newIdx].data.id;
+        } else {
+            nextActiveId = 'home';
+        }
+    }
+    setProjects(prev => prev.filter(p => p.data.id !== id));
+    setActiveProjectId(nextActiveId);
+  }, [activeProjectId, projects]);
+
+  const switchTab = useCallback((direction: 'next' | 'prev') => {
+      if (activeProjectId === 'home') {
+          if (projects.length > 0) {
+              setActiveProjectId(direction === 'next' ? projects[0].data.id : projects[projects.length - 1].data.id);
+          }
+          return;
+      }
+      const idx = projects.findIndex(p => p.data.id === activeProjectId);
+      if (idx === -1) return;
+      let newIdx = direction === 'next' ? idx + 1 : idx - 1;
+      if (newIdx >= projects.length) newIdx = 0;
+      if (newIdx < 0) newIdx = projects.length - 1;
+      setActiveProjectId(projects[newIdx].data.id);
+  }, [activeProjectId, projects]);
 
   const undo = useCallback(() => {
     if (activeProjectId === 'home') return;
@@ -291,8 +385,6 @@ export function useProject() {
       return p;
     }));
   }, [activeProjectId]);
-
-  // --- Actions ---
 
   const addFrame = useCallback(() => {
     if (activeProjectId === 'home') return;
@@ -342,7 +434,7 @@ export function useProject() {
 
   const deleteLayer = useCallback((id: string) => {
     if (activeProjectId === 'home') return;
-    if (state.layers.length <= 1) return; // Don't delete last layer
+    if (state.layers.length <= 1) return; 
     
     const newLayers = state.layers.filter(l => l.id !== id);
     const newFrames = state.frames.map(f => {
@@ -391,9 +483,7 @@ export function useProject() {
   const updateLayer = useCallback((id: string, updates: Partial<Layer>) => {
       if (activeProjectId === 'home') return;
       const newLayers = state.layers.map(l => l.id === id ? { ...l, ...updates } : l);
-      
       const action = updates.name ? 'Rename Layer' : 'Layer Properties';
-      
       updateState(
           { ...state, layers: newLayers },
           { action: action }
@@ -462,32 +552,27 @@ export function useProject() {
 
   const downloadImage = useCallback(() => {
      if (activeProjectId === 'home') return;
-     const canvas = document.createElement('canvas'); canvas.width = state.width; canvas.height = state.height;
-     const ctx = canvas.getContext('2d'); if(!ctx) return;
-     const frame = state.frames[state.activeFrameIndex];
-     state.layers.forEach(l => { if(!l.visible) return; const px = frame.layerData[l.id]; if(!px) return;
-         px.forEach((c, i) => { if(c) { ctx.fillStyle = c; ctx.fillRect(i%state.width, Math.floor(i/state.width), 1, 1); } });
-     });
-     const link = document.createElement('a'); link.download = `${state.title}.png`; link.href = canvas.toDataURL(); link.click();
+     const canvas = renderFrameToCanvas(state, state.activeFrameIndex);
+     const link = document.createElement('a'); 
+     link.download = `${state.title}.png`; 
+     link.href = canvas.toDataURL(); 
+     link.click();
   }, [state, activeProjectId]);
 
   return {
-    state, // Exposes the ACTIVE project state
-    projects, // List of all projects for the tab strip
+    state,
+    projects,
     activeProjectId,
     setActiveProjectId,
-    
-    // Recents
     recentProjects,
     loadRecentProject,
     clearRecents,
-
     createProject,
-    loadProjectFromFile, // Exported
-    saveProject, // Exported
+    loadProjectFromFile,
+    saveProject,
+    saveProjectAs,
     closeProject,
     switchTab,
-    
     updateState,
     undo,
     redo,

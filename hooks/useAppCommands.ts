@@ -15,6 +15,7 @@ interface UseAppCommandsProps {
         duplicateFrame: () => void;
         downloadImage: () => void;
         saveProject: () => void;
+        saveProjectAs: () => void;
         createProject: () => void;
         closeProject: (id: string) => void;
         switchTab: (dir: 'next' | 'prev') => void;
@@ -57,6 +58,10 @@ export function useAppCommands({
         { 
             id: 'file.save', label: 'Save Project', category: 'File', hotkey: 'Ctrl+S', keys: ['Control+s', 'Meta+s'],
             perform: projectActions.saveProject 
+        },
+        { 
+            id: 'file.saveAs', label: 'Save As...', category: 'File', hotkey: 'Ctrl+Shift+S', keys: ['Control+Shift+S', 'Meta+Shift+S'],
+            perform: projectActions.saveProjectAs
         },
         { 
             id: 'file.close', label: 'Close Project', category: 'File', hotkey: 'Alt+W', keys: ['Alt+w'], 

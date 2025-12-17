@@ -1,3 +1,4 @@
+
 import { PixelGrid, Position, ProjectState } from './types';
 
 export const getIndex = (x: number, y: number, width: number): number => {
@@ -140,6 +141,33 @@ export const drawCheckeredBackground = (
       }
     }
   }
+};
+
+export const renderFrameToCanvas = (state: ProjectState, frameIndex: number): HTMLCanvasElement => {
+    const canvas = document.createElement('canvas');
+    canvas.width = state.width;
+    canvas.height = state.height;
+    const ctx = canvas.getContext('2d');
+    
+    if (!ctx) return canvas;
+
+    const frame = state.frames[frameIndex];
+    if (!frame) return canvas;
+
+    state.layers.forEach(l => {
+        if (!l.visible) return;
+        const px = frame.layerData[l.id];
+        if (!px) return;
+        
+        px.forEach((c, i) => {
+            if (c) {
+                ctx.fillStyle = c;
+                ctx.fillRect(i % state.width, Math.floor(i / state.width), 1, 1);
+            }
+        });
+    });
+
+    return canvas;
 };
 
 // --- Selection Algorithms ---
