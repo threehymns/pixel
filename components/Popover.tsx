@@ -11,7 +11,7 @@ export const usePopover = () => {
   return context;
 };
 
-export const Popover = ({ children }: { children: React.ReactNode }) => {
+export const Popover: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const unique = useId().replace(/:/g, '');
   const id = `popover-${unique}`;
   const anchorName = `--anchor-${unique}`;

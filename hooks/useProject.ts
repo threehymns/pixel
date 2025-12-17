@@ -1,14 +1,9 @@
 
+
 import { useState, useCallback, useEffect } from 'react';
-import { ProjectState, Frame, Layer, SavedPalette, PixelGrid, HistoryEntry, ToolType, RecentProject, FileSystemFileHandle } from '../types';
+import { ProjectState, Frame, Layer, SavedPalette, PixelGrid, HistoryEntry, ToolType, RecentProject, FileSystemFileHandle, ProjectInstance } from '../types';
 import { INITIAL_STATE, DEFAULT_PALETTE, GAMEBOY_PALETTE } from '../constants';
 import { parseASE, parseGPL, extractColorsFromPNG, fileToProjectState, renderFrameToCanvas } from '../utils';
-
-interface ProjectInstance {
-  data: ProjectState;
-  history: HistoryEntry[];
-  historyIndex: number;
-}
 
 export function useProject() {
   const [projects, setProjects] = useState<ProjectInstance[]>([]);
@@ -80,7 +75,8 @@ export function useProject() {
       setProjects(prev => [...prev, {
           data: newProjectState,
           history: [{ state: newProjectState, action: 'Open Recent', timestamp: Date.now() }],
-          historyIndex: 0
+          historyIndex: 0,
+          lastSavedHistoryIndex: 0
       }]);
       setActiveProjectId(newProjectState.id);
   }, [projects]);
@@ -94,7 +90,8 @@ export function useProject() {
   const activeInstance = activeIndex >= 0 ? projects[activeIndex] : {
       data: INITIAL_STATE, 
       history: [],
-      historyIndex: 0
+      historyIndex: 0,
+      lastSavedHistoryIndex: 0
   };
   const state = activeInstance.data;
 
@@ -119,7 +116,8 @@ export function useProject() {
     setProjects(prev => [...prev, {
       data: newProject,
       history: [initialEntry],
-      historyIndex: 0
+      historyIndex: 0,
+      lastSavedHistoryIndex: 0
     }]);
     setActiveProjectId(id);
     addToRecents(newProject);
@@ -143,7 +141,8 @@ export function useProject() {
       setProjects(prev => [...prev, {
         data: newState,
         history: [{ state: newState, action: 'Import File', timestamp: Date.now() }],
-        historyIndex: 0
+        historyIndex: 0,
+        lastSavedHistoryIndex: 0
       }]);
       setActiveProjectId(newState.id);
       addToRecents(newState);
@@ -181,9 +180,19 @@ export function useProject() {
       return {
         data: newState,
         history: newHistory,
-        historyIndex: newIndex
+        historyIndex: newIndex,
+        lastSavedHistoryIndex: p.lastSavedHistoryIndex // Preserve unsaved status
       };
     }));
+  }, [activeProjectId]);
+
+  const markSaved = useCallback(() => {
+      setProjects(prev => prev.map(p => {
+          if (p.data.id === activeProjectId) {
+              return { ...p, lastSavedHistoryIndex: p.historyIndex };
+          }
+          return p;
+      }));
   }, [activeProjectId]);
 
   const saveProjectAs = useCallback(async () => {
@@ -241,6 +250,7 @@ export function useProject() {
              
              const newState = { ...state, title: handle.name, fileHandle: handle };
              updateState(newState, { action: 'Save As PNG' });
+             markSaved();
              addToRecents(newState);
              alert(`Exported to ${handle.name}`);
         } else {
@@ -257,6 +267,7 @@ export function useProject() {
 
              const newState = { ...state, title: handle.name, fileHandle: handle };
              updateState(newState, { action: 'Save As' });
+             markSaved();
              addToRecents(newState);
              alert(`Saved project to ${handle.name}`);
         }
@@ -267,7 +278,7 @@ export function useProject() {
             alert("Failed to save.");
         }
     }
-  }, [state, activeProjectId, updateState, addToRecents]);
+  }, [state, activeProjectId, updateState, addToRecents, markSaved]);
 
   const saveProject = useCallback(async () => {
     if (activeProjectId === 'home') return;
@@ -291,6 +302,7 @@ export function useProject() {
            const writable = await state.fileHandle.createWritable();
            await writable.write(blob);
            await writable.close();
+           markSaved();
            alert(`Saved ${state.fileHandle.name}`);
            return;
         }
@@ -305,6 +317,7 @@ export function useProject() {
             const writable = await state.fileHandle.createWritable();
             await writable.write(jsonString);
             await writable.close();
+            markSaved();
             alert(`Saved ${state.fileHandle.name}`);
             return;
         }
@@ -318,7 +331,7 @@ export function useProject() {
         alert("Failed to save project.");
     }
 
-  }, [state, activeProjectId, addToRecents, saveProjectAs]);
+  }, [state, activeProjectId, addToRecents, saveProjectAs, markSaved]);
 
   const closeProject = useCallback((id: string) => {
     let nextActiveId = activeProjectId;
@@ -411,7 +424,7 @@ export function useProject() {
 
   const deleteFrame = useCallback(() => {
     if (activeProjectId === 'home') return;
-    if (state.frames.length <= 1) return;
+    if (state.frames.length <= 1) return; 
     updateState(
         { ...state, frames: state.frames.filter((_, i) => i !== state.activeFrameIndex), activeFrameIndex: Math.max(0, state.activeFrameIndex - 1) }, 
         { action: 'Delete Frame' }

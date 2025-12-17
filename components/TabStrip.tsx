@@ -1,9 +1,9 @@
 import React, { useRef, useEffect } from 'react';
-import { ProjectState } from '../types';
+import { ProjectInstance } from '../types';
 import { Plus, X, Home } from './Icons';
 
 interface TabStripProps {
-    projects: { data: ProjectState }[];
+    projects: ProjectInstance[];
     activeProjectId: string;
     onSelectProject: (id: string) => void;
     onCloseProject: (id: string) => void;
@@ -57,6 +57,8 @@ export const TabStrip: React.FC<TabStripProps> = ({
             >
                 {projects.map((p) => {
                     const isActive = p.data.id === activeProjectId;
+                    const isDirty = p.historyIndex !== p.lastSavedHistoryIndex;
+
                     return (
                         <div
                             key={p.data.id}
@@ -70,18 +72,28 @@ export const TabStrip: React.FC<TabStripProps> = ({
                             `}
                         >
                             <span className="flex-1 truncate">{p.data.title}</span>
-                            <button
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    onCloseProject(p.data.id);
-                                }}
-                                className={`
-                                    p-0.5 rounded-sm opacity-0 group-hover:opacity-100 hover:bg-white/10 hover:text-white transition-all
-                                    ${isActive ? 'opacity-50' : ''}
-                                `}
-                            >
-                                <X size={12} />
-                            </button>
+                            
+                            <div className="ml-1 w-4 h-4 flex items-center justify-center relative">
+                                {isDirty && (
+                                    <div className={`w-2 h-2 rounded-full group-hover:opacity-0 transition-opacity ${isActive ? 'bg-primary' : 'bg-foreground'}`} />
+                                )}
+                                <button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        onCloseProject(p.data.id);
+                                    }}
+                                    className={`
+                                        absolute inset-0 flex items-center justify-center rounded-sm transition-all
+                                        ${isDirty 
+                                            ? 'opacity-0 group-hover:opacity-100 hover:bg-white/10 hover:text-white' 
+                                            : isActive 
+                                                ? 'opacity-50 hover:opacity-100 hover:bg-white/10 hover:text-white' 
+                                                : 'opacity-0 group-hover:opacity-100 hover:bg-white/10 hover:text-white'}
+                                    `}
+                                >
+                                    <X size={12} />
+                                </button>
+                            </div>
                         </div>
                     );
                 })}

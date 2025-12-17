@@ -1,4 +1,5 @@
 
+
 export interface Position {
   x: number;
   y: number;
@@ -86,6 +87,13 @@ export interface HistoryEntry {
   action: string;
   tool?: ToolType;
   timestamp: number;
+}
+
+export interface ProjectInstance {
+  data: ProjectState;
+  history: HistoryEntry[];
+  historyIndex: number;
+  lastSavedHistoryIndex: number;
 }
 
 export const CANVAS_SIZE = 32; // Default 32x32
