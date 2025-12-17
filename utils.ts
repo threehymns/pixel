@@ -417,8 +417,9 @@ export const parseAsepriteFile = async (buffer: ArrayBuffer, fileName: string): 
       if (chunkType === 0x2004 && f === 0) {
           const flags = view.getUint16(chunkDataOffset, true);
           const type = view.getUint16(chunkDataOffset + 2, true);
-          const nameLen = view.getUint16(chunkDataOffset + 14, true);
-          const name = new TextDecoder().decode(new Uint8Array(buffer, chunkDataOffset + 16, nameLen));
+          // Fixed offsets: Flags(2) + Type(2) + ChildLevel(2) + DefW(2) + DefH(2) + Blend(2) + Opacity(1) + Reserved(3) = 16
+          const nameLen = view.getUint16(chunkDataOffset + 16, true);
+          const name = new TextDecoder().decode(new Uint8Array(buffer, chunkDataOffset + 18, nameLen));
           
           const id = `layer-${layerInfo.length + 1}`;
           const visible = (flags & 1) !== 0;
@@ -444,9 +445,10 @@ export const parseAsepriteFile = async (buffer: ArrayBuffer, fileName: string): 
               frameData[layer.id] = targetGrid;
               
               if (celType === 2) { // Compressed Image
-                  const w = view.getUint16(chunkDataOffset + 22, true);
-                  const h = view.getUint16(chunkDataOffset + 24, true);
-                  const dataStart = chunkDataOffset + 26;
+                  // Fixed offsets: LayerIdx(2) + X(2) + Y(2) + Opacity(1) + CelType(2) + Reserved(7) = 16
+                  const w = view.getUint16(chunkDataOffset + 16, true);
+                  const h = view.getUint16(chunkDataOffset + 18, true);
+                  const dataStart = chunkDataOffset + 20;
                   const dataLen = (chunkStart + chunkSize) - dataStart;
                   const compressed = new Uint8Array(buffer, dataStart, dataLen);
                   
@@ -547,7 +549,9 @@ export const parseAsepriteFile = async (buffer: ArrayBuffer, fileName: string): 
     title: fileName.replace(/\.(ase|aseprite)$/, ''),
     width,
     height,
-    layers: layers.length ? layers.slice().reverse() : [{id:'l1', name:'Layer 1', visible:true, locked:false}],
+    // Do NOT reverse layers here, as rendering iterates 0..N (Bottom to Top)
+    // and Aseprite stores 0..N (Bottom to Top).
+    layers: layers.length ? layers : [{id:'l1', name:'Layer 1', visible:true, locked:false}],
     frames,
     activeLayerId: layers.length ? layers[0].id : 'l1',
     activeFrameIndex: 0,
