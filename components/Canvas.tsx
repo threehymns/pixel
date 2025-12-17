@@ -3,8 +3,13 @@ import React, { useRef, useEffect, useState, useCallback, useLayoutEffect } from
 import { ProjectState, Position } from '../types';
 import { 
   drawCheckeredBackground, getIndex, getCoords,
-  getRectSelection, getEllipseSelection, getPolygonSelection, getWandSelection
+  getRectSelection, getEllipseSelection, getPolygonSelection, getWandSelection,
+  hexToRgb
 } from '../utils';
+
+// Inline Cursor SVG to ensure it loads without 404s
+const CURSOR_SVG = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M10 2H14V8H10V2ZM10 16H14V22H10V16ZM2 10H8V14H2V10ZM16 10H22V14H16V10ZM10 10H14V14H10V10Z" fill="white"/></svg>`;
+const CURSOR_URI = `data:image/svg+xml;utf8,${encodeURIComponent(CURSOR_SVG)}`;
 
 interface CanvasProps {
   state: ProjectState;
@@ -27,10 +32,14 @@ export const Canvas: React.FC<CanvasProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const cursorRef = useRef<HTMLDivElement>(null);
+  const mousePosRef = useRef<{x: number, y: number}>({ x: -100, y: -100 }); // Track raw mouse pos
   
   // Interaction State
   const [isDrawing, setIsDrawing] = useState(false);
   const [cursorPos, setCursorPos] = useState<{x: number, y: number} | null>(null);
+  const [showCursor, setShowCursor] = useState(false);
   
   // Viewport State (Pan)
   const [pan, setPan] = useState<Position>({ x: 0, y: 0 });
@@ -86,6 +95,13 @@ export const Canvas: React.FC<CanvasProps> = ({
     const y = Math.floor((clientY - rect.top) / scale);
     return { x, y };
   }, [state.zoom]);
+
+  const updateCustomCursor = (clientX: number, clientY: number) => {
+    mousePosRef.current = { x: clientX, y: clientY };
+    if (cursorRef.current) {
+      cursorRef.current.style.transform = `translate(${clientX}px, ${clientY}px)`;
+    }
+  };
 
   // -- Interaction Logic (Shared Mouse/Touch) --
 
@@ -146,6 +162,8 @@ export const Canvas: React.FC<CanvasProps> = ({
   };
 
   const handlePointerMove = (clientX: number, clientY: number) => {
+    updateCustomCursor(clientX, clientY);
+    
     const coords = getPixelCoords(clientX, clientY);
     setCursorPos(coords);
     if (!coords) return;
@@ -184,10 +202,19 @@ export const Canvas: React.FC<CanvasProps> = ({
     if (isDrawing) {
       if (['rect-select', 'ellipse-select', 'lasso-select'].includes(state.tool) && startPos && cursorPos) {
          let newSel = new Set<number>();
+         
+         // Clamp coordinates to canvas bounds to avoid wrapping artifacts
+         const clamp = (val: number, max: number) => Math.max(0, Math.min(max - 1, val));
+         
+         const sx = clamp(startPos.x, state.width);
+         const sy = clamp(startPos.y, state.height);
+         const cx = clamp(cursorPos.x, state.width);
+         const cy = clamp(cursorPos.y, state.height);
+
          if (state.tool === 'rect-select') {
-           newSel = getRectSelection(startPos.x, startPos.y, cursorPos.x, cursorPos.y, state.width);
+           newSel = getRectSelection(sx, sy, cx, cy, state.width);
          } else if (state.tool === 'ellipse-select') {
-           newSel = getEllipseSelection(startPos.x, startPos.y, cursorPos.x, cursorPos.y, state.width);
+           newSel = getEllipseSelection(sx, sy, cx, cy, state.width);
          } else if (state.tool === 'lasso-select') {
            newSel = getPolygonSelection(polyPoints, state.width, state.height);
          }
@@ -385,64 +412,116 @@ export const Canvas: React.FC<CanvasProps> = ({
     const ctx = canvas.getContext('2d', { alpha: true });
     if (!ctx) return;
 
+    // Ensure offscreen buffer exists and is correct size
+    if (!offscreenCanvasRef.current) {
+        offscreenCanvasRef.current = document.createElement('canvas');
+    }
+    const offscreen = offscreenCanvasRef.current;
+    if (offscreen.width !== state.width || offscreen.height !== state.height) {
+        offscreen.width = state.width;
+        offscreen.height = state.height;
+    }
+    const offCtx = offscreen.getContext('2d');
+    if (!offCtx) return;
+
+    // Prepare ImageData
+    const imgData = offCtx.createImageData(state.width, state.height);
+    const data = imgData.data; // Uint8ClampedArray
+
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     drawCheckeredBackground(ctx, state.width, state.height, state.zoom);
 
-    const drawPixels = (pixels: (string | null)[], opacity: number = 1.0, skipIndices: Set<number> | null = null, offset: Position = {x:0,y:0}) => {
-      ctx.globalAlpha = opacity;
-      pixels.forEach((color, i) => {
-        if (color && (!skipIndices || !skipIndices.has(i))) {
-          const { x, y } = getCoords(i, state.width);
-          ctx.fillStyle = color;
-          // Use Math.round to prevent sub-pixel blurring gaps if zoom is float
-          // But allow float size for smooth zoom.
-          ctx.fillRect((x + offset.x) * state.zoom, (y + offset.y) * state.zoom, state.zoom, state.zoom);
-        }
-      });
-      ctx.globalAlpha = 1.0;
-    };
-
-    // Onion Skin
+    // --- 1. Onion Skin ---
     if (state.onionSkin && state.activeFrameIndex > 0) {
       const prevFrame = state.frames[state.activeFrameIndex - 1];
+      
+      data.fill(0); // Clear buffer
+
       state.layers.forEach(layer => {
-        if (layer.visible) {
-          const layerPixels = prevFrame.layerData[layer.id];
-          if (layerPixels) drawPixels(layerPixels, 0.3);
+        if (!layer.visible) return;
+        const pixels = prevFrame.layerData[layer.id];
+        if (!pixels) return;
+
+        for (let i = 0; i < pixels.length; i++) {
+            const color = pixels[i];
+            if (color) {
+                const [r, g, b] = hexToRgb(color);
+                const idx = i * 4;
+                data[idx] = r;
+                data[idx+1] = g;
+                data[idx+2] = b;
+                data[idx+3] = 255; 
+            }
         }
       });
+      
+      offCtx.putImageData(imgData, 0, 0);
+      
+      ctx.globalAlpha = 0.3;
+      ctx.drawImage(offscreen, 0, 0, state.width * state.zoom, state.height * state.zoom);
+      ctx.globalAlpha = 1.0;
     }
 
-    // Current Layer
+    // --- 2. Active Frame ---
+    data.fill(0); // Clear buffer
+
     const currentFrame = state.frames[state.activeFrameIndex];
     state.layers.forEach((layer) => {
       if (!layer.visible) return;
       const layerPixels = currentFrame.layerData[layer.id];
-      if (layerPixels) {
-        // If moving, skip selected pixels on active layer
-        const isTargetLayer = layer.id === state.activeLayerId;
-        drawPixels(
-           layerPixels, 
-           1.0, 
-           (isMoving && isTargetLayer) ? state.selection : null
-        );
+      if (!layerPixels) return;
+
+      const isTargetLayer = layer.id === state.activeLayerId;
+      const shouldSkip = isMoving && isTargetLayer && state.selection;
+
+      for (let i = 0; i < layerPixels.length; i++) {
+         if (shouldSkip && state.selection!.has(i)) continue; // Mask moved pixels
+
+         const color = layerPixels[i];
+         if (color) {
+             const [r, g, b] = hexToRgb(color);
+             const idx = i * 4;
+             data[idx] = r;
+             data[idx+1] = g;
+             data[idx+2] = b;
+             data[idx+3] = 255; 
+         }
       }
     });
 
-    // Floating Pixels (Move Preview)
+    offCtx.putImageData(imgData, 0, 0);
+    ctx.drawImage(offscreen, 0, 0, state.width * state.zoom, state.height * state.zoom);
+
+    // --- 3. Floating Pixels (Move Tool) ---
     if (isMoving && floatingPixels) {
+      data.fill(0); // Clear buffer
+      
       floatingPixels.forEach((color, idx) => {
          if (color) {
-            const { x, y } = getCoords(idx, state.width);
-            ctx.fillStyle = color;
-            ctx.fillRect((x + moveOffset.x) * state.zoom, (y + moveOffset.y) * state.zoom, state.zoom, state.zoom);
+            const [r, g, b] = hexToRgb(color);
+            // Write to buffer at original position (0..width*height)
+            const pIdx = idx * 4;
+            data[pIdx] = r;
+            data[pIdx+1] = g;
+            data[pIdx+2] = b;
+            data[pIdx+3] = 255;
          }
       });
+      offCtx.putImageData(imgData, 0, 0);
+
+      const dx = moveOffset.x * state.zoom;
+      const dy = moveOffset.y * state.zoom;
+      
+      // Draw buffer shifted
+      ctx.drawImage(offscreen, 
+        0, 0, state.width, state.height,
+        dx, dy, state.width * state.zoom, state.height * state.zoom
+      );
     }
 
-    // Grid
+    // --- 4. Grid ---
     if (state.showGrid && state.zoom > 4) {
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
       ctx.lineWidth = 1;
@@ -458,7 +537,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       ctx.stroke();
     }
 
-    // Selection Marching Ants
+    // --- 5. Selection Marching Ants ---
     if (state.selection && state.selection.size > 0) {
       ctx.beginPath();
       ctx.lineWidth = 1;
@@ -501,7 +580,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       ctx.setLineDash([]);
     }
 
-    // Drag Shape Preview
+    // --- 6. Drag Shape Preview ---
     if (isDrawing && startPos && cursorPos) {
         ctx.strokeStyle = 'white';
         ctx.setLineDash([4, 4]);
@@ -520,7 +599,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         ctx.setLineDash([]);
     }
     
-    // Poly/Lasso Preview
+    // --- 7. Poly/Lasso Preview ---
     if (polyPoints.length > 0) {
         ctx.strokeStyle = 'white';
         ctx.setLineDash([4, 4]);
@@ -539,7 +618,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         }
     }
 
-    // Brush Preview (Only if not selecting or moving)
+    // --- 8. Brush Preview ---
     if (cursorPos && !isDrawing && !isMoving && ['pencil', 'eraser', 'bucket'].includes(state.tool)) {
         const { x, y } = cursorPos;
         const size = state.brushSize;
@@ -554,26 +633,50 @@ export const Canvas: React.FC<CanvasProps> = ({
     <div 
         ref={containerRef}
         className="flex-1 bg-[oklch(0.145_0_0)] overflow-hidden relative shadow-inner border-l border-r border-background touch-none"
+        style={{ cursor: 'none' }}
+        onMouseEnter={(e) => {
+            mousePosRef.current = { x: e.clientX, y: e.clientY };
+            setShowCursor(true);
+        }}
+        onMouseLeave={() => { setShowCursor(false); setCursorPos(null); handlePointerUp(); }}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handlePointerUp}
+        onDoubleClick={handleDoubleClick}
     >
       <canvas
         ref={canvasRef}
         width={state.width * state.zoom}
         height={state.height * state.zoom}
         className="shadow-2xl bg-white pixelated"
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handlePointerUp}
-        onMouseLeave={() => { setCursorPos(null); handlePointerUp(); }}
-        onDoubleClick={handleDoubleClick}
         style={{
             position: 'absolute',
             top: 0,
             left: 0,
             transform: `translate(${pan.x}px, ${pan.y}px)`,
             transformOrigin: 'top left',
-            cursor: ['rect-select', 'ellipse-select', 'lasso-select', 'poly-lasso-select', 'magic-wand'].includes(state.tool) ? 'crosshair' : (state.tool === 'move' ? 'move' : (state.tool === 'pencil' ? 'none' : 'default'))
+            cursor: 'none',
+            pointerEvents: 'none'
         }}
       />
+      
+      {/* Custom DOM Cursor to achieve blended inversion */}
+      {showCursor && (
+        <div 
+            ref={cursorRef}
+            className="fixed top-0 left-0 pointer-events-none z-[9999] mix-blend-difference"
+            style={{
+                width: '24px',
+                height: '24px',
+                marginLeft: '-12px',
+                marginTop: '-12px',
+                backgroundImage: `url('${CURSOR_URI}')`,
+                backgroundSize: 'contain',
+                backgroundRepeat: 'no-repeat',
+                transform: `translate(${mousePosRef.current.x}px, ${mousePosRef.current.y}px)`,
+            }}
+        />
+      )}
     </div>
   );
 }

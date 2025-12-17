@@ -134,14 +134,28 @@ export const drawCheckeredBackground = (
   ctx.fillStyle = '#1a1a1a';
   ctx.fillRect(0, 0, width * scale, height * scale);
   
+  ctx.fillStyle = '#262626';
+  ctx.beginPath();
+  // Batch draw calls for performance
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       if ((x + y) % 2 !== 0) {
-        ctx.fillStyle = '#262626';
-        ctx.fillRect(x * scale, y * scale, scale, scale);
+        ctx.rect(x * scale, y * scale, scale, scale);
       }
     }
   }
+  ctx.fill();
+};
+
+const HEX_CACHE: Record<string, [number, number, number]> = {};
+export const hexToRgb = (hex: string): [number, number, number] => {
+  if (HEX_CACHE[hex]) return HEX_CACHE[hex];
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const rgb: [number, number, number] = [r, g, b];
+  HEX_CACHE[hex] = rgb;
+  return rgb;
 };
 
 export const renderFrameToCanvas = (state: ProjectState, frameIndex: number): HTMLCanvasElement => {
