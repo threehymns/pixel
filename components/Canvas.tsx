@@ -32,6 +32,9 @@ export const Canvas: React.FC<CanvasProps> = ({
   const [isDrawing, setIsDrawing] = useState(false);
   const [cursorPos, setCursorPos] = useState<{x: number, y: number} | null>(null);
   
+  // Viewport State (Pan)
+  const [pan, setPan] = useState<Position>({ x: 0, y: 0 });
+
   // Selection State
   const [startPos, setStartPos] = useState<Position | null>(null);
   const [polyPoints, setPolyPoints] = useState<Position[]>([]);
@@ -47,12 +50,22 @@ export const Canvas: React.FC<CanvasProps> = ({
   const gestureState = useRef({
       startZoom: state.zoom,
       startDist: 0,
-      startCenter: { x: 0, y: 0 },
-      startScroll: { x: 0, y: 0 }
+      startPan: { x: 0, y: 0 },
+      startCenter: { x: 0, y: 0 }
   });
   
-  // Scroll Restoration for Zoom
-  const pendingScrollRef = useRef<{ left: number, top: number } | null>(null);
+  // Center Canvas on Load / Project Change
+  useLayoutEffect(() => {
+    if (containerRef.current) {
+        const { clientWidth, clientHeight } = containerRef.current;
+        const contentW = state.width * state.zoom;
+        const contentH = state.height * state.zoom;
+        setPan({
+            x: (clientWidth - contentW) / 2,
+            y: (clientHeight - contentH) / 2
+        });
+    }
+  }, [state.id]); // Only re-center when project ID changes
 
   // Marching Ants Animation
   useEffect(() => {
@@ -64,15 +77,6 @@ export const Canvas: React.FC<CanvasProps> = ({
     animId = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(animId);
   }, []);
-
-  // Restore scroll after zoom render
-  useLayoutEffect(() => {
-      if (containerRef.current && pendingScrollRef.current) {
-          containerRef.current.scrollLeft = pendingScrollRef.current.left;
-          containerRef.current.scrollTop = pendingScrollRef.current.top;
-          pendingScrollRef.current = null;
-      }
-  }, [state.zoom, state.width, state.height]);
 
   const getPixelCoords = useCallback((clientX: number, clientY: number) => {
     if (!canvasRef.current) return null;
@@ -219,76 +223,53 @@ export const Canvas: React.FC<CanvasProps> = ({
   // -- Gesture Event Handlers --
 
   const handleWheel = useCallback((e: WheelEvent) => {
-    // Zoom Logic
-    if (e.ctrlKey) {
-        e.preventDefault();
-        const container = containerRef.current;
-        if (!container) return;
+    e.preventDefault();
+    const container = containerRef.current;
+    if (!container) return;
 
+    if (e.ctrlKey) {
+        // Zoom (Trackpad Pinch or Ctrl+Wheel)
         const rect = container.getBoundingClientRect();
-        // Mouse Position relative to viewport
         const mx = e.clientX - rect.left;
         const my = e.clientY - rect.top;
 
-        // Current scroll + Mouse Position = Position in content
-        const contentX = container.scrollLeft + mx;
-        const contentY = container.scrollTop + my;
+        // Position relative to canvas before zoom
+        const cx = mx - pan.x;
+        const cy = my - pan.y;
 
-        const currentTotalWidth = state.width * state.zoom;
-        const currentTotalHeight = state.height * state.zoom;
+        // Normalize delta
+        let delta = e.deltaY;
+        // Approximation for deltaMode: 1 (line) ~ 33px
+        if (e.deltaMode === 1) delta *= 33;
+        
+        // Faster zoom sensitivity (Exponential)
+        const ZOOM_SPEED = 0.006;
+        const newZoom = Math.min(Math.max(state.zoom * Math.exp(-delta * ZOOM_SPEED), 0.1), 128);
 
-        // Ratios (0.0 - 1.0)
-        const rx = contentX / Math.max(1, currentTotalWidth);
-        const ry = contentY / Math.max(1, currentTotalHeight);
+        // Calculate new pan to keep mouse over same pixel
+        let newPanX = mx - (cx / state.zoom) * newZoom;
+        let newPanY = my - (cy / state.zoom) * newZoom;
 
-        // Calculate New Zoom
-        const delta = -e.deltaY;
-        const factor = delta > 0 ? 1.1 : 0.9;
-        let newZoom = state.zoom * factor;
-        newZoom = Math.min(Math.max(newZoom, 0.1), 128);
+        // Allow additional horizontal panning if present during pinch
+        if (e.deltaX !== 0) {
+            let dx = e.deltaX;
+            if (e.deltaMode === 1) dx *= 33;
+            newPanX -= dx;
+        }
 
-        // Predict New Dimensions
-        const newTotalWidth = state.width * newZoom;
-        const newTotalHeight = state.height * newZoom;
-
-        // Calculate Desired Scroll to maintain ratio
-        // newContentX = newTotalWidth * rx
-        // newScrollLeft = newContentX - mx
-        const newScrollLeft = (newTotalWidth * rx) - mx;
-        const newScrollTop = (newTotalHeight * ry) - my;
-
-        pendingScrollRef.current = { left: newScrollLeft, top: newScrollTop };
+        setPan({ x: newPanX, y: newPanY });
         onZoom(newZoom);
+    } else {
+        // Pan (Trackpad 2-finger scroll or Wheel)
+        const dX = e.deltaX * (e.deltaMode === 1 ? 33 : 1);
+        const dY = e.deltaY * (e.deltaMode === 1 ? 33 : 1);
+        
+        setPan(prev => ({ x: prev.x - dX, y: prev.y - dY }));
     }
-    // Pan logic handled natively by overflow: auto
-  }, [state.zoom, state.width, state.height, onZoom]);
+  }, [state.zoom, pan, onZoom]);
 
   const handleTouchStart = useCallback((e: TouchEvent) => {
      if (e.touches.length === 2) {
-         e.preventDefault(); // Prevent native browser zoom
-         const t1 = e.touches[0];
-         const t2 = e.touches[1];
-         const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
-         const cx = (t1.clientX + t2.clientX) / 2;
-         const cy = (t1.clientY + t2.clientY) / 2;
-         
-         if (containerRef.current) {
-            gestureState.current = {
-                startZoom: state.zoom,
-                startDist: dist,
-                startCenter: { x: cx, y: cy },
-                startScroll: { x: containerRef.current.scrollLeft, y: containerRef.current.scrollTop }
-            };
-         }
-     } else if (e.touches.length === 1) {
-         // Single touch: Drawing
-         e.preventDefault(); // Prevent scrolling
-         handlePointerDown(e.touches[0].clientX, e.touches[0].clientY);
-     }
-  }, [state.zoom]);
-
-  const handleTouchMove = useCallback((e: TouchEvent) => {
-      if (e.touches.length === 2 && containerRef.current) {
          e.preventDefault();
          const t1 = e.touches[0];
          const t2 = e.touches[1];
@@ -296,87 +277,67 @@ export const Canvas: React.FC<CanvasProps> = ({
          const cx = (t1.clientX + t2.clientX) / 2;
          const cy = (t1.clientY + t2.clientY) / 2;
          
-         const { startZoom, startDist, startCenter, startScroll } = gestureState.current;
+         gestureState.current = {
+            startZoom: state.zoom,
+            startDist: dist,
+            startPan: { ...pan },
+            startCenter: { x: cx, y: cy }
+         };
+     } else if (e.touches.length === 1) {
+         // Single touch: Drawing
+         e.preventDefault();
+         handlePointerDown(e.touches[0].clientX, e.touches[0].clientY);
+     }
+  }, [state.zoom, pan]);
+
+  const handleTouchMove = useCallback((e: TouchEvent) => {
+      if (e.touches.length === 2) {
+         e.preventDefault();
+         const t1 = e.touches[0];
+         const t2 = e.touches[1];
+         const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+         const cx = (t1.clientX + t2.clientX) / 2;
+         const cy = (t1.clientY + t2.clientY) / 2;
+         
+         const { startZoom, startDist, startPan, startCenter } = gestureState.current;
 
          // Zoom
          const scaleFactor = dist / Math.max(1, startDist);
          let newZoom = startZoom * scaleFactor;
          newZoom = Math.min(Math.max(newZoom, 0.1), 128);
 
-         // Pan (Drag)
-         // Delta of center point
+         // Pan
+         // Current center of fingers - Start center of fingers
          const dx = cx - startCenter.x;
          const dy = cy - startCenter.y;
-         
-         // Update Scroll directly for Pan (immediate feedback)
-         // Note: We are not updating state for Pan, just scrolling
-         containerRef.current.scrollLeft = startScroll.x - dx;
-         containerRef.current.scrollTop = startScroll.y - dy;
 
-         // For Zoom, we need to update state, but also correct scroll
-         // However, doing both simultaneously (Pan+Zoom) via state + manual scroll is complex.
-         // Simple approach: Trigger Zoom state update, rely on calculated scroll correction for zoom
-         // But Pan is manual.
+         // Adjust pan for the zoom (zoom towards center)
          
-         // Let's defer Zoom update to prevent thrashing, OR update it.
-         // If we update Zoom, container resizes, and we lose our simple Pan math.
-         // We will only Zoom if distance changed significantly?
-         // OR update both.
+         // Container Rect
+         const rect = containerRef.current!.getBoundingClientRect();
+         const mx = startCenter.x - rect.left;
+         const my = startCenter.y - rect.top;
          
-         // Calculate Zoom Pivot Correction similar to Wheel
-         // This is hard to sync with React render cycle for smooth 60fps pinch.
-         // Standard web app pinch-zoom on canvas often uses CSS transform for "preview" then commits on end.
-         // Given the constraints, let's just update zoom state and rely on our center calculation.
+         const canvasX = mx - startPan.x;
+         const canvasY = my - startPan.y;
          
-         // Recalculate Scroll for Zoom centered at 'cx, cy'
-         // We have manual scroll 'startScroll.x - dx'. 
-         // Let's just update Zoom. The Pan might feel slightly detached if we don't compensate.
+         let newPanX = mx - (canvasX / startZoom) * newZoom;
+         let newPanY = my - (canvasY / startZoom) * newZoom;
          
-         // Actually, simpler 2-finger logic: 
-         // 1. Calculate new Zoom.
-         // 2. Adjust scroll to keep content center stable.
-         
-         // Only update if zoom changed enough to avoid jitter?
-         if (Math.abs(newZoom - state.zoom) > 0.05) {
-             const container = containerRef.current;
-             const rect = container.getBoundingClientRect();
-             // Center relative to container
-             const mx = cx - rect.left;
-             const my = cy - rect.top;
-             const contentX = container.scrollLeft + mx;
-             const contentY = container.scrollTop + my;
-             
-             const rx = contentX / (state.width * state.zoom);
-             const ry = contentY / (state.height * state.zoom);
-             
-             const newTotalW = state.width * newZoom;
-             const newTotalH = state.height * newZoom;
-             
-             const newScrollLeft = (newTotalW * rx) - mx - dx; // Include pan delta here?
-             const newScrollTop = (newTotalH * ry) - my - dy;
+         // Add drag
+         newPanX += dx;
+         newPanY += dy;
 
-             pendingScrollRef.current = { left: newScrollLeft, top: newScrollTop };
-             onZoom(newZoom);
-             
-             // Update gesture start state to current to avoid accumulation errors
-             gestureState.current.startZoom = newZoom;
-             gestureState.current.startDist = dist;
-             // Don't reset center/scroll as that would break the continuous drag reference
-             // But resizing breaks the reference frame anyway.
-         } else {
-             // Just Pan
-             containerRef.current.scrollLeft = startScroll.x - dx;
-             containerRef.current.scrollTop = startScroll.y - dy;
-         }
+         setPan({ x: newPanX, y: newPanY });
+         onZoom(newZoom);
 
       } else if (e.touches.length === 1) {
           e.preventDefault();
           handlePointerMove(e.touches[0].clientX, e.touches[0].clientY);
       }
-  }, [state.zoom, state.width, state.height, onZoom]);
+  }, [onZoom]);
 
   const handleTouchEnd = useCallback((e: TouchEvent) => {
-      // Logic to finalize or cleanup
       if (e.touches.length === 0) {
           handlePointerUp();
       }
@@ -387,7 +348,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     const container = containerRef.current;
     if (!container) return;
 
-    // React's onWheel is passive by default, but we need preventDefault for pinch-zoom
+    // Non-passive listeners to prevent browser default behavior (pinch-to-zoom page, history swipe)
     container.addEventListener('wheel', handleWheel, { passive: false });
     container.addEventListener('touchstart', handleTouchStart, { passive: false });
     container.addEventListener('touchmove', handleTouchMove, { passive: false });
@@ -437,8 +398,6 @@ export const Canvas: React.FC<CanvasProps> = ({
           ctx.fillStyle = color;
           // Use Math.round to prevent sub-pixel blurring gaps if zoom is float
           // But allow float size for smooth zoom.
-          // To make it look good, we can slightly overdraw or just accept float.
-          // 'fillRect' with floats does sub-pixel AA.
           ctx.fillRect((x + offset.x) * state.zoom, (y + offset.y) * state.zoom, state.zoom, state.zoom);
         }
       });
@@ -514,7 +473,6 @@ export const Canvas: React.FC<CanvasProps> = ({
          const dy = y + oy;
          
          // Check neighbors (relative to original selection set)
-         // We check adjacent indices in the set.
          // Top
          if (y===0 || !state.selection!.has(idx - state.width)) {
              ctx.moveTo(dx*z, dy*z); ctx.lineTo((dx+1)*z, dy*z);
@@ -595,7 +553,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   return (
     <div 
         ref={containerRef}
-        className="flex-1 bg-[oklch(0.145_0_0)] overflow-auto flex items-center justify-center relative p-8 shadow-inner border-l border-r border-background touch-none"
+        className="flex-1 bg-[oklch(0.145_0_0)] overflow-hidden relative shadow-inner border-l border-r border-background touch-none"
     >
       <canvas
         ref={canvasRef}
@@ -608,6 +566,11 @@ export const Canvas: React.FC<CanvasProps> = ({
         onMouseLeave={() => { setCursorPos(null); handlePointerUp(); }}
         onDoubleClick={handleDoubleClick}
         style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            transform: `translate(${pan.x}px, ${pan.y}px)`,
+            transformOrigin: 'top left',
             cursor: ['rect-select', 'ellipse-select', 'lasso-select', 'poly-lasso-select', 'magic-wand'].includes(state.tool) ? 'crosshair' : (state.tool === 'move' ? 'move' : (state.tool === 'pencil' ? 'none' : 'default'))
         }}
       />
