@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import { ProjectState, Frame, Layer, SavedPalette, PixelGrid, HistoryEntry, ToolType, RecentProject, FileSystemFileHandle, ProjectInstance } from '../types';
-import { INITIAL_STATE, DEFAULT_PALETTE, GAMEBOY_PALETTE } from '../constants';
+import { INITIAL_STATE, DEFAULT_PALETTE, GAMEBOY_PALETTE, ENDESGA_64_PALETTE } from '../constants';
 import { parseASE, parseGPL, extractColorsFromPNG, fileToProjectState, renderFrameToCanvas } from '../utils';
 
 export function useProject() {
@@ -134,8 +134,8 @@ export function useProject() {
       }
 
       if (!newState.paletteLibrary || newState.paletteLibrary.length === 0) {
-          newState.paletteLibrary = [DEFAULT_PALETTE, GAMEBOY_PALETTE];
-          newState.activePaletteId = DEFAULT_PALETTE.id;
+          newState.paletteLibrary = [ENDESGA_64_PALETTE, DEFAULT_PALETTE, GAMEBOY_PALETTE];
+          newState.activePaletteId = ENDESGA_64_PALETTE.id;
       }
 
       setProjects(prev => [...prev, {
