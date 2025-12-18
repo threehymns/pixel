@@ -1,5 +1,4 @@
 
-
 import { useState, useCallback, useEffect } from 'react';
 import { ProjectState, Frame, Layer, SavedPalette, PixelGrid, HistoryEntry, ToolType, RecentProject, FileSystemFileHandle, ProjectInstance } from '../types';
 import { INITIAL_STATE, DEFAULT_PALETTE, GAMEBOY_PALETTE, ENDESGA_64_PALETTE } from '../constants';
@@ -104,7 +103,9 @@ export function useProject() {
       id,
       title: `Untitled-${projects.length + 1}`,
       layers: [{ id: 'layer-1', name: 'Layer 1', visible: true, locked: false }],
+      selectedLayerIds: ['layer-1'],
       frames: [{ id: 'frame-1', layerData: { 'layer-1': new Array(INITIAL_STATE.width * INITIAL_STATE.height).fill(null) } }],
+      selectedFrameIndices: [0],
     };
     
     const initialEntry: HistoryEntry = {
@@ -128,7 +129,6 @@ export function useProject() {
       const newState = await fileToProjectState(file);
       newState.id = `project-${Date.now()}`;
       
-      // If loaded with a file handle (e.g. from FileTree), store it in state
       if (handle) {
           newState.fileHandle = handle;
       }
@@ -137,6 +137,9 @@ export function useProject() {
           newState.paletteLibrary = [ENDESGA_64_PALETTE, DEFAULT_PALETTE, GAMEBOY_PALETTE];
           newState.activePaletteId = ENDESGA_64_PALETTE.id;
       }
+      
+      if (!newState.selectedLayerIds) newState.selectedLayerIds = [newState.activeLayerId];
+      if (!newState.selectedFrameIndices) newState.selectedFrameIndices = [newState.activeFrameIndex];
 
       setProjects(prev => [...prev, {
         data: newState,
@@ -152,7 +155,6 @@ export function useProject() {
     }
   }, [addToRecents]);
 
-  // State update wrapper needs to be defined before saveProjectAs for visibility
   const updateState = useCallback((
       newState: ProjectState, 
       historyConfig?: { action: string, tool?: ToolType }
@@ -181,7 +183,7 @@ export function useProject() {
         data: newState,
         history: newHistory,
         historyIndex: newIndex,
-        lastSavedHistoryIndex: p.lastSavedHistoryIndex // Preserve unsaved status
+        lastSavedHistoryIndex: p.lastSavedHistoryIndex
       };
     }));
   }, [activeProjectId]);
@@ -198,7 +200,6 @@ export function useProject() {
   const saveProjectAs = useCallback(async () => {
     if (activeProjectId === 'home') return;
 
-    // Fallback if File System Access API is not supported (e.g. Firefox default)
     // @ts-ignore
     if (typeof window.showSaveFilePicker !== 'function') {
         const jsonString = JSON.stringify(state, (key, value) => {
@@ -254,7 +255,6 @@ export function useProject() {
              addToRecents(newState);
              alert(`Exported to ${handle.name}`);
         } else {
-             // Default to JSON logic
              const jsonString = JSON.stringify(state, (key, value) => {
                      if (key === 'selection' && value instanceof Set) return Array.from(value);
                      if (key === 'selection' && value === null) return null;
@@ -282,8 +282,6 @@ export function useProject() {
 
   const saveProject = useCallback(async () => {
     if (activeProjectId === 'home') return;
-    
-    // If no handle (unsaved), redirect to Save As
     if (!state.fileHandle) {
         await saveProjectAs();
         return;
@@ -311,7 +309,7 @@ export function useProject() {
             const jsonString = JSON.stringify(state, (key, value) => {
                 if (key === 'selection' && value instanceof Set) return Array.from(value);
                 if (key === 'selection' && value === null) return null;
-                if (key === 'fileHandle') return undefined; // Skip handle
+                if (key === 'fileHandle') return undefined; 
                 return value;
             }, 2);
             const writable = await state.fileHandle.createWritable();
@@ -321,16 +319,11 @@ export function useProject() {
             alert(`Saved ${state.fileHandle.name}`);
             return;
         }
-        
-        // Handle logic for existing file handle but unknown extension? 
-        // Fallback to Save As
         await saveProjectAs();
-
     } catch (e) {
         console.error("Save failed", e);
         alert("Failed to save project.");
     }
-
   }, [state, activeProjectId, addToRecents, saveProjectAs, markSaved]);
 
   const closeProject = useCallback((id: string) => {
@@ -404,7 +397,12 @@ export function useProject() {
     const newFrame: Frame = { id: `frame-${Date.now()}`, layerData: {} };
     state.layers.forEach(l => newFrame.layerData[l.id] = new Array(state.width * state.height).fill(null));
     updateState(
-        { ...state, frames: [...state.frames, newFrame], activeFrameIndex: state.frames.length }, 
+        { 
+          ...state, 
+          frames: [...state.frames, newFrame], 
+          activeFrameIndex: state.frames.length,
+          selectedFrameIndices: [state.frames.length]
+        }, 
         { action: 'Add Frame' }
     );
   }, [state, updateState, activeProjectId]);
@@ -417,8 +415,43 @@ export function useProject() {
     const newFrame: Frame = { id: `frame-${Date.now()}`, layerData: newData };
     const newFrames = [...state.frames]; newFrames.splice(state.activeFrameIndex + 1, 0, newFrame);
     updateState(
-        { ...state, frames: newFrames, activeFrameIndex: state.activeFrameIndex + 1 }, 
+        { 
+          ...state, 
+          frames: newFrames, 
+          activeFrameIndex: state.activeFrameIndex + 1,
+          selectedFrameIndices: [state.activeFrameIndex + 1]
+        }, 
         { action: 'Duplicate Frame' }
+    );
+  }, [state, updateState, activeProjectId]);
+
+  const duplicateSelectedFrames = useCallback(() => {
+    if (activeProjectId === 'home') return;
+    const selected = [...state.selectedFrameIndices].sort((a, b) => a - b);
+    if (selected.length === 0) return;
+
+    const newFrames = [...state.frames];
+    const insertedIndices: number[] = [];
+    
+    // Duplicate each selected frame and insert it right after the block
+    const offset = selected[selected.length - 1] + 1;
+    selected.forEach((idx, i) => {
+        const source = state.frames[idx];
+        const newData: Record<string, PixelGrid> = {};
+        Object.keys(source.layerData).forEach(key => newData[key] = [...source.layerData[key]]);
+        const newFrame: Frame = { id: `frame-${Date.now()}-${i}`, layerData: newData };
+        newFrames.splice(offset + i, 0, newFrame);
+        insertedIndices.push(offset + i);
+    });
+
+    updateState(
+        { 
+          ...state, 
+          frames: newFrames, 
+          activeFrameIndex: insertedIndices[0],
+          selectedFrameIndices: insertedIndices
+        }, 
+        { action: `Duplicate ${selected.length} Frames` }
     );
   }, [state, updateState, activeProjectId]);
 
@@ -426,8 +459,30 @@ export function useProject() {
     if (activeProjectId === 'home') return;
     if (state.frames.length <= 1) return; 
     updateState(
-        { ...state, frames: state.frames.filter((_, i) => i !== state.activeFrameIndex), activeFrameIndex: Math.max(0, state.activeFrameIndex - 1) }, 
+        { ...state, frames: state.frames.filter((_, i) => i !== state.activeFrameIndex), activeFrameIndex: Math.max(0, state.activeFrameIndex - 1), selectedFrameIndices: [Math.max(0, state.activeFrameIndex - 1)] }, 
         { action: 'Delete Frame' }
+    );
+  }, [state, updateState, activeProjectId]);
+
+  const deleteSelectedFrames = useCallback(() => {
+    if (activeProjectId === 'home') return;
+    const selected = state.selectedFrameIndices;
+    if (selected.length === 0 || selected.length === state.frames.length) return;
+
+    const newFrames = state.frames.filter((_, i) => !selected.includes(i));
+    let newActiveIndex = state.activeFrameIndex;
+    if (selected.includes(newActiveIndex)) {
+        // Move to the frame before the first deleted frame in selection
+        const firstSelected = Math.min(...selected);
+        newActiveIndex = Math.max(0, firstSelected - 1);
+        if (newActiveIndex >= newFrames.length) newActiveIndex = newFrames.length - 1;
+    } else {
+        newActiveIndex = state.activeFrameIndex - selected.filter(idx => idx < state.activeFrameIndex).length;
+    }
+
+    updateState(
+        { ...state, frames: newFrames, activeFrameIndex: newActiveIndex, selectedFrameIndices: [newActiveIndex] },
+        { action: `Delete ${selected.length} Frames` }
     );
   }, [state, updateState, activeProjectId]);
 
@@ -440,7 +495,7 @@ export function useProject() {
     const newLayers = [...state.layers]; const idx = state.layers.findIndex(l => l.id === state.activeLayerId);
     if(idx!==-1) newLayers.splice(idx+1, 0, newLayer); else newLayers.push(newLayer);
     updateState(
-        { ...state, layers: newLayers, frames: newFrames, activeLayerId: newId }, 
+        { ...state, layers: newLayers, frames: newFrames, activeLayerId: newId, selectedLayerIds: [newId] }, 
         { action: 'Add Layer' }
     );
   }, [state, updateState, activeProjectId]);
@@ -462,8 +517,31 @@ export function useProject() {
     }
 
     updateState(
-        { ...state, layers: newLayers, frames: newFrames, activeLayerId: newActiveId },
+        { ...state, layers: newLayers, frames: newFrames, activeLayerId: newActiveId, selectedLayerIds: state.selectedLayerIds.filter(sid => sid !== id).length ? state.selectedLayerIds.filter(sid => sid !== id) : [newActiveId] },
         { action: 'Delete Layer' }
+    );
+  }, [state, updateState, activeProjectId]);
+
+  const deleteSelectedLayers = useCallback(() => {
+    if (activeProjectId === 'home') return;
+    const selected = state.selectedLayerIds;
+    if (selected.length === 0 || selected.length === state.layers.length) return;
+
+    const newLayers = state.layers.filter(l => !selected.includes(l.id));
+    const newFrames = state.frames.map(f => {
+        const newLayerData = { ...f.layerData };
+        selected.forEach(id => delete newLayerData[id]);
+        return { ...f, layerData: newLayerData };
+    });
+
+    let newActiveId = state.activeLayerId;
+    if (selected.includes(newActiveId)) {
+        newActiveId = newLayers[0].id;
+    }
+
+    updateState(
+        { ...state, layers: newLayers, frames: newFrames, activeLayerId: newActiveId, selectedLayerIds: [newActiveId] },
+        { action: `Delete ${selected.length} Layers` }
     );
   }, [state, updateState, activeProjectId]);
 
@@ -477,7 +555,7 @@ export function useProject() {
      const newLayer = { ...sourceLayer, id: newId, name: `${sourceLayer.name} (Copy)` };
      
      const newLayers = [...state.layers];
-     newLayers.splice(layerIndex, 0, newLayer);
+     newLayers.splice(layerIndex + 1, 0, newLayer); // Insert above
      
      const newFrames = state.frames.map(f => ({
          ...f,
@@ -488,9 +566,38 @@ export function useProject() {
      }));
 
      updateState(
-         { ...state, layers: newLayers, frames: newFrames, activeLayerId: newId },
+         { ...state, layers: newLayers, frames: newFrames, activeLayerId: newId, selectedLayerIds: [newId] },
          { action: 'Duplicate Layer' }
      );
+  }, [state, updateState, activeProjectId]);
+
+  const duplicateSelectedLayers = useCallback(() => {
+    if (activeProjectId === 'home') return;
+    const selected = [...state.selectedLayerIds];
+    if (selected.length === 0) return;
+
+    const newLayers = [...state.layers];
+    const newFrames = state.frames.map(f => ({ ...f, layerData: { ...f.layerData } }));
+    const duplicatedIds: string[] = [];
+
+    // Duplicate each selected layer
+    selected.forEach(id => {
+        const layerIndex = newLayers.findIndex(l => l.id === id);
+        const sourceLayer = newLayers[layerIndex];
+        const newId = `layer-${Date.now()}-${id}`;
+        const newLayer = { ...sourceLayer, id: newId, name: `${sourceLayer.name} (Copy)` };
+        newLayers.splice(layerIndex + 1, 0, newLayer);
+        duplicatedIds.push(newId);
+
+        newFrames.forEach(f => {
+            f.layerData[newId] = sourceLayer.id in f.layerData ? [...f.layerData[id]] : new Array(state.width * state.height).fill(null);
+        });
+    });
+
+    updateState(
+        { ...state, layers: newLayers, frames: newFrames, activeLayerId: duplicatedIds[0], selectedLayerIds: duplicatedIds },
+        { action: `Duplicate ${selected.length} Layers` }
+    );
   }, [state, updateState, activeProjectId]);
 
   const updateLayer = useCallback((id: string, updates: Partial<Layer>) => {
@@ -510,7 +617,7 @@ export function useProject() {
     if(oI===-1||tI===-1||oI===tI)return;
     const nl = [...state.layers]; const [m] = nl.splice(oI, 1);
     const adjTI = nl.findIndex(l => l.id === tId);
-    if(pos==='before') nl.splice(adjTI+1, 0, m); else nl.splice(adjTI, 0, m);
+    if(pos==='before') nl.splice(adjTI, 0, m); else nl.splice(adjTI+1, 0, m);
     updateState(
         {...state, layers: nl}, 
         { action: 'Reorder Layers' }
@@ -520,13 +627,26 @@ export function useProject() {
   const reorderFrames = useCallback((from: number, to: number) => {
     if (activeProjectId === 'home') return;
     if (from === to) return;
-    const newFrames = [...state.frames]; const [moved] = newFrames.splice(from, 1); newFrames.splice(to, 0, moved);
+    
+    const newFrames = [...state.frames]; 
+    const [moved] = newFrames.splice(from, 1); 
+    newFrames.splice(to, 0, moved);
+    
+    // Map existing selections to their new positions
+    const newSelectedIndices = state.selectedFrameIndices.map(idx => {
+        if (idx === from) return to;
+        if (from < to && idx > from && idx <= to) return idx - 1;
+        if (from > to && idx >= to && idx < from) return idx + 1;
+        return idx;
+    });
+
     let newActive = state.activeFrameIndex;
     if (newActive === from) newActive = to;
-    else if (newActive > from && newActive <= to) newActive--;
-    else if (newActive < from && newActive >= to) newActive++;
+    else if (from < to && newActive > from && newActive <= to) newActive--;
+    else if (from > to && newActive >= to && newActive < from) newActive++;
+
     updateState(
-        { ...state, frames: newFrames, activeFrameIndex: newActive }, 
+        { ...state, frames: newFrames, activeFrameIndex: newActive, selectedFrameIndices: newSelectedIndices }, 
         { action: 'Reorder Frames' }
     );
   }, [state, updateState, activeProjectId]);
@@ -594,10 +714,14 @@ export function useProject() {
     historyIndex: activeInstance.historyIndex, 
     addFrame,
     duplicateFrame,
+    duplicateSelectedFrames,
     deleteFrame,
+    deleteSelectedFrames,
     addLayer,
     deleteLayer,
+    deleteSelectedLayers,
     duplicateLayer,
+    duplicateSelectedLayers,
     updateLayer,
     reorderLayers,
     reorderFrames,

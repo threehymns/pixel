@@ -5,11 +5,13 @@ import { Eye, EyeOff, Lock, Unlock, Plus, Copy, Trash2, Edit2, Check, GripVertic
 
 interface LayersPanelProps {
   state: ProjectState;
-  onSelectLayer: (id: string) => void;
+  onSelectLayers: (ids: string[], activeId: string) => void;
   onUpdateLayer: (id: string, updates: Partial<Layer>) => void;
   onAddLayer: () => void;
   onDuplicateLayer: (id: string) => void;
   onDeleteLayer: (id: string) => void;
+  onDuplicateSelectedLayers: () => void;
+  onDeleteSelectedLayers: () => void;
   onReorderLayers: (draggedId: string, targetId: string, position: 'before' | 'after') => void;
   className?: string;
 }
@@ -22,11 +24,13 @@ interface DragState {
 
 export const LayersPanel: React.FC<LayersPanelProps> = ({
   state,
-  onSelectLayer,
+  onSelectLayers,
   onUpdateLayer,
   onAddLayer,
   onDuplicateLayer,
   onDeleteLayer,
+  onDuplicateSelectedLayers,
+  onDeleteSelectedLayers,
   onReorderLayers,
   className
 }) => {
@@ -46,6 +50,50 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
       onUpdateLayer(editingId, { name: editName.trim() });
     }
     setEditingId(null);
+  };
+
+  const handleLayerClick = (e: React.MouseEvent, id: string) => {
+    let newSelection = [...state.selectedLayerIds];
+    
+    if (e.shiftKey) {
+        // Range select
+        const allIds = state.layers.map(l => l.id).reverse(); // Matching UI order
+        const startIdx = allIds.indexOf(state.activeLayerId);
+        const endIdx = allIds.indexOf(id);
+        const range = allIds.slice(Math.min(startIdx, endIdx), Math.max(startIdx, endIdx) + 1);
+        newSelection = Array.from(new Set([...newSelection, ...range]));
+    } else if (e.ctrlKey || e.metaKey) {
+        // Toggle select
+        if (newSelection.includes(id)) {
+            if (newSelection.length > 1) {
+                newSelection = newSelection.filter(sid => sid !== id);
+            }
+        } else {
+            newSelection.push(id);
+        }
+    } else {
+        // Single select
+        newSelection = [id];
+    }
+    
+    const newActiveId = id;
+    onSelectLayers(newSelection, newActiveId);
+  };
+
+  const handleDeleteSelected = () => {
+    if (state.selectedLayerIds.length > 1) {
+      onDeleteSelectedLayers();
+    } else {
+      onDeleteLayer(state.activeLayerId);
+    }
+  };
+
+  const handleDuplicateSelected = () => {
+    if (state.selectedLayerIds.length > 1) {
+      onDuplicateSelectedLayers();
+    } else {
+      onDuplicateLayer(state.activeLayerId);
+    }
   };
 
   // Drag Handlers
@@ -76,11 +124,28 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
     setDragState(null);
   };
 
+  const isMultiLayer = state.selectedLayerIds.length > 1;
+
   return (
     <div className={`flex flex-col bg-card select-none ${className}`}>
       <div className="bg-secondary px-2 py-1 text-xs font-bold text-gray-300 flex justify-between items-center border-b border-background">
         <span>Layers</span>
         <div className="flex items-center gap-1">
+            <button 
+                onClick={handleDuplicateSelected} 
+                className={`p-1 hover:text-white rounded ${isMultiLayer ? 'text-primary' : 'text-muted-foreground'}`} 
+                title={isMultiLayer ? `Duplicate ${state.selectedLayerIds.length} Layers` : "Duplicate Layer"}
+            >
+                <Copy size={12} />
+            </button>
+            <button 
+                onClick={handleDeleteSelected} 
+                className={`p-1 hover:text-white rounded ${isMultiLayer ? 'text-destructive font-bold' : 'text-muted-foreground'}`} 
+                title={isMultiLayer ? `Delete ${state.selectedLayerIds.length} Layers` : "Delete Layer"}
+            >
+                <Trash2 size={12} />
+            </button>
+            <div className="w-[1px] h-3 bg-border mx-1" />
             <button onClick={onAddLayer} className="p-1 hover:text-white rounded" title="New Layer"><Plus size={12} /></button>
         </div>
       </div>
@@ -90,6 +155,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
             const isDragging = dragState?.id === layer.id;
             const isOver = dragState?.overId === layer.id;
             const isActive = state.activeLayerId === layer.id;
+            const isSelected = state.selectedLayerIds.includes(layer.id);
 
             return (
                 <div 
@@ -99,11 +165,13 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                     onDragOver={(e) => handleDragOver(e, layer.id)}
                     onDrop={(e) => handleDrop(e, layer.id)}
                     onDragEnd={() => setDragState(null)}
-                    onClick={() => onSelectLayer(layer.id)}
+                    onClick={(e) => handleLayerClick(e, layer.id)}
                     onDoubleClick={() => startEditing(layer)}
                     className={`
                         flex items-center gap-2 px-2 py-1 border-b border-border group relative
-                        ${isActive ? 'bg-primary/20' : 'hover:bg-muted/50'}
+                        ${isActive ? 'bg-primary/20 ring-1 ring-inset ring-primary z-10' : ''}
+                        ${isSelected && !isActive ? 'bg-accent/40' : ''}
+                        ${!isSelected && !isActive ? 'hover:bg-muted/50' : ''}
                         ${isDragging ? 'opacity-50' : ''}
                     `}
                 >

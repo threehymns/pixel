@@ -10,8 +10,25 @@ import {
   BoxSelect, Lasso, Wand2, MousePointer2, Scissors,
   Check, Command, Search, X, File, Settings, HelpCircle,
   Home, Github, ArrowRightLeft, Edit2,
-  Lock, Unlock, Folder, FolderOpen, Image
+  Lock, Unlock, Folder, FolderOpen, Image,
+  Maximize, Info, AlertCircle, Clock, Minus
 } from 'lucide-react';
+
+export const AngleIcon = ({ size = 24, ...props }: React.SVGProps<SVGSVGElement> & { size?: number }) => (
+  <svg 
+    width={size} 
+    height={size} 
+    viewBox="0 0 24 24" 
+    fill="none" 
+    stroke="currentColor" 
+    strokeWidth="2" 
+    strokeLinecap="round" 
+    strokeLinejoin="round" 
+    {...props}
+  >
+    <path d="M20 20H3c-1.1 0-1.3-.6-.4-1.3L20.4 4.3"/>
+  </svg>
+);
 
 export { 
   Pencil, Eraser, PaintBucket, Pipette, 
@@ -23,5 +40,6 @@ export {
   BoxSelect, Lasso, Wand2, MousePointer2, Scissors,
   Check, Command, Search, X, File, Settings, HelpCircle,
   Home, Github, ArrowRightLeft, Edit2,
-  Lock, Unlock, Folder, FolderOpen, Image
+  Lock, Unlock, Folder, FolderOpen, Image,
+  Maximize, Info, AlertCircle, Clock, Minus
 };

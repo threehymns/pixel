@@ -1,5 +1,4 @@
 
-
 import { PixelGrid, Position, ProjectState, Layer, Frame, SavedPalette } from './types';
 
 export const getIndex = (x: number, y: number, width: number): number => {
@@ -38,6 +37,134 @@ export const bresenhamLine = (x0: number, y0: number, x1: number, y1: number): P
       cy += sy;
     }
   }
+  return points;
+};
+
+/**
+ * Alois Zingl's Ellipse Algorithm (Integer arithmetic)
+ * Provides pixel-perfect strokes without gaps or stretching.
+ */
+export const bresenhamEllipse = (x0: number, y0: number, x1: number, y1: number): Position[] => {
+  const points: Position[] = [];
+  
+  let a = Math.abs(x1 - x0);
+  let b = Math.abs(y1 - y0);
+  let b1 = b & 1;
+  
+  let dx = 4 * (1 - a) * b * b;
+  let dy = 4 * (b1 + 1) * a * a;
+  let err = dx + dy + b1 * a * a;
+  let e2;
+
+  if (x0 > x1) {
+    const temp = x0;
+    x0 = x1;
+    x1 = temp;
+  }
+  if (y0 > y1) {
+    const temp = y0;
+    y0 = y1;
+    y1 = temp;
+  }
+
+  y0 += Math.floor((b + 1) / 2);
+  y1 = y0 - b1;
+  a = 8 * a * a;
+  b1 = 8 * b * b;
+
+  const pushSymmetric = (px0: number, py0: number, px1: number, py1: number) => {
+    points.push({ x: px1, y: py0 });
+    points.push({ x: px0, y: py0 });
+    points.push({ x: px0, y: py1 });
+    points.push({ x: px1, y: py1 });
+  };
+
+  do {
+    pushSymmetric(x0, y0, x1, y1);
+    e2 = 2 * err;
+    if (e2 >= dx) {
+      x0++;
+      x1--;
+      err += dx += b1;
+    }
+    if (e2 <= dy) {
+      y0++;
+      y1--;
+      err += dy += a;
+    }
+  } while (x0 <= x1);
+
+  while (y0 - y1 < b) {
+    points.push({ x: x0 - 1, y: y0 });
+    points.push({ x: x1 + 1, y: y0++ });
+    points.push({ x: x0 - 1, y: y1 });
+    points.push({ x: x1 + 1, y: y1-- });
+  }
+
+  return points;
+};
+
+/**
+ * Filled version of the Alois Zingl's algorithm
+ * Draws horizontal spans between the calculated points.
+ */
+export const getFilledEllipse = (x0: number, y0: number, x1: number, y1: number): Position[] => {
+  const points: Position[] = [];
+  
+  let a = Math.abs(x1 - x0);
+  let b = Math.abs(y1 - y0);
+  let b1 = b & 1;
+  
+  let dx = 4 * (1 - a) * b * b;
+  let dy = 4 * (b1 + 1) * a * a;
+  let err = dx + dy + b1 * a * a;
+  let e2;
+
+  if (x0 > x1) {
+    const temp = x0;
+    x0 = x1;
+    x1 = temp;
+  }
+  if (y0 > y1) {
+    const temp = y0;
+    y0 = y1;
+    y1 = temp;
+  }
+
+  y0 += Math.floor((b + 1) / 2);
+  y1 = y0 - b1;
+  a = 8 * a * a;
+  b1 = 8 * b * b;
+
+  const pushHorizontalSpan = (px0: number, px1: number, py: number) => {
+    const left = Math.min(px0, px1);
+    const right = Math.max(px0, px1);
+    for (let x = left; x <= right; x++) {
+      points.push({ x, y: py });
+    }
+  };
+
+  do {
+    pushHorizontalSpan(x0, x1, y0);
+    pushHorizontalSpan(x0, x1, y1);
+    e2 = 2 * err;
+    if (e2 >= dx) {
+      x0++;
+      x1--;
+      err += dx += b1;
+    }
+    if (e2 <= dy) {
+      y0++;
+      y1--;
+      err += dy += a;
+    }
+  } while (x0 <= x1);
+
+  while (y0 - y1 < b) {
+    pushHorizontalSpan(x0 - 1, x1 + 1, y0++);
+    pushHorizontalSpan(x0 - 1, x1 + 1, y1--);
+  }
+
   return points;
 };
 
@@ -202,29 +329,15 @@ export const getRectSelection = (x0: number, y0: number, x1: number, y1: number,
   return selection;
 };
 
+/**
+ * Selection Ellipse using Zingl Algorithm logic for boundary consistency.
+ */
 export const getEllipseSelection = (x0: number, y0: number, x1: number, y1: number, width: number): Set<number> => {
   const selection = new Set<number>();
-  const left = Math.min(x0, x1);
-  const right = Math.max(x0, x1);
-  const top = Math.min(y0, y1);
-  const bottom = Math.max(y0, y1);
-  
-  const w = right - left;
-  const h = bottom - top;
-  const cx = left + w / 2;
-  const cy = top + h / 2;
-  const rx = w / 2;
-  const ry = h / 2;
-
-  for (let y = top; y <= bottom; y++) {
-    for (let x = left; x <= right; x++) {
-      const normalizedX = (x - cx) / (rx + 0.5); 
-      const normalizedY = (y - cy) / (ry + 0.5);
-      if (normalizedX * normalizedX + normalizedY * normalizedY <= 1) {
-        selection.add(getIndex(x, y, width));
-      }
-    }
-  }
+  const filledPoints = getFilledEllipse(x0, y0, x1, y1);
+  filledPoints.forEach(p => {
+    selection.add(getIndex(p.x, p.y, width));
+  });
   return selection;
 };
 
@@ -372,346 +485,124 @@ export const parseASE = async (buffer: ArrayBuffer): Promise<string[]> => {
   return colors;
 };
 
-// --- Aseprite File Parser ---
+// --- Project & Palette Utilities ---
 
-async function decompress(data: Uint8Array): Promise<Uint8Array> {
-  const ds = new DecompressionStream('deflate');
-  const writer = ds.writable.getWriter();
-  writer.write(data);
-  writer.close();
-  return new Uint8Array(await new Response(ds.readable).arrayBuffer());
-}
-
-export const parseAsepriteFile = async (buffer: ArrayBuffer, fileName: string): Promise<ProjectState> => {
-  const view = new DataView(buffer);
-  
-  // Header
-  const magic = view.getUint16(4, true);
-  if (magic !== 0xA5E0) throw new Error("Invalid .ase file");
-  
-  const numFrames = view.getUint16(6, true);
-  const width = view.getUint16(8, true);
-  const height = view.getUint16(10, true);
-  const colorDepth = view.getUint16(12, true);
-  const flags = view.getUint32(14, true);
-  const transparentIndex = view.getUint8(28);
-  
-  let offset = 128;
-  
-  const layers: Layer[] = [];
-  const frames: Frame[] = [];
-  let palette: string[] = []; 
-  const layerInfo: { id: string, type: number, visible: boolean }[] = [];
-
-  for (let f = 0; f < numFrames; f++) {
-    const frameStart = offset;
-    const frameBytes = view.getUint32(offset, true);
-    const frameMagic = view.getUint16(offset + 4, true);
-    if (frameMagic !== 0xF1FA) throw new Error("Invalid frame magic");
-    
-    const oldChunks = view.getUint16(offset + 6, true);
-    const newChunks = view.getUint32(offset + 12, true);
-    const chunkCount = newChunks === 0 ? oldChunks : newChunks;
-    
-    offset += 16;
-    
-    // Init frame data with empty grids
-    const frameData: Record<string, (string|null)[]> = {};
-    layerInfo.forEach(l => {
-        frameData[l.id] = new Array(width * height).fill(null);
-    });
-    
-    for (let c = 0; c < chunkCount; c++) {
-      const chunkStart = offset;
-      const chunkSize = view.getUint32(offset, true);
-      const chunkType = view.getUint16(offset + 4, true);
-      const chunkDataOffset = offset + 6;
-      
-      // Layer Chunk (0x2004)
-      if (chunkType === 0x2004 && f === 0) {
-          const flags = view.getUint16(chunkDataOffset, true);
-          const type = view.getUint16(chunkDataOffset + 2, true);
-          // Fixed offsets: Flags(2) + Type(2) + ChildLevel(2) + DefW(2) + DefH(2) + Blend(2) + Opacity(1) + Reserved(3) = 16
-          const nameLen = view.getUint16(chunkDataOffset + 16, true);
-          const name = new TextDecoder().decode(new Uint8Array(buffer, chunkDataOffset + 18, nameLen));
-          
-          const id = `layer-${layerInfo.length + 1}`;
-          const visible = (flags & 1) !== 0;
-          const locked = (flags & 4) !== 0;
-          
-          layerInfo.push({ id, type, visible });
-          layers.push({ id, name, visible, locked });
-          
-          // Initialize grid for this layer
-          frameData[id] = new Array(width * height).fill(null);
-      }
-      // Cel Chunk (0x2005)
-      else if (chunkType === 0x2005) {
-          const layerIndex = view.getUint16(chunkDataOffset, true);
-          const x = view.getInt16(chunkDataOffset + 2, true);
-          const y = view.getInt16(chunkDataOffset + 4, true);
-          const opacity = view.getUint8(chunkDataOffset + 6);
-          const celType = view.getUint16(chunkDataOffset + 7, true);
-          
-          const layer = layerInfo[layerIndex];
-          if (layer) {
-              const targetGrid = frameData[layer.id] || new Array(width * height).fill(null);
-              frameData[layer.id] = targetGrid;
-              
-              if (celType === 2) { // Compressed Image
-                  // Fixed offsets: LayerIdx(2) + X(2) + Y(2) + Opacity(1) + CelType(2) + Reserved(7) = 16
-                  const w = view.getUint16(chunkDataOffset + 16, true);
-                  const h = view.getUint16(chunkDataOffset + 18, true);
-                  const dataStart = chunkDataOffset + 20;
-                  const dataLen = (chunkStart + chunkSize) - dataStart;
-                  const compressed = new Uint8Array(buffer, dataStart, dataLen);
-                  
-                  const decompressed = await decompress(compressed);
-                  
-                  // Blit pixels
-                  for (let cy = 0; cy < h; cy++) {
-                      for (let cx = 0; cx < w; cx++) {
-                          const destX = x + cx;
-                          const destY = y + cy;
-                          if (destX >= 0 && destX < width && destY >= 0 && destY < height) {
-                              const idx = cy * w + cx;
-                              let color: string | null = null;
-                              
-                              if (colorDepth === 32) {
-                                  const r = decompressed[idx * 4];
-                                  const g = decompressed[idx * 4 + 1];
-                                  const b = decompressed[idx * 4 + 2];
-                                  const a = decompressed[idx * 4 + 3];
-                                  if (a > 0) {
-                                      color = rgbToHex(r, g, b);
-                                  }
-                              } else if (colorDepth === 8) {
-                                  const cIdx = decompressed[idx];
-                                  if (cIdx !== transparentIndex) {
-                                      color = palette[cIdx];
-                                  }
-                              } else if (colorDepth === 16) {
-                                  const val = decompressed[idx * 2];
-                                  const alpha = decompressed[idx * 2 + 1];
-                                  if (alpha > 0) {
-                                      color = rgbToHex(val, val, val);
-                                  }
-                              }
-
-                              if (color) targetGrid[destY * width + destX] = color;
-                          }
-                      }
-                  }
-              }
-          }
-      }
-      // Palette Chunk (0x2019)
-      else if (chunkType === 0x2019) {
-        const firstIndex = view.getUint32(chunkDataOffset + 4, true);
-        const lastIndex = view.getUint32(chunkDataOffset + 8, true);
-        let palOffset = chunkDataOffset + 20;
-        
-        for (let i = firstIndex; i <= lastIndex; i++) {
-            const entryFlags = view.getUint16(palOffset, true);
-            const r = view.getUint8(palOffset + 2);
-            const g = view.getUint8(palOffset + 3);
-            const b = view.getUint8(palOffset + 4);
-            // const a = view.getUint8(palOffset + 5);
-            
-            palOffset += 6;
-            if (entryFlags & 1) {
-                const nameLen = view.getUint16(palOffset, true);
-                palOffset += 2 + nameLen;
-            }
-            
-            while(palette.length <= i) palette.push('#000000');
-            palette[i] = rgbToHex(r, g, b);
-        }
-      }
-      // Old Palette (0x0004 or 0x0011)
-      else if (chunkType === 0x0004 || chunkType === 0x0011) {
-         const numPackets = view.getUint16(chunkDataOffset, true);
-         let palOffset = chunkDataOffset + 2;
-         let currentIdx = 0;
-         for(let p=0; p<numPackets; p++) {
-             const skip = view.getUint8(palOffset++);
-             let count = view.getUint8(palOffset++);
-             if (count === 0) count = 256;
-             currentIdx += skip;
-             for(let k=0; k<count; k++) {
-                 const r = view.getUint8(palOffset++);
-                 const g = view.getUint8(palOffset++);
-                 const b = view.getUint8(palOffset++);
-                 while(palette.length <= currentIdx) palette.push('#000000');
-                 palette[currentIdx] = rgbToHex(r, g, b);
-                 currentIdx++;
-             }
-         }
-      }
-      
-      offset = chunkStart + chunkSize;
+// Added fileToProjectState to handle file import (JSON or Image)
+/**
+ * Converts a file (JSON or Image) to a ProjectState object.
+ */
+export const fileToProjectState = async (file: File): Promise<ProjectState> => {
+  if (file.name.toLowerCase().endsWith('.json')) {
+    const text = await file.text();
+    const state = JSON.parse(text);
+    // Restore selection Set if it was serialized as an array
+    if (state.selection && Array.isArray(state.selection)) {
+      state.selection = new Set(state.selection);
     }
-    
-    frames.push({
-        id: `frame-${f+1}`,
-        layerData: frameData
-    });
+    return state as ProjectState;
   }
 
-  return {
-    id: `project-${Date.now()}`,
-    title: fileName.replace(/\.(ase|aseprite)$/, ''),
-    width,
-    height,
-    // Do NOT reverse layers here, as rendering iterates 0..N (Bottom to Top)
-    // and Aseprite stores 0..N (Bottom to Top).
-    layers: layers.length ? layers : [{id:'l1', name:'Layer 1', visible:true, locked:false}],
-    frames,
-    activeLayerId: layers.length ? layers[0].id : 'l1',
-    activeFrameIndex: 0,
-    palette: palette.length ? palette : ['#000000', '#ffffff'],
-    paletteLibrary: palette.length ? [{id:'imported', name:'Imported', colors: palette}] : [],
-    activePaletteId: palette.length ? 'imported' : '',
-    primaryColor: palette[0] || '#ffffff',
-    secondaryColor: palette[1] || '#000000',
-    tool: 'pencil',
-    brushSize: 1,
-    brushShape: 'square',
-    fillContiguous: true,
-    pixelPerfect: false,
-    zoom: width > 64 ? 4 : 16,
-    onionSkin: false,
-    showGrid: false,
-    selection: null,
-    selectionMode: 'replace'
-  };
-};
-
-export const extractColorsFromPNG = (file: File): Promise<string[]> => {
+  // Handle image files (PNG, JPG, etc.)
   return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = img.width;
-      canvas.height = img.height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return reject('No context');
-      ctx.drawImage(img, 0, 0);
-      const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-      const colorSet = new Set<string>();
-      for (let i = 0; i < data.length; i += 4) {
-        if (data[i + 3] > 0) colorSet.add(rgbToHex(data[i], data[i+1], data[i+2]));
-      }
-      resolve(Array.from(colorSet).slice(0, 256));
-      URL.revokeObjectURL(url);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const { width, height } = img;
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error("Failed to get canvas context"));
+          return;
+        }
+        ctx.drawImage(img, 0, 0);
+        const imageData = ctx.getImageData(0, 0, width, height).data;
+        const pixels: PixelGrid = new Array(width * height).fill(null);
+
+        for (let i = 0; i < width * height; i++) {
+          const r = imageData[i * 4];
+          const g = imageData[i * 4 + 1];
+          const b = imageData[i * 4 + 2];
+          const a = imageData[i * 4 + 3];
+          if (a > 128) { // Only count reasonably opaque pixels
+            pixels[i] = rgbToHex(r, g, b);
+          }
+        }
+
+        const layerId = `layer-${Date.now()}`;
+        const frameId = `frame-${Date.now()}`;
+
+        const state: ProjectState = {
+          id: `project-${Date.now()}`,
+          title: file.name.replace(/\.[^/.]+$/, ""), // Remove extension
+          width,
+          height,
+          layers: [{ id: layerId, name: 'Layer 1', visible: true, locked: false }],
+          frames: [{ id: frameId, layerData: { [layerId]: pixels } }],
+          activeLayerId: layerId,
+          selectedLayerIds: [layerId],
+          activeFrameIndex: 0,
+          selectedFrameIndices: [0],
+          palette: [], // Will be defaulted in useProject
+          paletteLibrary: [],
+          activePaletteId: '',
+          primaryColor: '#ffffff',
+          secondaryColor: '#000000',
+          tool: 'pencil',
+          brushSize: 1,
+          brushShape: 'circle',
+          fillContiguous: true,
+          pixelPerfect: false,
+          zoom: Math.min(32, Math.floor(512 / Math.max(width, height))),
+          onionSkin: false,
+          showGrid: false,
+          selection: null,
+          selectionMode: 'replace',
+        };
+        resolve(state);
+      };
+      img.onerror = () => reject(new Error("Failed to load image"));
+      img.src = e.target?.result as string;
     };
-    img.onerror = reject;
-    img.src = url;
+    reader.onerror = () => reject(new Error("Failed to read file"));
+    reader.readAsDataURL(file);
   });
 };
 
-export const fileToProjectState = (file: File): Promise<ProjectState> => {
+// Added extractColorsFromPNG to handle palette generation from images
+/**
+ * Extracts unique colors from an image file to create a palette.
+ */
+export const extractColorsFromPNG = async (file: File): Promise<string[]> => {
   return new Promise((resolve, reject) => {
-    const name = file.name.toLowerCase();
-
-    if (name.endsWith('.ase') || name.endsWith('.aseprite')) {
-        file.arrayBuffer().then(buffer => {
-            parseAsepriteFile(buffer, file.name).then(resolve).catch(reject);
-        }).catch(reject);
-        return;
-    }
-
-    const isJSON = name.endsWith('.json');
-    
-    if (isJSON) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          const json = JSON.parse(e.target?.result as string);
-          // Basic validation
-          if (!json.width || !json.height || !json.layers || !json.frames) {
-             throw new Error("Invalid project file structure");
-          }
-          resolve(json as ProjectState);
-        } catch (err) {
-          reject(err);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error("Failed to get canvas context"));
+          return;
         }
+        ctx.drawImage(img, 0, 0);
+        const data = ctx.getImageData(0, 0, img.width, img.height).data;
+        const colors = new Set<string>();
+        for (let i = 0; i < data.length; i += 4) {
+          if (data[i + 3] > 0) { // Only non-transparent
+            colors.add(rgbToHex(data[i], data[i + 1], data[i + 2]));
+          }
+        }
+        resolve(Array.from(colors));
       };
-      reader.onerror = () => reject("Failed to read file");
-      reader.readAsText(file);
-      return;
-    }
-
-    // Image Import (PNG, JPG, etc)
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      // Basic safeguard cap, although browsers can handle decent canvas sizes
-      const w = img.width;
-      const h = img.height;
-      
-      const canvas = document.createElement('canvas');
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) { reject("Canvas context error"); return; }
-      
-      ctx.drawImage(img, 0, 0);
-      const data = ctx.getImageData(0, 0, w, h).data;
-      
-      const colors = new Set<string>();
-      const pixelGrid: (string|null)[] = [];
-      
-      for(let i=0; i<data.length; i+=4) {
-         const r = data[i];
-         const g = data[i+1];
-         const b = data[i+2];
-         const a = data[i+3];
-         
-         if (a < 10) {
-           pixelGrid.push(null);
-         } else {
-           const hex = rgbToHex(r, g, b);
-           pixelGrid.push(hex);
-           colors.add(hex);
-         }
-      }
-      
-      const palette = Array.from(colors).slice(0, 256); // Limit initial palette to 256 colors
-      const layerId = 'layer-import';
-      
-      // Construct a new project state
-      const newState: ProjectState = {
-        id: 'temp-id', // Will be overwritten by useProject
-        title: file.name,
-        width: w,
-        height: h,
-        layers: [{ id: layerId, name: 'Background', visible: true, locked: false }],
-        frames: [{ id: 'frame-1', layerData: { [layerId]: pixelGrid } }],
-        activeLayerId: layerId,
-        activeFrameIndex: 0,
-        palette: palette.length > 0 ? palette : ['#000000', '#ffffff'],
-        paletteLibrary: [], // Will be populated by useProject defaults
-        activePaletteId: '',
-        primaryColor: palette[0] || '#000000',
-        secondaryColor: palette[1] || '#ffffff',
-        tool: 'pencil',
-        brushSize: 1,
-        brushShape: 'square',
-        fillContiguous: true,
-        pixelPerfect: false,
-        zoom: w > 64 ? 4 : 16,
-        onionSkin: false,
-        showGrid: false,
-        selection: null,
-        selectionMode: 'replace'
-      };
-      
-      URL.revokeObjectURL(url);
-      resolve(newState);
+      img.onerror = () => reject(new Error("Failed to load image"));
+      img.src = e.target?.result as string;
     };
-    img.onerror = () => reject("Failed to load image");
-    img.src = url;
+    reader.onerror = () => reject(new Error("Failed to read file"));
+    reader.readAsDataURL(file);
   });
 };

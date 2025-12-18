@@ -1,6 +1,6 @@
 
-import React, { useState, useEffect, useRef } from 'react';
-import { ToolType } from './types';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { ToolType, Position } from './types';
 import { Canvas } from './components/Canvas';
 import { Palette } from './components/Palette';
 import { Timeline } from './components/Timeline';
@@ -12,6 +12,7 @@ import { CommandPalette } from './components/CommandPalette';
 import { TabStrip } from './components/TabStrip';
 import { Home } from './components/Home';
 import { FileTree } from './components/FileTree';
+import { StatusBar } from './components/StatusBar';
 import { Popover, PopoverTrigger, PopoverContent, PopoverClose } from './components/Popover';
 import { ToolButton } from './components/ToolButton';
 import { SELECTION_TOOLS } from './constants';
@@ -20,7 +21,7 @@ import {
   Grid, Eye, Download, Undo, Redo, 
   Square, Circle,
   BoxSelect, Lasso, Wand2, MousePointer2, Scissors,
-  GripVertical
+  GripVertical, Minus
 } from './components/Icons';
 
 // Hooks
@@ -30,11 +31,16 @@ import { useCanvasTools } from './hooks/useCanvasTools';
 import { useAppCommands } from './hooks/useAppCommands';
 import { useKeyboard } from './hooks/useKeyboard';
 import { useFileSystem } from './hooks/useFileSystem';
+import { getCoords } from './utils';
 
 export default function App() {
   const [isCmdPaletteOpen, setIsCmdPaletteOpen] = useState(false);
   const [showFileTree, setShowFileTree] = useState(false);
   const [lastSelectionTool, setLastSelectionTool] = useState<ToolType>('rect-select');
+  const [lastShapeTool, setLastShapeTool] = useState<ToolType>('rect');
+  const [mousePos, setMousePos] = useState<Position | null>(null);
+  const [dragStartPos, setDragStartPos] = useState<Position | null>(null);
+  const [statusMessage, setStatusMessage] = useState<{ text: string, type: 'info' | 'error' | 'success' }>({ text: '', type: 'info' });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Custom Hooks
@@ -44,7 +50,12 @@ export default function App() {
   const { state, updateState, activeProjectId } = project;
   const isHome = activeProjectId === 'home';
 
-  const canvasTools = useCanvasTools(state, updateState);
+  const canvasTools = useCanvasTools(state, (newState, config) => {
+    updateState(newState, config);
+    if (config?.action) {
+      setStatusMessage({ text: config.action, type: 'info' });
+    }
+  });
   
   const handleOpenFile = () => {
     fileInputRef.current?.click();
@@ -54,14 +65,36 @@ export default function App() {
     const file = e.target.files?.[0];
     if (file) {
       project.loadProjectFromFile(file);
+      setStatusMessage({ text: `Opened ${file.name}`, type: 'success' });
     }
     if (e.target) e.target.value = ''; // Reset
   };
 
   const commands = useAppCommands({
       state: state,
-      updateState: updateState,
-      projectActions: project,
+      updateState: (newState, config) => {
+          updateState(newState, config);
+          if (config?.action) setStatusMessage({ text: config.action, type: 'info' });
+      },
+      projectActions: {
+        ...project,
+        undo: () => {
+            const histIdx = project.historyIndex;
+            if (histIdx > 0) {
+                const action = project.history[histIdx].action;
+                project.undo();
+                setStatusMessage({ text: `Undid ${action}`, type: 'info' });
+            }
+        },
+        redo: () => {
+            const histIdx = project.historyIndex;
+            if (histIdx < project.history.length - 1) {
+                const action = project.history[histIdx + 1].action;
+                project.redo();
+                setStatusMessage({ text: `Redid ${action}`, type: 'info' });
+            }
+        }
+      },
       fileSystemActions: fileSystem,
       uiActions: {
         toggleFileTree: () => setShowFileTree(prev => !prev)
@@ -70,14 +103,36 @@ export default function App() {
       onOpenProject: handleOpenFile
   });
 
-  useKeyboard(commands, state, updateState);
+  useKeyboard(commands, state, (newState) => updateState(newState), {
+      deleteSelectedLayers: project.deleteSelectedLayers,
+      deleteSelectedFrames: project.deleteSelectedFrames,
+      handleMovePixels: canvasTools.handleMovePixels
+  });
 
-  // Effect: Track Last Selection Tool
+  // Effect: Track Last Selection Tool and update status on tool change
   useEffect(() => {
     if (SELECTION_TOOLS.includes(state.tool)) {
       setLastSelectionTool(state.tool);
     }
+    if (['rect', 'filled-rect', 'ellipse', 'filled-ellipse'].includes(state.tool)) {
+      setLastShapeTool(state.tool);
+    }
+    setStatusMessage({ text: `${state.tool.charAt(0).toUpperCase() + state.tool.slice(1).replace('-select', ' Select')} tool selected`, type: 'info' });
   }, [state.tool]);
+
+  // Derived Selection Size
+  const selectionSize = useMemo(() => {
+    if (!state.selection || state.selection.size === 0) return null;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    state.selection.forEach(idx => {
+      const { x, y } = getCoords(idx, state.width);
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    });
+    return { w: maxX - minX + 1, h: maxY - minY + 1 };
+  }, [state.selection, state.width]);
 
   // UI Helpers
   const getToolIcon = (t: ToolType) => {
@@ -87,6 +142,10 @@ export default function App() {
           case 'lasso-select': return <Lasso size={20} />;
           case 'poly-lasso-select': return <Scissors size={20} />;
           case 'magic-wand': return <Wand2 size={20} />;
+          case 'rect': return <Square size={20} />;
+          case 'filled-rect': return <div className="w-5 h-5 bg-current rounded-sm"></div>;
+          case 'ellipse': return <Circle size={20} />;
+          case 'filled-ellipse': return <div className="w-5 h-5 bg-current rounded-full"></div>;
           default: return <BoxSelect size={20} />;
       }
   };
@@ -136,8 +195,8 @@ export default function App() {
         <>
           <div className="h-10 bg-secondary/50 border-b border-background flex items-center px-2 space-x-2 text-xs">
              <div className="flex items-center space-x-1 border-r border-input pr-2">
-                <ToolButton active={false} onClick={project.undo} icon={<Undo size={16} />} label="Undo (Ctrl+Z)" />
-                <ToolButton active={false} onClick={project.redo} icon={<Redo size={16} />} label="Redo (Ctrl+Y)" />
+                <ToolButton active={false} onClick={() => commands.find(c => c.id === 'edit.undo')?.perform()} icon={<Undo size={16} />} label="Undo (Ctrl+Z)" />
+                <ToolButton active={false} onClick={() => commands.find(c => c.id === 'edit.redo')?.perform()} icon={<Redo size={16} />} label="Redo (Ctrl+Y)" />
              </div>
              {/* Selection Mode Indicators */}
              {SELECTION_TOOLS.includes(state.tool) && (
@@ -150,7 +209,7 @@ export default function App() {
              
              {/* Tool Options */}
              <div className="flex items-center space-x-3 px-2 flex-1">
-                {['pencil', 'eraser'].includes(state.tool) && (
+                {['pencil', 'eraser', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse'].includes(state.tool) && (
                     <>
                         <div className="flex items-center gap-2">
                             <span className="text-muted-foreground">Size:</span>
@@ -204,7 +263,7 @@ export default function App() {
              </div>
           </div>
 
-          <div className="flex flex-1 overflow-hidden">
+          <div className="flex-1 flex overflow-hidden">
             {/* File Tree Panel */}
             {showFileTree && (
               <FileTree 
@@ -219,6 +278,48 @@ export default function App() {
             {/* Sidebar */}
             <div className="w-12 bg-card border-r border-background flex flex-col items-center py-2 space-y-2 overflow-visible z-50">
                 <ToolButton active={state.tool === 'pencil'} onClick={() => updateState({...state, tool: 'pencil'})} icon={<Pencil size={20} />} label="Pencil" />
+                <ToolButton active={state.tool === 'line'} onClick={() => updateState({...state, tool: 'line'})} icon={<Minus className="-rotate-45" size={20} />} label="Line" />
+                
+                {/* Shapes Tool Group Popover */}
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button 
+                      className={`p-1.5 rounded-sm transition-colors relative group ${['rect', 'filled-rect', 'ellipse', 'filled-ellipse'].includes(state.tool) ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-accent'}`}
+                      onClick={(e) => {
+                        if (!['rect', 'filled-rect', 'ellipse', 'filled-ellipse'].includes(state.tool)) {
+                          e.preventDefault(); 
+                          updateState({...state, tool: lastShapeTool});
+                        }
+                      }}
+                    >
+                      {getToolIcon(lastShapeTool)}
+                      <div className="absolute bottom-0 right-0 w-1.5 h-1.5 bg-gray-500 rounded-bl-[1px]"></div>
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent side="right" align="start" className="flex flex-col gap-1 w-36 p-1">
+                     <PopoverClose asChild>
+                        <button onClick={() => updateState({...state, tool: 'rect'})} className={`flex items-center gap-2 p-2 rounded hover:bg-accent text-foreground text-xs text-left w-full ${state.tool === 'rect' ? 'bg-primary text-primary-foreground' : ''}`}>
+                          <Square size={16} /> <span>Rectangle (U)</span>
+                        </button>
+                     </PopoverClose>
+                     <PopoverClose asChild>
+                        <button onClick={() => updateState({...state, tool: 'filled-rect'})} className={`flex items-center gap-2 p-2 rounded hover:bg-accent text-foreground text-xs text-left w-full ${state.tool === 'filled-rect' ? 'bg-primary text-primary-foreground' : ''}`}>
+                          <div className="w-4 h-4 bg-current rounded-sm"></div> <span>Filled Rect (U)</span>
+                        </button>
+                     </PopoverClose>
+                     <PopoverClose asChild>
+                        <button onClick={() => updateState({...state, tool: 'ellipse'})} className={`flex items-center gap-2 p-2 rounded hover:bg-accent text-foreground text-xs text-left w-full ${state.tool === 'ellipse' ? 'bg-primary text-primary-foreground' : ''}`}>
+                          <Circle size={16} /> <span>Ellipse (Shift+U)</span>
+                        </button>
+                     </PopoverClose>
+                     <PopoverClose asChild>
+                        <button onClick={() => updateState({...state, tool: 'filled-ellipse'})} className={`flex items-center gap-2 p-2 rounded hover:bg-accent text-foreground text-xs text-left w-full ${state.tool === 'filled-ellipse' ? 'bg-primary text-primary-foreground' : ''}`}>
+                          <div className="w-4 h-4 bg-current rounded-full"></div> <span>Filled Ell (Shift+U)</span>
+                        </button>
+                     </PopoverClose>
+                  </PopoverContent>
+                </Popover>
+
                 <ToolButton active={state.tool === 'eraser'} onClick={() => updateState({...state, tool: 'eraser'})} icon={<Eraser size={20} />} label="Eraser" />
                 <ToolButton active={state.tool === 'bucket'} onClick={() => updateState({...state, tool: 'bucket'})} icon={<PaintBucket size={20} />} label="Fill" />
                 <ToolButton active={state.tool === 'eyedropper'} onClick={() => updateState({...state, tool: 'eyedropper'})} icon={<Pipette size={20} />} label="Picker" />
@@ -236,16 +337,6 @@ export default function App() {
                         if (state.tool !== lastSelectionTool) {
                           e.preventDefault(); 
                           updateState({...state, tool: lastSelectionTool});
-                        }
-                      }}
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        const targetId = e.currentTarget.getAttribute('popovertarget');
-                        if (targetId) {
-                          const popover = document.getElementById(targetId);
-                          if (popover && !popover.matches(':popover-open')) {
-                             popover.showPopover();
-                          }
                         }
                       }}
                     >
@@ -289,12 +380,19 @@ export default function App() {
             <div className="flex-1 flex flex-col relative bg-[oklch(0.145_0_0)] min-w-0 overflow-hidden">
                 <Canvas 
                   state={state}
-                  onDrawStart={canvasTools.handleDrawStart}
+                  onDrawStart={(pos) => {
+                    setDragStartPos(pos);
+                    canvasTools.handleDrawStart(pos, { shift: false, ctrl: false, alt: false, meta: false });
+                  }}
                   onDraw={canvasTools.handleDraw}
-                  onDrawEnd={canvasTools.handleDrawEnd}
+                  onDrawEnd={() => {
+                    setDragStartPos(null);
+                    canvasTools.handleDrawEnd();
+                  }}
                   onSelectionUpdate={(sel) => updateState({...state, selection: sel}, { action: 'Select Area', tool: state.tool })}
                   onMovePixels={canvasTools.handleMovePixels}
                   onZoom={(z) => updateState({...state, zoom: z})}
+                  onMousePosUpdate={setMousePos}
                 />
             </div>
 
@@ -321,11 +419,13 @@ export default function App() {
               <div className="flex-1 flex flex-col min-h-0 border-t border-background">
                 <LayersPanel 
                     state={state}
-                    onSelectLayer={(id) => updateState({...state, activeLayerId: id})}
+                    onSelectLayers={(ids, active) => updateState({...state, selectedLayerIds: ids, activeLayerId: active})}
                     onUpdateLayer={project.updateLayer}
                     onAddLayer={project.addLayer}
                     onDuplicateLayer={project.duplicateLayer}
                     onDeleteLayer={project.deleteLayer}
+                    onDuplicateSelectedLayers={project.duplicateSelectedLayers}
+                    onDeleteSelectedLayers={project.deleteSelectedLayers}
                     onReorderLayers={project.reorderLayers}
                     className="flex-1 border-b border-background"
                 />
@@ -342,11 +442,13 @@ export default function App() {
 
           <Timeline 
             state={state}
-            onSelectFrame={(i) => updateState({...state, activeFrameIndex: i})}
+            onSelectFrames={(indices, active) => updateState({...state, selectedFrameIndices: indices, activeFrameIndex: active})}
             onAddFrame={project.addFrame}
             onDuplicateFrame={project.duplicateFrame}
             onDeleteFrame={project.deleteFrame}
-            onSelectLayer={(id) => updateState({...state, activeLayerId: id})}
+            onDuplicateSelectedFrames={project.duplicateSelectedFrames}
+            onDeleteSelectedFrames={project.deleteSelectedFrames}
+            onSelectLayer={(id) => updateState({...state, activeLayerId: id, selectedLayerIds: [id]})}
             onAddLayer={project.addLayer}
             onToggleLayerVisibility={(id) => updateState({...state, layers: state.layers.map(l => l.id===id?{...l, visible:!l.visible}:l)})}
             onToggleLayerLock={(id) => updateState({...state, layers: state.layers.map(l => l.id===id?{...l, locked:!l.locked}:l)})}
@@ -355,6 +457,16 @@ export default function App() {
           />
         </>
       )}
+
+      {/* Bottom Status Bar */}
+      <StatusBar 
+        state={state}
+        isHome={isHome}
+        mousePos={mousePos}
+        dragStartPos={dragStartPos}
+        statusMessage={statusMessage}
+        selectionSize={selectionSize}
+      />
     </div>
   );
 }

@@ -1,5 +1,5 @@
 
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import { Command, ProjectState, ToolType } from '../types';
 
 interface UseAppCommandsProps {
@@ -39,6 +39,9 @@ export function useAppCommands({
     openCmdPalette, 
     onOpenProject 
 }: UseAppCommandsProps) {
+    const lastRectTool = useRef<ToolType>('rect');
+    const lastEllipseTool = useRef<ToolType>('ellipse');
+
     return useMemo<Command[]>(() => [
         { 
             id: 'file.new', label: 'New Project', category: 'File', hotkey: 'Alt+T', keys: ['Alt+t'], 
@@ -128,6 +131,38 @@ export function useAppCommands({
           perform: () => updateState({ ...state, tool: 'pencil' })
         },
         { 
+          id: 'tool.line', label: 'Line Tool', category: 'Edit', hotkey: 'L', keys: ['l'],
+          perform: () => updateState({ ...state, tool: 'line' })
+        },
+        { 
+          id: 'tool.rect_toggle', label: 'Rectangle Tool', category: 'Edit', hotkey: 'U', keys: ['u'],
+          perform: () => {
+            if (state.tool === 'rect') {
+                lastRectTool.current = 'filled-rect';
+                updateState({ ...state, tool: 'filled-rect' });
+            } else if (state.tool === 'filled-rect') {
+                lastRectTool.current = 'rect';
+                updateState({ ...state, tool: 'rect' });
+            } else {
+                updateState({ ...state, tool: lastRectTool.current });
+            }
+          }
+        },
+        { 
+          id: 'tool.ellipse_toggle', label: 'Ellipse Tool', category: 'Edit', hotkey: 'Shift+U', keys: ['Shift+U'],
+          perform: () => {
+            if (state.tool === 'ellipse') {
+                lastEllipseTool.current = 'filled-ellipse';
+                updateState({ ...state, tool: 'filled-ellipse' });
+            } else if (state.tool === 'filled-ellipse') {
+                lastEllipseTool.current = 'ellipse';
+                updateState({ ...state, tool: 'ellipse' });
+            } else {
+                updateState({ ...state, tool: lastEllipseTool.current });
+            }
+          }
+        },
+        { 
           id: 'tool.eraser', label: 'Eraser Tool', category: 'Edit', hotkey: 'E', keys: ['e'],
           perform: () => updateState({ ...state, tool: 'eraser' })
         },
@@ -148,7 +183,7 @@ export function useAppCommands({
           perform: () => updateState({ ...state, tool: 'rect-select' })
         },
         { 
-          id: 'tool.select.lasso', label: 'Lasso Select', category: 'Select', hotkey: 'L', keys: ['l'],
+          id: 'tool.select.lasso', label: 'Lasso Select', category: 'Select', hotkey: 'Q', keys: ['q'],
           perform: () => updateState({ ...state, tool: 'lasso-select' })
         },
         { 

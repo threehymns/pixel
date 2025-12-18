@@ -1,8 +1,14 @@
 
-
 export interface Position {
   x: number;
   y: number;
+}
+
+export interface Modifiers {
+  shift: boolean;
+  ctrl: boolean;
+  alt: boolean;
+  meta: boolean;
 }
 
 export type PixelGrid = (string | null)[]; // Flat array of hex colors or null (transparent)
@@ -20,26 +26,6 @@ export interface Frame {
   layerData: Record<string, PixelGrid>; 
 }
 
-export interface SavedPalette {
-  id: string;
-  name: string;
-  colors: string[];
-}
-
-export type ToolType = 
-  | 'pencil' 
-  | 'eraser' 
-  | 'bucket' 
-  | 'eyedropper' 
-  | 'move'
-  | 'rect-select' 
-  | 'ellipse-select' 
-  | 'lasso-select' 
-  | 'poly-lasso-select' 
-  | 'magic-wand';
-
-export type SelectionMode = 'replace' | 'add' | 'subtract' | 'intersect';
-
 export interface ProjectState {
   id: string; // Unique Project ID
   title: string; // Project Name for Tab
@@ -48,7 +34,9 @@ export interface ProjectState {
   layers: Layer[];
   frames: Frame[];
   activeLayerId: string;
+  selectedLayerIds: string[]; // Support for multiple selected layers
   activeFrameIndex: number;
+  selectedFrameIndices: number[]; // Support for multiple selected frames
   // Current working colors
   palette: string[]; 
   // Library of available palettes
@@ -95,6 +83,31 @@ export interface ProjectInstance {
   historyIndex: number;
   lastSavedHistoryIndex: number;
 }
+
+export interface SavedPalette {
+  id: string;
+  name: string;
+  colors: string[];
+}
+
+export type ToolType = 
+  | 'pencil' 
+  | 'eraser' 
+  | 'line'
+  | 'rect'
+  | 'filled-rect'
+  | 'ellipse'
+  | 'filled-ellipse'
+  | 'bucket' 
+  | 'eyedropper' 
+  | 'move'
+  | 'rect-select' 
+  | 'ellipse-select' 
+  | 'lasso-select' 
+  | 'poly-lasso-select' 
+  | 'magic-wand';
+
+export type SelectionMode = 'replace' | 'add' | 'subtract' | 'intersect';
 
 export const CANVAS_SIZE = 32; // Default 32x32
 

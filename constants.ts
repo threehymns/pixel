@@ -56,7 +56,9 @@ export const INITIAL_STATE: ProjectState = {
     layerData: { [INITIAL_LAYER_ID]: new Array(CANVAS_SIZE * CANVAS_SIZE).fill(null) } 
   }],
   activeLayerId: INITIAL_LAYER_ID,
+  selectedLayerIds: [INITIAL_LAYER_ID],
   activeFrameIndex: 0,
+  selectedFrameIndices: [0],
   palette: ENDESGA_64_PALETTE.colors,
   paletteLibrary: [ENDESGA_64_PALETTE, DEFAULT_PALETTE, GAMEBOY_PALETTE],
   activePaletteId: ENDESGA_64_PALETTE.id,
