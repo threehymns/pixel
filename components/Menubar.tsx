@@ -18,6 +18,33 @@ export const Menubar: React.FC<MenubarProps> = ({
   onClearRecent 
 }) => {
   const categories = ['File', 'Edit', 'View', 'Select', 'Layer', 'Sprite'];
+  const [isAnyMenuOpen, setIsAnyMenuOpen] = React.useState(false);
+
+  // Track the global state of popovers to enable "hover-to-switch" behavior
+  React.useEffect(() => {
+    const handleToggle = () => {
+      const openPopover = document.querySelector('[popover]:popover-open');
+      setIsAnyMenuOpen(!!openPopover);
+    };
+    
+    // Listen for toggle events (native to the popover API) to update our open state
+    document.addEventListener('toggle', handleToggle, true);
+    return () => document.removeEventListener('toggle', handleToggle, true);
+  }, []);
+
+  const handleMouseEnter = (e: React.MouseEvent<HTMLButtonElement>) => {
+    // If a menu is already open, hovering over another menu trigger should switch to it
+    if (isAnyMenuOpen) {
+      const button = e.currentTarget;
+      const targetId = button.getAttribute('popovertarget');
+      const targetPopover = targetId ? document.getElementById(targetId) : null;
+      
+      // If the hovered button's popover isn't open yet, trigger a click to switch menus
+      if (targetPopover && !targetPopover.matches(':popover-open')) {
+        button.click();
+      }
+    }
+  };
 
   return (
     <div className="flex items-center gap-3">
@@ -26,7 +53,10 @@ export const Menubar: React.FC<MenubarProps> = ({
         
         return (
           <Popover key={category}>
-            <PopoverTrigger asChild>
+            <PopoverTrigger 
+              asChild 
+              onMouseEnter={handleMouseEnter}
+            >
               <button className="px-3 py-1 text-sm text-gray-300 hover:bg-accent rounded-sm focus:outline-none focus:bg-accent data-[state=open]:bg-accent">
                 {category}
               </button>
