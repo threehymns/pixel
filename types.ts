@@ -11,7 +11,8 @@ export interface Modifiers {
   meta: boolean;
 }
 
-export type PixelGrid = (string | null)[]; // Flat array of hex colors or null (transparent)
+export type PixelValue = string | number | null;
+export type PixelGrid = PixelValue[]; // Flat array of hex colors (RGBA), indices (Indexed), or null (transparent)
 
 export interface Layer {
   id: string;
@@ -26,11 +27,20 @@ export interface Frame {
   layerData: Record<string, PixelGrid>; 
 }
 
+export type ColorMode = 'indexed' | 'rgba';
+export type InkType = 'simple' | 'shading';
+
+export interface SymmetryConfig {
+  x: boolean; // Vertical axis (horizontal symmetry)
+  y: boolean; // Horizontal axis (vertical symmetry)
+}
+
 export interface ProjectState {
   id: string; // Unique Project ID
   title: string; // Project Name for Tab
   width: number;
   height: number;
+  colorMode: ColorMode;
   layers: Layer[];
   frames: Frame[];
   activeLayerId: string;
@@ -44,12 +54,22 @@ export interface ProjectState {
   activePaletteId: string;
   primaryColor: string;
   secondaryColor: string;
+  
+  // Symmetry
+  symmetry: SymmetryConfig;
+
+  // Ink processing
+  inkType: InkType;
+  shades: string[]; // Ordered list of colors for shading mode
+  
   tool: ToolType;
   // Tool Options
   brushSize: number;
   brushShape: 'square' | 'circle';
   fillContiguous: boolean;
   pixelPerfect: boolean;
+  ditheringEnabled: boolean; // For palette conversion and effects
+  rotationAlgorithm: 'nearest' | 'rotsprite';
   
   zoom: number;
   onionSkin: boolean;
@@ -93,6 +113,7 @@ export interface SavedPalette {
 export type ToolType = 
   | 'pencil' 
   | 'eraser' 
+  | 'smudge'
   | 'line'
   | 'rect'
   | 'filled-rect'
@@ -105,7 +126,9 @@ export type ToolType =
   | 'ellipse-select' 
   | 'lasso-select' 
   | 'poly-lasso-select' 
-  | 'magic-wand';
+  | 'magic-wand'
+  | 'blur'
+  | 'sharpen';
 
 export type SelectionMode = 'replace' | 'add' | 'subtract' | 'intersect';
 

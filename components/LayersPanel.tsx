@@ -1,7 +1,6 @@
-
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { ProjectState, Layer } from '../types';
-import { Eye, EyeOff, Lock, Unlock, Plus, Copy, Trash2, Edit2, Check, GripVertical, FilePlus } from './Icons';
+import { Eye, EyeOff, Lock, Unlock, Plus, Copy, Trash2, Check, GripVertical } from './Icons';
 
 interface LayersPanelProps {
   state: ProjectState;
@@ -35,6 +34,8 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   className
 }) => {
   const [dragState, setDragState] = useState<DragState | null>(null);
+  const dragStateRef = useRef<DragState | null>(null);
+  
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const editInputRef = useRef<HTMLInputElement>(null);
@@ -56,14 +57,12 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
     let newSelection = [...state.selectedLayerIds];
     
     if (e.shiftKey) {
-        // Range select
-        const allIds = state.layers.map(l => l.id).reverse(); // Matching UI order
+        const allIds = state.layers.map(l => l.id).reverse();
         const startIdx = allIds.indexOf(state.activeLayerId);
         const endIdx = allIds.indexOf(id);
         const range = allIds.slice(Math.min(startIdx, endIdx), Math.max(startIdx, endIdx) + 1);
         newSelection = Array.from(new Set([...newSelection, ...range]));
     } else if (e.ctrlKey || e.metaKey) {
-        // Toggle select
         if (newSelection.includes(id)) {
             if (newSelection.length > 1) {
                 newSelection = newSelection.filter(sid => sid !== id);
@@ -72,85 +71,90 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
             newSelection.push(id);
         }
     } else {
-        // Single select
         newSelection = [id];
     }
     
-    const newActiveId = id;
-    onSelectLayers(newSelection, newActiveId);
+    onSelectLayers(newSelection, id);
   };
 
-  const handleDeleteSelected = () => {
-    if (state.selectedLayerIds.length > 1) {
-      onDeleteSelectedLayers();
-    } else {
-      onDeleteLayer(state.activeLayerId);
-    }
+  const getDropTarget = (hoveredId: string, clientY: number, rect: DOMRect): DragState | null => {
+      if (!dragStateRef.current) return null;
+      const midY = rect.top + rect.height / 2;
+      const index = state.layers.findIndex(l => l.id === hoveredId);
+      if (index === -1) return null;
+
+      if (clientY < midY) {
+          return { id: dragStateRef.current.id, overId: hoveredId, position: 'before' };
+      } else {
+          if (index === 0) {
+              return { id: dragStateRef.current.id, overId: hoveredId, position: 'after' };
+          } else {
+              const layerBelow = state.layers[index - 1];
+              return { id: dragStateRef.current.id, overId: layerBelow.id, position: 'before' };
+          }
+      }
   };
 
-  const handleDuplicateSelected = () => {
-    if (state.selectedLayerIds.length > 1) {
-      onDuplicateSelectedLayers();
-    } else {
-      onDuplicateLayer(state.activeLayerId);
-    }
-  };
-
-  // Drag Handlers
   const handleDragStart = (e: React.DragEvent, id: string) => {
     e.dataTransfer.setData('type', 'layer-panel');
     e.dataTransfer.setData('id', id);
-    setDragState({ id, overId: null, position: 'after' });
+    const newState: DragState = { id, overId: null, position: 'after' };
+    setDragState(newState);
+    dragStateRef.current = newState;
   };
 
   const handleDragOver = (e: React.DragEvent, id: string) => {
     e.preventDefault();
-    if (dragState) {
+    if (dragStateRef.current) {
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      const midY = rect.top + rect.height / 2;
-      const position = e.clientY < midY ? 'before' : 'after';
-      
-      if (dragState.overId !== id || dragState.position !== position) {
-        setDragState({ ...dragState, overId: id, position });
+      const newState = getDropTarget(id, e.clientY, rect);
+      if (newState && (dragStateRef.current.overId !== newState.overId || dragStateRef.current.position !== newState.position)) {
+        setDragState(newState);
+        dragStateRef.current = newState;
       }
     }
   };
 
   const handleDrop = (e: React.DragEvent, targetId: string) => {
     e.preventDefault();
-    if (dragState && dragState.id !== targetId) {
-        onReorderLayers(dragState.id, targetId, dragState.position);
+    if (dragStateRef.current && dragStateRef.current.overId && dragStateRef.current.id !== dragStateRef.current.overId) {
+        const logicalPosition = dragStateRef.current.position === 'before' ? 'after' : 'before';
+        onReorderLayers(dragStateRef.current.id, dragStateRef.current.overId, logicalPosition);
     }
     setDragState(null);
+    dragStateRef.current = null;
   };
 
   const isMultiLayer = state.selectedLayerIds.length > 1;
 
   return (
-    <div className={`flex flex-col bg-card select-none ${className}`}>
-      <div className="bg-secondary px-2 py-1 text-xs font-bold text-gray-300 flex justify-between items-center border-b border-background">
-        <span>Layers</span>
+    <div className={`flex flex-col bg-background select-none ${className}`}>
+      {/* Refined Compact Header */}
+      <div className="bg-[#2a2a2a] px-3 h-8 flex justify-between items-center border-b border-background shrink-0">
+        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Layers</span>
         <div className="flex items-center gap-1">
             <button 
-                onClick={handleDuplicateSelected} 
-                className={`p-1 hover:text-white rounded ${isMultiLayer ? 'text-primary' : 'text-muted-foreground'}`} 
-                title={isMultiLayer ? `Duplicate ${state.selectedLayerIds.length} Layers` : "Duplicate Layer"}
+                onClick={() => isMultiLayer ? onDeleteSelectedLayers() : onDeleteLayer(state.activeLayerId)} 
+                className="p-1 text-gray-500 hover:text-red-400 transition-colors"
+                title="Delete Layer"
             >
-                <Copy size={12} />
+                <Trash2 size={13} />
             </button>
             <button 
-                onClick={handleDeleteSelected} 
-                className={`p-1 hover:text-white rounded ${isMultiLayer ? 'text-destructive font-bold' : 'text-muted-foreground'}`} 
-                title={isMultiLayer ? `Delete ${state.selectedLayerIds.length} Layers` : "Delete Layer"}
+                onClick={() => isMultiLayer ? onDuplicateSelectedLayers() : onDuplicateLayer(state.activeLayerId)} 
+                className="p-1 text-gray-500 hover:text-gray-300 transition-colors"
+                title="Duplicate Layer"
             >
-                <Trash2 size={12} />
+                <Copy size={13} />
             </button>
-            <div className="w-[1px] h-3 bg-border mx-1" />
-            <button onClick={onAddLayer} className="p-1 hover:text-white rounded" title="New Layer"><Plus size={12} /></button>
+            <button onClick={onAddLayer} className="p-1 text-primary hover:text-primary/80 transition-colors" title="Add Layer">
+              <Plus size={14} />
+            </button>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto custom-scrollbar">
+      {/* Compact List Container */}
+      <div className="flex-1 overflow-y-auto custom-scrollbar p-1.5 space-y-0.5">
         {state.layers.slice().reverse().map((layer) => {
             const isDragging = dragState?.id === layer.id;
             const isOver = dragState?.overId === layer.id;
@@ -164,84 +168,61 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                     onDragStart={(e) => handleDragStart(e, layer.id)}
                     onDragOver={(e) => handleDragOver(e, layer.id)}
                     onDrop={(e) => handleDrop(e, layer.id)}
-                    onDragEnd={() => setDragState(null)}
+                    onDragEnd={() => { setDragState(null); dragStateRef.current = null; }}
                     onClick={(e) => handleLayerClick(e, layer.id)}
                     onDoubleClick={() => startEditing(layer)}
                     className={`
-                        flex items-center gap-2 px-2 py-1 border-b border-border group relative
-                        ${isActive ? 'bg-primary/20 ring-1 ring-inset ring-primary z-10' : ''}
-                        ${isSelected && !isActive ? 'bg-accent/40' : ''}
-                        ${!isSelected && !isActive ? 'hover:bg-muted/50' : ''}
-                        ${isDragging ? 'opacity-50' : ''}
+                        flex items-center h-8 gap-2 px-2 rounded-[4px] relative border transition-all cursor-default
+                        ${isActive ? 'bg-[#1a1a1a] border-primary/40' : isSelected ? 'bg-secondary/40 border-border/50' : 'bg-transparent border-transparent hover:bg-secondary/20'}
+                        ${isDragging ? 'opacity-30' : ''}
                     `}
                 >
                     {/* Drop Indicators */}
-                    {isOver && dragState.position === 'before' && (
+                    {isOver && dragState?.position === 'before' && (
                         <div className="absolute top-0 left-0 w-full h-[2px] bg-primary z-50 pointer-events-none"></div>
                     )}
-                    {isOver && dragState.position === 'after' && (
+                    {isOver && dragState?.position === 'after' && (
                         <div className="absolute bottom-0 left-0 w-full h-[2px] bg-primary z-50 pointer-events-none"></div>
                     )}
 
-                    <div className="cursor-grab text-muted-foreground hover:text-foreground">
+                    {/* Dragger */}
+                    <div className="cursor-grab text-gray-600 hover:text-gray-400">
                         <GripVertical size={12} />
                     </div>
 
+                    {/* Vis Toggle */}
                     <button 
                         onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { visible: !layer.visible }); }}
-                        className={`p-1 rounded hover:bg-black/20 ${!layer.visible ? 'text-muted-foreground' : 'text-foreground'}`}
-                        title="Toggle Visibility"
+                        className={`p-1 transition-colors ${!layer.visible ? 'text-gray-700' : isActive ? 'text-primary' : 'text-gray-400'}`}
                     >
                         {layer.visible ? <Eye size={14} /> : <EyeOff size={14} />}
                     </button>
                     
+                    {/* Lock Toggle */}
                     <button 
                         onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { locked: !layer.locked }); }}
-                        className={`p-1 rounded hover:bg-black/20 ${!layer.locked ? 'text-muted-foreground opacity-0 group-hover:opacity-100' : 'text-foreground'}`}
-                        title="Toggle Lock"
+                        className={`p-1 transition-colors ${!layer.locked ? 'text-gray-700 hover:text-gray-500' : 'text-orange-500/80'}`}
                     >
                         {layer.locked ? <Lock size={12} /> : <Unlock size={12} />}
                     </button>
 
                     <div className="flex-1 min-w-0">
                         {editingId === layer.id ? (
-                            <div className="flex items-center gap-1">
-                                <input
-                                    ref={editInputRef}
-                                    value={editName}
-                                    onChange={(e) => setEditName(e.target.value)}
-                                    onBlur={saveEditing}
-                                    onKeyDown={(e) => {
-                                        if (e.key === 'Enter') saveEditing();
-                                        if (e.key === 'Escape') setEditingId(null);
-                                    }}
-                                    className="w-full bg-input text-foreground px-1 py-0.5 text-xs rounded border border-ring outline-none"
-                                    onClick={(e) => e.stopPropagation()}
-                                />
-                                <button onMouseDown={saveEditing} className="text-primary hover:text-white"><Check size={12} /></button>
-                            </div>
+                            <input
+                                ref={editInputRef}
+                                value={editName}
+                                autoFocus
+                                onChange={(e) => setEditName(e.target.value)}
+                                onBlur={saveEditing}
+                                onKeyDown={(e) => { if (e.key === 'Enter') saveEditing(); if (e.key === 'Escape') setEditingId(null); }}
+                                className="w-full bg-input text-foreground px-1 py-0.5 text-[11px] rounded outline-none ring-1 ring-primary"
+                                onClick={(e) => e.stopPropagation()}
+                            />
                         ) : (
-                            <div className={`truncate text-xs ${isActive ? 'font-medium text-foreground' : 'text-muted-foreground'}`}>
+                            <div className={`truncate text-[11px] select-none ${isActive ? 'text-gray-100 font-medium' : 'text-gray-400'}`}>
                                 {layer.name}
                             </div>
                         )}
-                    </div>
-                    
-                    <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity gap-1">
-                        <button 
-                             onClick={(e) => { e.stopPropagation(); onDuplicateLayer(layer.id); }}
-                             className="p-1 hover:text-white hover:bg-black/20 rounded"
-                             title="Duplicate"
-                        >
-                            <Copy size={12} />
-                        </button>
-                         <button 
-                             onClick={(e) => { e.stopPropagation(); onDeleteLayer(layer.id); }}
-                             className="p-1 hover:text-destructive hover:bg-black/20 rounded"
-                             title="Delete"
-                        >
-                            <Trash2 size={12} />
-                        </button>
                     </div>
                 </div>
             );

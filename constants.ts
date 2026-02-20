@@ -1,5 +1,4 @@
 
-
 import { ProjectState, SavedPalette, ToolType, CANVAS_SIZE } from './types';
 
 export const INITIAL_LAYER_ID = 'layer-1';
@@ -50,6 +49,7 @@ export const INITIAL_STATE: ProjectState = {
   title: 'Untitled-1',
   width: CANVAS_SIZE,
   height: CANVAS_SIZE,
+  colorMode: 'indexed',
   layers: [{ id: INITIAL_LAYER_ID, name: 'Layer 1', visible: true, locked: false }],
   frames: [{ 
     id: INITIAL_FRAME_ID, 
@@ -64,11 +64,19 @@ export const INITIAL_STATE: ProjectState = {
   activePaletteId: ENDESGA_64_PALETTE.id,
   primaryColor: '#ffffff',
   secondaryColor: '#000000',
+  
+  symmetry: { x: false, y: false },
+
+  inkType: 'simple',
+  shades: ['#000000', '#5d5d5d', '#b4b4b4', '#ffffff'], // Default ramp
+
   tool: 'pencil',
   brushSize: 1,
   brushShape: 'circle',
   fillContiguous: true,
   pixelPerfect: false,
+  ditheringEnabled: false,
+  rotationAlgorithm: 'nearest',
   zoom: 16,
   onionSkin: false,
   showGrid: false,

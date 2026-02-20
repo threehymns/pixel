@@ -4,7 +4,8 @@ import {
   Pencil, Eraser, PaintBucket, MousePointer2, 
   Layers, Plus, Trash2, Copy, FilePlus, 
   Square, GripVertical, File, ArrowRightLeft,
-  BoxSelect, Lasso, Wand2, Scissors, Circle, Edit2
+  BoxSelect, Lasso, Wand2, Scissors, Circle, Edit2,
+  Hand
 } from './Icons';
 import { ProjectState, HistoryEntry, ToolType } from '../types';
 
@@ -30,6 +31,7 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
               case 'eraser': return <Eraser size={14} />;
               case 'bucket': return <PaintBucket size={14} />;
               case 'move': return <MousePointer2 size={14} />;
+              case 'smudge': return <Hand size={14} />;
               case 'rect-select': return <BoxSelect size={14} />;
               case 'ellipse-select': return <Circle size={14} />;
               case 'lasso-select': return <Lasso size={14} />;

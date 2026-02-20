@@ -1,3 +1,4 @@
+
 import React, { createContext, useContext, useId } from 'react';
 
 const PopoverContext = createContext<{
@@ -31,30 +32,42 @@ export const PopoverTrigger = React.forwardRef<HTMLButtonElement, PopoverTrigger
   ({ children, className, asChild = false, style, onClick, ...props }, ref) => {
     const { id, anchorName } = usePopover();
 
-    const triggerStyle = {
-        // @ts-ignore
-        anchorName: anchorName,
-        ...style
-    };
+    if (asChild && React.isValidElement(children)) {
+      const child = children as React.ReactElement<any>;
+      const existingAnchorName = (child.props.style?.anchorName) || (child.props.style?.['anchor-name']) || (style as any)?.anchorName;
+      const mergedAnchorName = existingAnchorName ? `${existingAnchorName}, ${anchorName}` : anchorName;
 
-    const triggerProps = {
+      return React.cloneElement(child, {
         ...props,
         ref,
-        className,
-        style: triggerStyle,
-        // @ts-ignore
-        popovertarget: id,
-        onClick
-    };
-
-    if (asChild && React.isValidElement(children)) {
-        return React.cloneElement(children as React.ReactElement, triggerProps);
+        className: `${child.props.className || ''} ${className || ''}`.trim(),
+        style: {
+          ...child.props.style,
+          ...style,
+          anchorName: mergedAnchorName,
+          'anchor-name': mergedAnchorName,
+        } as any,
+        popoverTarget: id,
+        onClick: (e: React.MouseEvent<HTMLButtonElement>) => {
+          child.props.onClick?.(e);
+          onClick?.(e);
+        }
+      });
     }
 
+    const mergedAnchorName = (style as any)?.anchorName ? `${(style as any).anchorName}, ${anchorName}` : anchorName;
+
     return (
-        <button {...triggerProps}>
-            {children}
-        </button>
+      <button 
+        {...props} 
+        ref={ref} 
+        className={className}
+        style={{ ...style, anchorName: mergedAnchorName, 'anchor-name': mergedAnchorName } as any}
+        popoverTarget={id}
+        onClick={onClick}
+      >
+        {children}
+      </button>
     );
   }
 );
@@ -70,62 +83,49 @@ export const PopoverContent = React.forwardRef<HTMLDivElement, PopoverContentPro
   ({ children, className, side = 'bottom', align = 'center', sideOffset = 4, style, ...props }, ref) => {
     const { id, anchorName } = usePopover();
 
-    let baseStyle: React.CSSProperties = {
-        position: 'absolute',
-        // @ts-ignore
+    let baseStyle: any = {
+        position: 'fixed',
         positionAnchor: anchorName,
+        'position-anchor': anchorName,
         margin: 0,
         inset: 'auto',
+        width: 'max-content',
+        height: 'max-content',
+        maxWidth: '100vw',
+        maxHeight: '100vh',
+        overflow: 'visible',
     };
 
     const offset = `${sideOffset}px`;
 
-    // Side logic
     if (side === 'bottom') {
-        // @ts-ignore
         baseStyle.top = `calc(anchor(bottom) + ${offset})`;
-        // @ts-ignore
-        if (align === 'start') baseStyle.left = 'anchor(left)';
-        // @ts-ignore
+        if (align === 'start') { baseStyle.left = 'anchor(left)'; }
         else if (align === 'center') { baseStyle.left = 'anchor(center)'; baseStyle.translate = '-50%'; }
-        // @ts-ignore
-        else if (align === 'end') baseStyle.right = 'anchor(right)';
+        else if (align === 'end') { baseStyle.right = 'anchor(right)'; }
     } else if (side === 'top') {
-        // @ts-ignore
         baseStyle.bottom = `calc(anchor(top) + ${offset})`;
-        // @ts-ignore
-        if (align === 'start') baseStyle.left = 'anchor(left)';
-        // @ts-ignore
+        if (align === 'start') { baseStyle.left = 'anchor(left)'; }
         else if (align === 'center') { baseStyle.left = 'anchor(center)'; baseStyle.translate = '-50%'; }
-        // @ts-ignore
-        else if (align === 'end') baseStyle.right = 'anchor(right)';
+        else if (align === 'end') { baseStyle.right = 'anchor(right)'; }
     } else if (side === 'right') {
-        // @ts-ignore
         baseStyle.left = `calc(anchor(right) + ${offset})`;
-        // @ts-ignore
-        if (align === 'start') baseStyle.top = 'anchor(top)';
-        // @ts-ignore
+        if (align === 'start') { baseStyle.top = 'anchor(top)'; }
         else if (align === 'center') { baseStyle.top = 'anchor(center)'; baseStyle.translate = '0 -50%'; }
-        // @ts-ignore
-        else if (align === 'end') baseStyle.bottom = 'anchor(bottom)';
+        else if (align === 'end') { baseStyle.bottom = 'anchor(bottom)'; }
     } else if (side === 'left') {
-        // @ts-ignore
         baseStyle.right = `calc(anchor(left) + ${offset})`;
-        // @ts-ignore
-        if (align === 'start') baseStyle.top = 'anchor(top)';
-        // @ts-ignore
+        if (align === 'start') { baseStyle.top = 'anchor(top)'; }
         else if (align === 'center') { baseStyle.top = 'anchor(center)'; baseStyle.translate = '0 -50%'; }
-        // @ts-ignore
-        else if (align === 'end') baseStyle.bottom = 'anchor(bottom)';
+        else if (align === 'end') { baseStyle.bottom = 'anchor(bottom)'; }
     }
 
     return (
       <div
         ref={ref}
         id={id}
-        // @ts-ignore
         popover="auto"
-        className={`z-50 min-w-[8rem] bg-popover text-popover-foreground border border-border rounded shadow-xl outline-none p-1 ${className} [&:not(:popover-open)]:hidden`}
+        className={`z-[99] min-w-[8rem] bg-popover text-popover-foreground border border-border rounded shadow-xl outline-none p-1 animate-in fade-in zoom-in-95 duration-100 ${className || ''} [&:not(:popover-open)]:hidden`}
         style={{ ...baseStyle, ...style }}
         {...props}
       >
@@ -142,10 +142,9 @@ export const PopoverClose = React.forwardRef<HTMLButtonElement, React.ButtonHTML
         const combinedProps = {
             ...props,
             ref,
-            // @ts-ignore
-            popovertarget: id,
-            // @ts-ignore
-            popovertargetaction: "hide"
+            popoverTarget: id,
+            // Fix: Cast the string literal to satisfy the exact union type required by modern React types for popoverTargetAction.
+            popoverTargetAction: "hide" as "hide"
         };
 
         if (asChild && React.isValidElement(children)) {

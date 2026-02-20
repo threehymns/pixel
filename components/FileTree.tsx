@@ -1,7 +1,6 @@
-
 import React, { useState, useEffect } from 'react';
 import { FileSystemDirectoryHandle, FileSystemFileHandle, FileSystemHandle } from '../types';
-import { Folder, FolderOpen, File, Image, ChevronRight, ChevronDown, GripVertical } from './Icons';
+import { Folder, FolderOpen, File, Image, ChevronRight, ChevronDown } from './Icons';
 
 interface FileTreeProps {
   rootHandle: FileSystemDirectoryHandle | null;
@@ -106,13 +105,12 @@ const TreeNode: React.FC<TreeNodeProps> = ({ handle, depth, onFileOpen }) => {
   );
 };
 
-export const FileTree: React.FC<FileTreeProps> = ({ rootHandle, onFileOpen, width, onResizeStart, onOpenFolder }) => {
+export const FileTree: React.FC<FileTreeProps> = ({ rootHandle, onFileOpen, onOpenFolder }) => {
   return (
     <div 
-        className="flex flex-col bg-card border-r border-background h-full relative"
-        style={{ width: width, minWidth: 150, maxWidth: 400 }}
+        className="flex flex-col bg-card border-r border-background h-full w-full relative"
     >
-        <div className="h-8 bg-secondary border-b border-background flex items-center justify-between px-2">
+        <div className="h-8 bg-secondary border-b border-background flex items-center justify-between px-2 flex-shrink-0">
             <span className="text-xs font-bold text-gray-300">Files</span>
             {!rootHandle && (
                 <button 
@@ -138,16 +136,6 @@ export const FileTree: React.FC<FileTreeProps> = ({ rootHandle, onFileOpen, widt
                     </button>
                 </div>
             )}
-        </div>
-
-        {/* Resize Handle */}
-        <div 
-            className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary group z-50"
-            onMouseDown={onResizeStart}
-        >
-            <div className="absolute top-1/2 -translate-y-1/2 -right-1 opacity-0 group-hover:opacity-100 text-muted-foreground">
-            <GripVertical size={12} />
-            </div>
         </div>
     </div>
   );

@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
-import { ProjectState, Layer } from '../types';
-import { Layers, Eye, EyeOff, Lock, Unlock, Plus, Copy, Trash2, Square, FilePlus, GripVertical } from 'lucide-react';
+import { ProjectState } from '../types';
+import { Eye, EyeOff, Lock, Unlock, Plus, Copy, Trash2, GripVertical, FilePlus, Sparkles } from './Icons';
 
 interface TimelineProps {
   state: ProjectState;
@@ -11,6 +11,7 @@ interface TimelineProps {
   onDeleteFrame: () => void;
   onDuplicateSelectedFrames: () => void;
   onDeleteSelectedFrames: () => void;
+  onTweenFrames: () => void;
   onSelectLayer: (id: string) => void;
   onToggleLayerVisibility: (id: string) => void;
   onToggleLayerLock: (id: string) => void;
@@ -21,7 +22,7 @@ interface TimelineProps {
 
 interface DragState {
   type: 'layer' | 'frame';
-  id: string; // Layer ID or Frame Index (as string)
+  id: string; 
   overId: string | null;
   position: 'before' | 'after';
 }
@@ -34,6 +35,7 @@ export const Timeline: React.FC<TimelineProps> = ({
   onDeleteFrame,
   onDuplicateSelectedFrames,
   onDeleteSelectedFrames,
+  onTweenFrames,
   onSelectLayer,
   onToggleLayerVisibility,
   onToggleLayerLock,
@@ -69,23 +71,6 @@ export const Timeline: React.FC<TimelineProps> = ({
       onSelectFrames(newSelection, index);
   };
 
-  const handleDuplicate = () => {
-    if (state.selectedFrameIndices.length > 1) {
-      onDuplicateSelectedFrames();
-    } else {
-      onDuplicateFrame();
-    }
-  };
-
-  const handleDelete = () => {
-    if (state.selectedFrameIndices.length > 1) {
-      onDeleteSelectedFrames();
-    } else {
-      onDeleteFrame();
-    }
-  };
-
-  // --- Layer Drag Handlers ---
   const handleLayerDragStart = (e: React.DragEvent, id: string) => {
     e.dataTransfer.setData('type', 'layer');
     e.dataTransfer.setData('id', id);
@@ -93,13 +78,11 @@ export const Timeline: React.FC<TimelineProps> = ({
   };
 
   const handleLayerDragOver = (e: React.DragEvent, id: string) => {
-    e.preventDefault(); // Allow drop
+    e.preventDefault(); 
     if (dragState?.type !== 'layer') return;
-
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const midY = rect.top + rect.height / 2;
     const position = e.clientY < midY ? 'before' : 'after';
-
     if (dragState.overId !== id || dragState.position !== position) {
       setDragState({ ...dragState, overId: id, position });
     }
@@ -113,7 +96,6 @@ export const Timeline: React.FC<TimelineProps> = ({
     setDragState(null);
   };
 
-  // --- Frame Drag Handlers ---
   const handleFrameDragStart = (e: React.DragEvent, index: number) => {
     e.dataTransfer.setData('type', 'frame');
     e.dataTransfer.setData('index', index.toString());
@@ -123,11 +105,9 @@ export const Timeline: React.FC<TimelineProps> = ({
   const handleFrameDragOver = (e: React.DragEvent, index: number) => {
     e.preventDefault();
     if (dragState?.type !== 'frame') return;
-
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const midX = rect.left + rect.width / 2;
     const position = e.clientX < midX ? 'before' : 'after';
-    
     if (dragState.overId !== index.toString() || dragState.position !== position) {
       setDragState({ ...dragState, overId: index.toString(), position });
     }
@@ -141,7 +121,6 @@ export const Timeline: React.FC<TimelineProps> = ({
            let insertIndex = targetIndex;
            if (dragState.position === 'after') insertIndex = targetIndex + 1;
            if (fromIndex < insertIndex) insertIndex--;
-
            onReorderFrames(fromIndex, insertIndex);
        }
     }
@@ -149,34 +128,32 @@ export const Timeline: React.FC<TimelineProps> = ({
   };
 
   const isMultiFrame = state.selectedFrameIndices.length > 1;
+  const canTween = state.selectedFrameIndices.length >= 3;
 
   return (
-    <div className="h-48 bg-card border-t border-background flex flex-col text-sm select-none">
+    <div className="h-full bg-card border-t border-background flex flex-col text-sm select-none">
       {/* Timeline Controls */}
-      <div className="h-8 bg-secondary border-b border-background flex items-center px-2 gap-2">
-         <span className="font-bold text-gray-300 mr-2 text-[10px] uppercase tracking-wider">Timeline</span>
-         <button onClick={onAddFrame} className="p-1 hover:bg-input rounded" title="New Frame"><Plus size={14} /></button>
+      <div className="h-8 bg-[#2a2a2a] border-b border-background flex items-center px-3 gap-1 shrink-0">
+         <span className="font-bold text-gray-500 mr-2 text-[10px] uppercase tracking-wider hidden sm:block">Timeline</span>
+         <button onClick={onAddFrame} className="p-1 hover:text-white text-gray-400" title="New Frame"><Plus size={14} /></button>
+         <button onClick={() => isMultiFrame ? onDuplicateSelectedFrames() : onDuplicateFrame()} className={`p-1 hover:text-white ${isMultiFrame ? 'text-primary' : 'text-gray-400'}`} title="Duplicate Frame"><Copy size={14} /></button>
+         <button onClick={() => isMultiFrame ? onDeleteSelectedFrames() : onDeleteFrame()} className={`p-1 hover:text-red-400 ${isMultiFrame ? 'text-red-400 font-bold' : 'text-gray-500'}`} title="Delete Frame"><Trash2 size={14} /></button>
+         <div className="h-3 w-[1px] bg-border mx-1"></div>
          <button 
-            onClick={handleDuplicate} 
-            className={`p-1 hover:bg-input rounded ${isMultiFrame ? 'text-primary' : ''}`} 
-            title={isMultiFrame ? `Duplicate ${state.selectedFrameIndices.length} Frames` : "Duplicate Frame"}
+           onClick={onTweenFrames} 
+           disabled={!canTween}
+           className={`p-1 transition-all ${canTween ? 'text-primary hover:text-primary-foreground hover:bg-primary rounded' : 'text-gray-600 opacity-40 cursor-not-allowed'}`} 
+           title="Interpolate (Tween) Between Selection"
          >
-            <Copy size={14} />
+           <Sparkles size={14} />
          </button>
-         <button 
-            onClick={handleDelete} 
-            className={`p-1 hover:bg-input rounded ${isMultiFrame ? 'text-destructive font-bold' : 'text-destructive/70'}`} 
-            title={isMultiFrame ? `Delete ${state.selectedFrameIndices.length} Frames` : "Delete Frame"}
-         >
-            <Trash2 size={14} />
-         </button>
-         <div className="h-4 w-[1px] bg-input mx-2"></div>
-         <button onClick={onAddLayer} className="p-1 hover:bg-input rounded" title="New Layer"><FilePlus size={14} /></button>
+         <div className="h-3 w-[1px] bg-border mx-1"></div>
+         <button onClick={onAddLayer} className="p-1 hover:text-white text-gray-400" title="New Layer"><FilePlus size={14} /></button>
       </div>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Layers List (Left) */}
-        <div className="w-48 bg-muted border-r border-background flex flex-col overflow-y-auto">
+        {/* Compact Layers Column (Left) */}
+        <div className="w-40 pt-8 bg-muted border-r border-background flex flex-col overflow-y-auto overflow-x-hidden">
           {state.layers.slice().reverse().map((layer) => {
              const isDragging = dragState?.type === 'layer' && dragState.id === layer.id;
              const isOver = dragState?.type === 'layer' && dragState.overId === layer.id;
@@ -191,46 +168,33 @@ export const Timeline: React.FC<TimelineProps> = ({
                   onDragOver={(e) => handleLayerDragOver(e, layer.id)}
                   onDrop={(e) => handleLayerDrop(e, layer.id)}
                   onDragEnd={() => setDragState(null)}
-                  className={`h-8 flex items-center px-2 gap-2 border-b border-border cursor-pointer group relative
-                    ${isActive ? 'bg-primary text-primary-foreground font-bold' : isSelected ? 'bg-accent/30 text-foreground' : 'text-muted-foreground hover:bg-secondary'}
-                    ${isDragging ? 'opacity-50' : ''}
+                  className={`h-8 flex items-center px-1.5 gap-1 border-b border-background cursor-pointer group relative
+                    ${isActive ? 'bg-[#1a1a1a] border-primary/20' : isSelected ? 'bg-secondary/20' : 'text-gray-500 hover:bg-secondary/10'}
+                    ${isDragging ? 'opacity-30' : ''}
                   `}
                   onClick={() => onSelectLayer(layer.id)}
                 >
-                  {/* Drop Indicators */}
-                  {isOver && dragState.position === 'before' && (
-                    <div className="absolute top-0 left-0 w-full h-[2px] bg-primary z-50 pointer-events-none"></div>
-                  )}
-                  {isOver && dragState.position === 'after' && (
-                    <div className="absolute bottom-0 left-0 w-full h-[2px] bg-primary z-50 pointer-events-none"></div>
-                  )}
+                  {isOver && dragState.position === 'before' && <div className="absolute top-0 left-0 w-full h-[1px] bg-primary z-50 pointer-events-none" />}
+                  {isOver && dragState.position === 'after' && <div className="absolute bottom-0 left-0 w-full h-[1px] bg-primary z-50 pointer-events-none" />}
 
-                  <div className="cursor-grab text-gray-500 hover:text-gray-300">
-                     <GripVertical size={12} />
-                  </div>
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); onToggleLayerVisibility(layer.id); }}
-                    className={`p-1 rounded hover:bg-black/20 ${!layer.visible && 'text-gray-500'}`}
-                  >
-                    {layer.visible ? <Eye size={14} /> : <EyeOff size={14} />}
+                  <div className="cursor-grab text-gray-700 hover:text-gray-500 shrink-0"><GripVertical size={12} /></div>
+                  <button onClick={(e) => { e.stopPropagation(); onToggleLayerVisibility(layer.id); }} className={`p-1 shrink-0 ${!layer.visible ? 'text-gray-800' : isActive ? 'text-primary' : 'text-gray-500'}`}>
+                    {layer.visible ? <Eye size={13} /> : <EyeOff size={13} />}
                   </button>
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); onToggleLayerLock(layer.id); }}
-                    className={`p-1 rounded hover:bg-black/20 ${!layer.locked && 'opacity-0 group-hover:opacity-50'}`}
-                  >
-                    {layer.locked ? <Lock size={12} /> : <Unlock size={12} />}
+                  <button onClick={(e) => { e.stopPropagation(); onToggleLayerLock(layer.id); }} className={`p-1 shrink-0 ${!layer.locked ? 'text-gray-800' : 'text-orange-500/50'}`}>
+                    {layer.locked ? <Lock size={11} /> : <Unlock size={11} />}
                   </button>
-                  <span className="truncate flex-1">{layer.name}</span>
+                  <span className={`truncate flex-1 text-[11px] ${isActive ? 'text-gray-100 font-medium' : 'text-gray-400'}`}>{layer.name}</span>
                 </div>
             );
           })}
         </div>
 
         {/* Frames Grid (Right) */}
-        <div className="flex-1 overflow-x-auto bg-muted relative">
+        <div className="flex-1 overflow-x-auto bg-[#171717] relative custom-scrollbar">
            <div className="flex flex-col min-w-max">
              {/* Header Row for Frame Numbers */}
-             <div className="flex h-6 border-b border-secondary">
+             <div className="flex h-8 border-b border-background bg-muted">
                 {state.frames.map((_, idx) => {
                   const isDragging = dragState?.type === 'frame' && dragState.id === idx.toString();
                   const isOver = dragState?.type === 'frame' && dragState.overId === idx.toString();
@@ -246,18 +210,13 @@ export const Timeline: React.FC<TimelineProps> = ({
                         onDrop={(e) => handleFrameDrop(e, idx)}
                         onDragEnd={() => setDragState(null)}
                         onClick={(e) => handleFrameClick(e, idx)}
-                        className={`w-8 border-r border-secondary flex items-center justify-center text-[10px] cursor-pointer hover:bg-secondary relative
-                        ${isActive ? 'bg-primary text-primary-foreground font-bold' : isSelected ? 'bg-accent/40 text-foreground' : 'text-muted-foreground'}
-                        ${isDragging ? 'opacity-50' : ''}
+                        className={`min-w-[40px] w-10 border-r border-background flex items-center justify-center text-[10px] cursor-pointer hover:bg-secondary/30 relative
+                        ${isActive ? 'bg-[#1a1a1a] text-primary font-bold shadow-[inset_0_-2px_0_var(--primary)]' : isSelected ? 'bg-secondary/40 text-foreground' : 'text-gray-600'}
+                        ${isDragging ? 'opacity-30' : ''}
                         `}
                     >
-                        {/* Drop Indicators */}
-                        {isOver && dragState.position === 'before' && (
-                            <div className="absolute top-0 left-0 h-full w-[2px] bg-primary z-50 pointer-events-none"></div>
-                        )}
-                        {isOver && dragState.position === 'after' && (
-                            <div className="absolute top-0 right-0 h-full w-[2px] bg-primary z-50 pointer-events-none"></div>
-                        )}
+                        {isOver && dragState.position === 'before' && <div className="absolute top-0 left-0 h-full w-[2px] bg-primary z-50 pointer-events-none" />}
+                        {isOver && dragState.position === 'after' && <div className="absolute top-0 right-0 h-full w-[2px] bg-primary z-50 pointer-events-none" />}
                         {idx + 1}
                     </div>
                   );
@@ -267,7 +226,7 @@ export const Timeline: React.FC<TimelineProps> = ({
              {/* Frame Cells */}
              <div className="flex flex-col">
                 {state.layers.slice().reverse().map((layer) => (
-                  <div key={layer.id} className="flex h-8 border-b border-muted">
+                  <div key={layer.id} className="flex h-8 border-b border-background">
                     {state.frames.map((frame, frameIdx) => {
                       const hasContent = frame.layerData[layer.id]?.some(p => p !== null);
                       const isActive = state.activeFrameIndex === frameIdx && state.activeLayerId === layer.id;
@@ -278,21 +237,15 @@ export const Timeline: React.FC<TimelineProps> = ({
                         <div 
                           key={`${layer.id}-${frame.id}`}
                           onClick={(e) => {
-                            if (e.shiftKey || e.ctrlKey || e.metaKey) {
-                                handleFrameClick(e, frameIdx);
-                            } else {
-                                onSelectFrames([frameIdx], frameIdx);
-                                onSelectLayer(layer.id);
-                            }
+                            if (e.shiftKey || e.ctrlKey || e.metaKey) handleFrameClick(e, frameIdx);
+                            else { onSelectFrames([frameIdx], frameIdx); onSelectLayer(layer.id); }
                           }}
-                          className={`w-8 border-r border-muted flex items-center justify-center cursor-pointer relative
-                             ${state.activeFrameIndex === frameIdx ? 'bg-background/40' : ''}
-                             ${isActive ? 'bg-primary/20 ring-1 ring-inset ring-primary z-20' : ''}
-                             ${(isFrameSelected || isLayerSelected) && !isActive ? 'bg-white/[0.03]' : ''}
+                          className={`min-w-[40px] w-10 border-r border-background flex items-center justify-center cursor-pointer relative transition-colors
+                             ${isActive ? 'bg-primary/10' : (isFrameSelected || isLayerSelected) ? 'bg-secondary/10' : 'hover:bg-white/[0.02]'}
                           `}
                         >
                           {hasContent && (
-                            <div className={`w-3 h-3 rounded-full ${isActive ? 'bg-primary' : isFrameSelected || isLayerSelected ? 'bg-gray-400' : 'bg-gray-600'}`}></div>
+                            <div className={`w-2.5 h-2.5 rounded-full transition-transform ${isActive ? 'bg-primary scale-110 shadow-[0_0_8px_rgba(var(--primary),0.5)]' : isFrameSelected || isLayerSelected ? 'bg-gray-400' : 'bg-gray-700'}`}></div>
                           )}
                         </div>
                       );

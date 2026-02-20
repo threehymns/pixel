@@ -65,6 +65,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
 
     const tool = state.tool;
     const isSelection = SELECTION_TOOLS.includes(tool);
+    const isShading = state.inkType === 'shading';
 
     return (
       <div className="flex items-center gap-4 text-muted-foreground/90 overflow-hidden">
@@ -73,7 +74,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
             <Info size={12} />
           </span>
           <span className="uppercase text-[9px] tracking-wider opacity-60">
-            {tool.replace('-select', '').replace('filled-', 'Filled ')}:
+            {isShading ? 'Shading ' : ''}{tool.replace('-select', '').replace('filled-', 'Filled ')}:
           </span>
         </div>
 
@@ -92,7 +93,17 @@ export const StatusBar: React.FC<StatusBarProps> = ({
             </>
           ) : (
             <>
-              {tool === 'pencil' && (
+              {['pencil', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'bucket'].includes(tool) && isShading && (
+                  <>
+                    <span className="flex gap-1 items-center shrink-0">
+                        <kbd className="bg-background px-1 rounded-sm text-[9px] border border-border text-foreground font-sans">Click</kbd> Next Shade
+                    </span>
+                    <span className="flex gap-1 items-center shrink-0">
+                        <kbd className="bg-background px-1 rounded-sm text-[9px] border border-border text-foreground font-sans">Ctrl+Click</kbd> Prev Shade
+                    </span>
+                  </>
+              )}
+              {tool === 'pencil' && !isShading && (
                 <>
                   <span className="flex gap-1 items-center shrink-0">
                     <kbd className="bg-background px-1 rounded-sm text-[9px] border border-border text-foreground font-sans">Shift</kbd> Line
@@ -105,7 +116,12 @@ export const StatusBar: React.FC<StatusBarProps> = ({
                   </span>
                 </>
               )}
-              {tool === 'line' && (
+              {tool === 'smudge' && (
+                <span className="flex gap-1 items-center shrink-0">
+                  <kbd className="bg-background px-1 rounded-sm text-[9px] border border-border text-foreground font-sans">Drag</kbd> Push pixels
+                </span>
+              )}
+              {tool === 'line' && !isShading && (
                 <>
                   <span className="flex gap-1 items-center shrink-0">
                     <kbd className="bg-background px-1 rounded-sm text-[9px] border border-border text-foreground font-sans">Shift</kbd> Snap
@@ -115,7 +131,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
                   </span>
                 </>
               )}
-              {['rect', 'filled-rect', 'ellipse', 'filled-ellipse'].includes(tool) && (
+              {['rect', 'filled-rect', 'ellipse', 'filled-ellipse'].includes(tool) && !isShading && (
                 <>
                   <span className="flex gap-1 items-center shrink-0">
                     <kbd className="bg-background px-1 rounded-sm text-[9px] border border-border text-foreground font-sans">Shift</kbd> Square/Circle
@@ -130,7 +146,17 @@ export const StatusBar: React.FC<StatusBarProps> = ({
                   <kbd className="bg-background px-1 rounded-sm text-[9px] border border-border text-foreground font-sans">Shift</kbd> Line
                 </span>
               )}
-              {tool === 'bucket' && (
+              {tool === 'blur' && (
+                <span className="flex gap-1 items-center shrink-0">
+                  <kbd className="bg-background px-1 rounded-sm text-[9px] border border-border text-foreground font-sans">R</kbd> Soften edges
+                </span>
+              )}
+              {tool === 'sharpen' && (
+                <span className="flex gap-1 items-center shrink-0">
+                  <kbd className="bg-background px-1 rounded-sm text-[9px] border border-border text-foreground font-sans">Shift+R</kbd> Sharpen edges
+                </span>
+              )}
+              {tool === 'bucket' && !isShading && (
                 <span className="flex gap-1 items-center shrink-0">
                   <kbd className="bg-background px-1 rounded-sm text-[9px] border border-border text-foreground font-sans">Shift</kbd> Global
                 </span>
@@ -150,7 +176,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
                   <kbd className="bg-background px-1 rounded-sm text-[9px] border border-border text-foreground font-sans">Alt</kbd> Secondary
                 </span>
               )}
-              {!['pencil', 'eraser', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'bucket', 'move', 'eyedropper'].includes(tool) && !isSelection && (
+              {!['pencil', 'eraser', 'smudge', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'bucket', 'move', 'eyedropper', 'blur', 'sharpen'].includes(tool) && !isSelection && (
                 <span className="italic opacity-60">No modifiers</span>
               )}
             </>
@@ -160,7 +186,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
     );
   };
 
-  const isFreeformTool = state.tool === 'pencil' || state.tool === 'eraser';
+  const isFreeformTool = state.tool === 'pencil' || state.tool === 'eraser' || state.tool === 'smudge' || state.tool === 'blur' || state.tool === 'sharpen';
 
   return (
     <div className="h-7 bg-muted border-t border-background flex items-center px-2 text-[10px] text-muted-foreground select-none overflow-hidden shrink-0">

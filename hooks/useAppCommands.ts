@@ -1,6 +1,6 @@
 
 import { useMemo, useRef } from 'react';
-import { Command, ProjectState, ToolType } from '../types';
+import { Command, ProjectState, ToolType, ColorMode } from '../types';
 
 interface UseAppCommandsProps {
     state: ProjectState;
@@ -13,18 +13,23 @@ interface UseAppCommandsProps {
         addLayer: () => void;
         addFrame: () => void;
         duplicateFrame: () => void;
+        tweenFrames: () => void;
         downloadImage: () => void;
         saveProject: () => void;
         saveProjectAs: () => void;
         createProject: () => void;
         closeProject: (id: string) => void;
         switchTab: (dir: 'next' | 'prev') => void;
+        setColorMode: (mode: ColorMode) => void;
     };
     fileSystemActions: {
         openFolder: () => void;
     };
     uiActions: {
         toggleFileTree: () => void;
+        togglePalette: () => void;
+        toggleTimeline: () => void;
+        toggleRightPanel: () => void;
     };
     openCmdPalette: () => void;
     onOpenProject: () => void; // Trigger for the hidden file input
@@ -44,7 +49,7 @@ export function useAppCommands({
 
     return useMemo<Command[]>(() => [
         { 
-            id: 'file.new', label: 'New Project', category: 'File', hotkey: 'Alt+T', keys: ['Alt+t'], 
+            id: 'file.new', label: 'New Project...', category: 'File', hotkey: 'Alt+T', keys: ['Alt+t'], 
             perform: projectActions.createProject
         },
         { 
@@ -85,6 +90,18 @@ export function useAppCommands({
         {
             id: 'view.fileTree', label: 'Toggle File Tree', category: 'View', hotkey: 'Ctrl+B', keys: ['Control+b', 'Meta+b'],
             perform: uiActions.toggleFileTree
+        },
+        {
+            id: 'view.palette', label: 'Toggle Palette', category: 'View',
+            perform: uiActions.togglePalette
+        },
+        {
+            id: 'view.layersHistory', label: 'Toggle Layers/History', category: 'View',
+            perform: uiActions.toggleRightPanel
+        },
+        {
+            id: 'view.timeline', label: 'Toggle Timeline', category: 'View',
+            perform: uiActions.toggleTimeline
         },
         { 
             id: 'edit.undo', label: 'Undo', category: 'Edit', hotkey: 'Ctrl+Z', keys: ['Control+z', 'Meta+z'],
@@ -127,6 +144,24 @@ export function useAppCommands({
             perform: projectActions.duplicateFrame 
         },
         { 
+            id: 'sprite.tween', label: 'Interpolate (Tween)', category: 'Sprite', hotkey: 'Alt+I', keys: ['Alt+i'],
+            perform: projectActions.tweenFrames 
+        },
+        { 
+            id: 'sprite.dithering', label: 'Toggle Dithering', category: 'Sprite', 
+            perform: () => updateState({...state, ditheringEnabled: !state.ditheringEnabled})
+        },
+        { 
+            id: 'sprite.modeIndexed', label: 'Color Mode: Indexed', category: 'Sprite', 
+            perform: () => projectActions.setColorMode('indexed'),
+            disabled: state.colorMode === 'indexed'
+        },
+        { 
+            id: 'sprite.modeRGBA', label: 'Color Mode: RGBA', category: 'Sprite', 
+            perform: () => projectActions.setColorMode('rgba'),
+            disabled: state.colorMode === 'rgba'
+        },
+        { 
           id: 'tool.pencil', label: 'Pencil Tool', category: 'Edit', hotkey: 'B', keys: ['b'],
           perform: () => updateState({ ...state, tool: 'pencil' })
         },
@@ -161,6 +196,18 @@ export function useAppCommands({
                 updateState({ ...state, tool: lastEllipseTool.current });
             }
           }
+        },
+        { 
+          id: 'tool.smudge', label: 'Smudge/Push Tool', category: 'Edit', hotkey: 'S', keys: ['s'],
+          perform: () => updateState({ ...state, tool: 'smudge' })
+        },
+        { 
+          id: 'tool.blur', label: 'Blur Tool', category: 'Edit', hotkey: 'R', keys: ['r'],
+          perform: () => updateState({ ...state, tool: 'blur' })
+        },
+        { 
+          id: 'tool.sharpen', label: 'Sharpen Tool', category: 'Edit', hotkey: 'Shift+R', keys: ['Shift+R'],
+          perform: () => updateState({ ...state, tool: 'sharpen' })
         },
         { 
           id: 'tool.eraser', label: 'Eraser Tool', category: 'Edit', hotkey: 'E', keys: ['e'],

@@ -1,5 +1,5 @@
 
-import { PixelGrid, Position, ProjectState, Layer, Frame, SavedPalette } from './types';
+import { PixelGrid, Position, ProjectState, Layer, Frame, SavedPalette, PixelValue } from './types';
 
 export const getIndex = (x: number, y: number, width: number): number => {
   return y * width + x;
@@ -10,6 +10,18 @@ export const getCoords = (index: number, width: number): Position => {
     x: index % width,
     y: Math.floor(index / width),
   };
+};
+
+export const getSelectionBoundingBox = (selection: Set<number>, width: number) => {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  selection.forEach(idx => {
+    const { x, y } = getCoords(idx, width);
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+  });
+  return { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
 };
 
 // Bresenham's Line Algorithm for smooth strokes
@@ -42,7 +54,6 @@ export const bresenhamLine = (x0: number, y0: number, x1: number, y1: number): P
 
 /**
  * Alois Zingl's Ellipse Algorithm (Integer arithmetic)
- * Provides pixel-perfect strokes without gaps or stretching.
  */
 export const bresenhamEllipse = (x0: number, y0: number, x1: number, y1: number): Position[] => {
   const points: Position[] = [];
@@ -106,7 +117,6 @@ export const bresenhamEllipse = (x0: number, y0: number, x1: number, y1: number)
 
 /**
  * Filled version of the Alois Zingl's algorithm
- * Draws horizontal spans between the calculated points.
  */
 export const getFilledEllipse = (x0: number, y0: number, x1: number, y1: number): Position[] => {
   const points: Position[] = [];
@@ -207,21 +217,21 @@ export const floodFill = (
   pixels: PixelGrid,
   startX: number,
   startY: number,
-  fillColor: string,
+  fillValue: string | number,
   width: number,
   height: number,
   contiguous: boolean = true
 ): PixelGrid => {
   const newPixels = [...pixels];
   const startIndex = getIndex(startX, startY, width);
-  const targetColor = newPixels[startIndex];
+  const targetValue = newPixels[startIndex];
 
-  if (targetColor === fillColor) return newPixels;
+  if (targetValue === fillValue) return newPixels;
 
   if (!contiguous) {
     for (let i = 0; i < newPixels.length; i++) {
-      if (newPixels[i] === targetColor) {
-        newPixels[i] = fillColor;
+      if (newPixels[i] === targetValue) {
+        newPixels[i] = fillValue;
       }
     }
     return newPixels;
@@ -239,8 +249,8 @@ export const floodFill = (
     
     if (x < 0 || x >= width || y < 0 || y >= height) continue;
 
-    if (newPixels[idx] === targetColor) {
-      newPixels[idx] = fillColor;
+    if (newPixels[idx] === targetValue) {
+      newPixels[idx] = fillValue;
 
       if (x + 1 < width) queue.push(getIndex(x + 1, y, width));
       if (x - 1 >= 0) queue.push(getIndex(x - 1, y, width));
@@ -263,7 +273,6 @@ export const drawCheckeredBackground = (
   
   ctx.fillStyle = '#262626';
   ctx.beginPath();
-  // Batch draw calls for performance
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       if ((x + y) % 2 !== 0) {
@@ -301,10 +310,13 @@ export const renderFrameToCanvas = (state: ProjectState, frameIndex: number): HT
         const px = frame.layerData[l.id];
         if (!px) return;
         
-        px.forEach((c, i) => {
-            if (c) {
-                ctx.fillStyle = c;
-                ctx.fillRect(i % state.width, Math.floor(i / state.width), 1, 1);
+        px.forEach((val, i) => {
+            if (val !== null) {
+                const color = typeof val === 'number' ? state.palette[val] : val;
+                if (color) {
+                    ctx.fillStyle = color;
+                    ctx.fillRect(i % state.width, Math.floor(i / state.width), 1, 1);
+                }
             }
         });
     });
@@ -329,9 +341,6 @@ export const getRectSelection = (x0: number, y0: number, x1: number, y1: number,
   return selection;
 };
 
-/**
- * Selection Ellipse using Zingl Algorithm logic for boundary consistency.
- */
 export const getEllipseSelection = (x0: number, y0: number, x1: number, y1: number, width: number): Set<number> => {
   const selection = new Set<number>();
   const filledPoints = getFilledEllipse(x0, y0, x1, y1);
@@ -385,7 +394,7 @@ export const getWandSelection = (
 ): Set<number> => {
   const selection = new Set<number>();
   const startIndex = getIndex(startX, startY, width);
-  const targetColor = pixels[startIndex];
+  const targetValue = pixels[startIndex];
 
   if (contiguous) {
     const queue: number[] = [startIndex];
@@ -407,7 +416,7 @@ export const getWandSelection = (
       for (const {nx, ny} of neighbors) {
         if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
            const nIdx = getIndex(nx, ny, width);
-           if (!visited.has(nIdx) && pixels[nIdx] === targetColor) {
+           if (!visited.has(nIdx) && pixels[nIdx] === targetValue) {
              visited.add(nIdx);
              queue.push(nIdx);
            }
@@ -416,7 +425,7 @@ export const getWandSelection = (
     }
   } else {
     for(let i=0; i<pixels.length; i++) {
-      if(pixels[i] === targetColor) selection.add(i);
+      if(pixels[i] === targetValue) selection.add(i);
     }
   }
   return selection;
@@ -425,9 +434,32 @@ export const getWandSelection = (
 // --- Color Parsers ---
 export const rgbToHex = (r: number, g: number, b: number): string => {
   return "#" + [r, g, b].map(x => {
-    const hex = Math.round(x).toString(16);
+    const hex = Math.round(Math.max(0, Math.min(255, x))).toString(16);
     return hex.length === 1 ? '0' + hex : hex;
   }).join('');
+};
+
+/**
+ * Weighted RGB distance for better perceptual color matching.
+ */
+export const findNearestPaletteIndex = (r: number, g: number, b: number, palette: string[]): number => {
+    let minDistance = Infinity;
+    let nearestIndex = 0;
+    
+    const wr = 0.3;
+    const wg = 0.59;
+    const wb = 0.11;
+
+    for (let i = 0; i < palette.length; i++) {
+        const [pr, pg, pb] = hexToRgb(palette[i]);
+        const dist = wr * Math.pow(r - pr, 2) + wg * Math.pow(g - pg, 2) + wb * Math.pow(b - pb, 2);
+        if (dist < minDistance) {
+            minDistance = dist;
+            nearestIndex = i;
+        }
+        if (dist === 0) break;
+    }
+    return nearestIndex;
 };
 
 export const parseGPL = async (text: string): Promise<string[]> => {
@@ -487,22 +519,16 @@ export const parseASE = async (buffer: ArrayBuffer): Promise<string[]> => {
 
 // --- Project & Palette Utilities ---
 
-// Added fileToProjectState to handle file import (JSON or Image)
-/**
- * Converts a file (JSON or Image) to a ProjectState object.
- */
 export const fileToProjectState = async (file: File): Promise<ProjectState> => {
   if (file.name.toLowerCase().endsWith('.json')) {
     const text = await file.text();
     const state = JSON.parse(text);
-    // Restore selection Set if it was serialized as an array
     if (state.selection && Array.isArray(state.selection)) {
       state.selection = new Set(state.selection);
     }
     return state as ProjectState;
   }
 
-  // Handle image files (PNG, JPG, etc.)
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -526,7 +552,7 @@ export const fileToProjectState = async (file: File): Promise<ProjectState> => {
           const g = imageData[i * 4 + 1];
           const b = imageData[i * 4 + 2];
           const a = imageData[i * 4 + 3];
-          if (a > 128) { // Only count reasonably opaque pixels
+          if (a > 128) { 
             pixels[i] = rgbToHex(r, g, b);
           }
         }
@@ -536,25 +562,33 @@ export const fileToProjectState = async (file: File): Promise<ProjectState> => {
 
         const state: ProjectState = {
           id: `project-${Date.now()}`,
-          title: file.name.replace(/\.[^/.]+$/, ""), // Remove extension
+          title: file.name.replace(/\.[^/.]+$/, ""), 
           width,
           height,
+          colorMode: 'rgba', 
           layers: [{ id: layerId, name: 'Layer 1', visible: true, locked: false }],
           frames: [{ id: frameId, layerData: { [layerId]: pixels } }],
           activeLayerId: layerId,
           selectedLayerIds: [layerId],
           activeFrameIndex: 0,
           selectedFrameIndices: [0],
-          palette: [], // Will be defaulted in useProject
+          palette: [], 
           paletteLibrary: [],
           activePaletteId: '',
           primaryColor: '#ffffff',
           secondaryColor: '#000000',
+          
+          symmetry: { x: false, y: false },
+          inkType: 'simple',
+          shades: ['#000000', '#5d5d5d', '#b4b4b4', '#ffffff'],
+          
           tool: 'pencil',
           brushSize: 1,
           brushShape: 'circle',
           fillContiguous: true,
           pixelPerfect: false,
+          ditheringEnabled: false,
+          rotationAlgorithm: 'nearest',
           zoom: Math.min(32, Math.floor(512 / Math.max(width, height))),
           onionSkin: false,
           showGrid: false,
@@ -571,10 +605,6 @@ export const fileToProjectState = async (file: File): Promise<ProjectState> => {
   });
 };
 
-// Added extractColorsFromPNG to handle palette generation from images
-/**
- * Extracts unique colors from an image file to create a palette.
- */
 export const extractColorsFromPNG = async (file: File): Promise<string[]> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -593,7 +623,7 @@ export const extractColorsFromPNG = async (file: File): Promise<string[]> => {
         const data = ctx.getImageData(0, 0, img.width, img.height).data;
         const colors = new Set<string>();
         for (let i = 0; i < data.length; i += 4) {
-          if (data[i + 3] > 0) { // Only non-transparent
+          if (data[i + 3] > 0) { 
             colors.add(rgbToHex(data[i], data[i + 1], data[i + 2]));
           }
         }
@@ -605,4 +635,248 @@ export const extractColorsFromPNG = async (file: File): Promise<string[]> => {
     reader.onerror = () => reject(new Error("Failed to read file"));
     reader.readAsDataURL(file);
   });
+};
+
+// --- RotSprite & Scale Algorithm Helpers ---
+
+const scale2xPass = (pixels: PixelGrid, width: number, height: number): { pixels: PixelGrid, width: number, height: number } => {
+  const newWidth = width * 2;
+  const newHeight = height * 2;
+  const newPixels: PixelGrid = new Array(newWidth * newHeight).fill(null);
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const P = pixels[y * width + x];
+      const A = y > 0 ? pixels[(y - 1) * width + x] : P;
+      const B = x < width - 1 ? pixels[y * width + (x + 1)] : P;
+      const C = x > 0 ? pixels[y * width + (x - 1)] : P;
+      const D = y < height - 1 ? pixels[(y + 1) * width + x] : P;
+
+      const p1 = (C === A && C !== D && A !== B) ? A : P;
+      const p2 = (A === B && A !== C && B !== D) ? B : P;
+      const p3 = (D === C && D !== B && C !== A) ? C : P;
+      const p4 = (B === D && B !== A && D !== C) ? D : P;
+
+      newPixels[(y * 2) * newWidth + (x * 2)] = p1;
+      newPixels[(y * 2) * newWidth + (x * 2 + 1)] = p2;
+      newPixels[(y * 2 + 1) * newWidth + (x * 2)] = p3;
+      newPixels[(y * 2 + 1) * newWidth + (x * 2 + 1)] = p4;
+    }
+  }
+  return { pixels: newPixels, width: newWidth, height: newHeight };
+};
+
+export const rotateSelectionPixels = (
+    selection: Set<number>, 
+    layerPixels: PixelGrid, 
+    angleRad: number, 
+    pivot: Position,
+    width: number,
+    height: number,
+    algorithm: 'nearest' | 'rotsprite'
+): PixelGrid => {
+    const newPixels = new Array(width * height).fill(null);
+    const cos = Math.cos(angleRad);
+    const sin = Math.sin(angleRad);
+
+    if (algorithm === 'rotsprite') {
+        const box = getSelectionBoundingBox(selection, width);
+        const subGrid: PixelGrid = new Array(box.w * box.h).fill(null);
+        selection.forEach(idx => {
+            const { x, y } = getCoords(idx, width);
+            subGrid[(y - box.y) * box.w + (x - box.x)] = layerPixels[idx];
+        });
+
+        let scaled = { pixels: subGrid, width: box.w, height: box.h };
+        for (let i = 0; i < 3; i++) {
+            scaled = scale2xPass(scaled.pixels, scaled.width, scaled.height);
+        }
+
+        const scale = 8;
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const tx = x + 0.5 - pivot.x;
+                const ty = y + 0.5 - pivot.y;
+                
+                const srcX_orig = tx * cos + ty * sin + pivot.x;
+                const srcY_orig = -tx * sin + ty * cos + pivot.y;
+                
+                const localX = (srcX_orig - box.x) * scale;
+                const localY = (srcY_orig - box.y) * scale;
+                
+                const floorX = Math.floor(localX);
+                const floorY = Math.floor(localY);
+                
+                if (floorX >= 0 && floorX < scaled.width && floorY >= 0 && floorY < scaled.height) {
+                    newPixels[getIndex(x, y, width)] = scaled.pixels[floorY * scaled.width + floorX];
+                }
+            }
+        }
+    } else {
+        const selectionColors = new Map<number, string | number | null>();
+        selection.forEach(idx => selectionColors.set(idx, layerPixels[idx]));
+
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const tx = x + 0.5 - pivot.x;
+                const ty = y + 0.5 - pivot.y;
+                const srcX = Math.floor(tx * cos + ty * sin + pivot.x);
+                const srcY = Math.floor(-tx * sin + ty * cos + pivot.y);
+                
+                if (srcX >= 0 && srcX < width && srcY >= 0 && srcY < height) {
+                    const srcIdx = getIndex(srcX, srcY, width);
+                    if (selection.has(srcIdx)) {
+                        newPixels[getIndex(x, y, width)] = selectionColors.get(srcIdx) ?? null;
+                    }
+                }
+            }
+        }
+    }
+    return newPixels;
+};
+
+export const rotateSelectionMask = (
+    selection: Set<number>,
+    angleRad: number,
+    pivot: Position,
+    width: number,
+    height: number
+): Set<number> => {
+    const newSelection = new Set<number>();
+    const cos = Math.cos(angleRad);
+    const sin = Math.sin(angleRad);
+
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const tx = x + 0.5 - pivot.x;
+            const ty = y + 0.5 - pivot.y;
+            const srcX = Math.floor(tx * cos + ty * sin + pivot.x);
+            const srcY = Math.floor(-tx * sin + ty * cos + pivot.y);
+
+            if (srcX >= 0 && srcX < width && srcY >= 0 && srcY < height) {
+                const srcIdx = getIndex(srcX, srcY, width);
+                if (selection.has(srcIdx)) {
+                    newSelection.add(getIndex(x, y, width));
+                }
+            }
+        }
+    }
+    return newSelection;
+};
+
+/**
+ * Scales selection pixels using Nearest Neighbor reverse-mapping.
+ */
+export const scaleSelectionPixels = (
+    selection: Set<number>,
+    layerPixels: PixelGrid,
+    srcBox: { x: number, y: number, w: number, h: number },
+    destBox: { x: number, y: number, w: number, h: number },
+    width: number,
+    height: number
+): PixelGrid => {
+    const newPixels = new Array(width * height).fill(null);
+    if (srcBox.w <= 0 || srcBox.h <= 0 || destBox.w <= 0 || destBox.h <= 0) return newPixels;
+
+    for (let dy = 0; dy < destBox.h; dy++) {
+        for (let dx = 0; dx < destBox.w; dx++) {
+            const targetX = Math.floor(destBox.x + dx);
+            const targetY = Math.floor(destBox.y + dy);
+
+            if (targetX < 0 || targetX >= width || targetY < 0 || targetY >= height) continue;
+
+            // Map back to relative source box
+            const srcRelX = (dx / destBox.w) * srcBox.w;
+            const srcRelY = (dy / destBox.h) * srcBox.h;
+
+            const sx = Math.floor(srcBox.x + srcRelX);
+            const sy = Math.floor(srcBox.y + srcRelY);
+
+            if (sx >= srcBox.x && sx < srcBox.x + srcBox.w && sy >= srcBox.y && sy < srcBox.y + srcBox.h) {
+                const srcIdx = getIndex(sx, sy, width);
+                if (selection.has(srcIdx)) {
+                    newPixels[getIndex(targetX, targetY, width)] = layerPixels[srcIdx];
+                }
+            }
+        }
+    }
+    return newPixels;
+};
+
+/**
+ * Updates selection mask to new bounding box.
+ */
+export const scaleSelectionMask = (
+    selection: Set<number>,
+    srcBox: { x: number, y: number, w: number, h: number },
+    destBox: { x: number, y: number, w: number, h: number },
+    width: number,
+    height: number
+): Set<number> => {
+    const newSelection = new Set<number>();
+    if (destBox.w <= 0 || destBox.h <= 0) return newSelection;
+
+    for (let dy = 0; dy < destBox.h; dy++) {
+        for (let dx = 0; dx < destBox.w; dx++) {
+            const targetX = Math.floor(destBox.x + dx);
+            const targetY = Math.floor(destBox.y + dy);
+            if (targetX < 0 || targetX >= width || targetY < 0 || targetY >= height) continue;
+
+            const srcRelX = (dx / destBox.w) * srcBox.w;
+            const srcRelY = (dy / destBox.h) * srcBox.h;
+            const sx = Math.floor(srcBox.x + srcRelX);
+            const sy = Math.floor(srcBox.y + srcRelY);
+
+            if (selection.has(getIndex(sx, sy, width))) {
+                newSelection.add(getIndex(targetX, targetY, width));
+            }
+        }
+    }
+    return newSelection;
+};
+
+export const applyConvolution = (
+    x: number, 
+    y: number, 
+    pixels: PixelGrid, 
+    width: number, 
+    height: number, 
+    kernel: number[][],
+    palette: string[],
+    colorMode: 'indexed' | 'rgba'
+): PixelValue => {
+    let r = 0, g = 0, b = 0, weight = 0;
+    const kSize = kernel.length;
+    const kHalf = Math.floor(kSize / 2);
+
+    for (let ky = 0; ky < kSize; ky++) {
+        for (let kx = 0; kx < kSize; kx++) {
+            const nx = x + kx - kHalf;
+            const ny = y + ky - kHalf;
+            if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                const val = pixels[getIndex(nx, ny, width)];
+                if (val !== null) {
+                    const hex = typeof val === 'number' ? palette[val] : val;
+                    const [pr, pg, pb] = hexToRgb(hex);
+                    const kw = kernel[ky][kx];
+                    r += pr * kw;
+                    g += pg * kw;
+                    b += pb * kw;
+                    weight += kw;
+                }
+            }
+        }
+    }
+
+    if (weight === 0) return null;
+    
+    const finalR = weight > 0 ? r / weight : r;
+    const finalG = weight > 0 ? g / weight : g;
+    const finalB = weight > 0 ? b / weight : b;
+
+    if (colorMode === 'indexed') {
+        return findNearestPaletteIndex(finalR, finalG, finalB, palette);
+    } else {
+        return rgbToHex(finalR, finalG, finalB);
+    }
 };

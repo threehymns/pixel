@@ -1,8 +1,60 @@
 
 import { useState, useCallback, useEffect } from 'react';
-import { ProjectState, Frame, Layer, SavedPalette, PixelGrid, HistoryEntry, ToolType, RecentProject, FileSystemFileHandle, ProjectInstance } from '../types';
+import { ProjectState, Frame, Layer, SavedPalette, PixelGrid, HistoryEntry, ToolType, RecentProject, FileSystemFileHandle, ProjectInstance, ColorMode, PixelValue } from '../types';
 import { INITIAL_STATE, DEFAULT_PALETTE, GAMEBOY_PALETTE, ENDESGA_64_PALETTE } from '../constants';
-import { parseASE, parseGPL, extractColorsFromPNG, fileToProjectState, renderFrameToCanvas } from '../utils';
+import { parseASE, parseGPL, extractColorsFromPNG, fileToProjectState, renderFrameToCanvas, getCoords, getIndex, hexToRgb, rgbToHex, findNearestPaletteIndex } from '../utils';
+
+// UI fields that should not be affected by Undo/Redo
+const UI_FIELDS: (keyof ProjectState)[] = [
+    'tool',
+    'primaryColor',
+    'secondaryColor',
+    'brushSize',
+    'brushShape',
+    'fillContiguous',
+    'pixelPerfect',
+    'zoom',
+    'onionSkin',
+    'showGrid',
+    'selectionMode',
+    'activePaletteId',
+    'ditheringEnabled'
+];
+
+/**
+ * Finds the nearest color in a palette to the given RGB values.
+ * Uses standard Euclidean distance in RGB space.
+ */
+const findNearestPaletteColor = (r: number, g: number, b: number, palette: string[]): string => {
+  const index = findNearestPaletteIndex(r, g, b, palette);
+  return palette[index] || '#000000';
+};
+
+interface PixelPoint {
+  x: number;
+  y: number;
+  r: number;
+  g: number;
+  b: number;
+}
+
+/**
+ * Finds the nearest pixel in a list spatially.
+ */
+const findNearestSpatially = (point: {x: number, y: number}, list: PixelPoint[]): PixelPoint => {
+  let minDistance = Infinity;
+  let nearest = list[0];
+  
+  for (const p of list) {
+    const dist = Math.pow(point.x - p.x, 2) + Math.pow(point.y - p.y, 2);
+    if (dist < minDistance) {
+      minDistance = dist;
+      nearest = p;
+    }
+    if (dist === 0) break;
+  }
+  return nearest;
+};
 
 export function useProject() {
   const [projects, setProjects] = useState<ProjectInstance[]>([]);
@@ -94,18 +146,57 @@ export function useProject() {
   };
   const state = activeInstance.data;
 
-  // --- Multi-Project Management ---
+  /**
+   * Helper to merge current UI state into a historical snapshot.
+   * This ensures Undo/Redo doesn't change things like tool, colors, or zoom.
+   */
+  const mergeUIState = (snapshot: ProjectState, current: ProjectState): ProjectState => {
+      const merged = { ...snapshot };
+      
+      // Preserve UI fields from the current state
+      UI_FIELDS.forEach(field => {
+          (merged as any)[field] = current[field];
+      });
 
-  const createProject = useCallback(() => {
+      // Attempt to preserve current selection in timeline if still valid
+      const hasLayer = snapshot.layers.some(l => l.id === current.activeLayerId);
+      if (hasLayer) {
+          merged.activeLayerId = current.activeLayerId;
+          merged.selectedLayerIds = current.selectedLayerIds.filter(id => 
+              snapshot.layers.some(l => l.id === id)
+          );
+          if (merged.selectedLayerIds.length === 0) merged.selectedLayerIds = [merged.activeLayerId];
+      }
+
+      const hasFrame = snapshot.frames.length > current.activeFrameIndex;
+      if (hasFrame) {
+          merged.activeFrameIndex = current.activeFrameIndex;
+          merged.selectedFrameIndices = current.selectedFrameIndices.filter(i => i < snapshot.frames.length);
+          if (merged.selectedFrameIndices.length === 0) merged.selectedFrameIndices = [merged.activeFrameIndex];
+      }
+
+      return merged;
+  };
+
+  const createProject = useCallback((config?: { width: number, height: number, colorMode: ColorMode, title?: string }) => {
+    const w = config?.width ?? INITIAL_STATE.width;
+    const h = config?.height ?? INITIAL_STATE.height;
+    const mode = config?.colorMode ?? INITIAL_STATE.colorMode;
+    const title = config?.title ?? `Untitled-${projects.length + 1}`;
+    
     const id = `project-${Date.now()}`;
     const newProject: ProjectState = {
       ...INITIAL_STATE,
       id,
-      title: `Untitled-${projects.length + 1}`,
+      title,
+      width: w,
+      height: h,
+      colorMode: mode,
       layers: [{ id: 'layer-1', name: 'Layer 1', visible: true, locked: false }],
       selectedLayerIds: ['layer-1'],
-      frames: [{ id: 'frame-1', layerData: { 'layer-1': new Array(INITIAL_STATE.width * INITIAL_STATE.height).fill(null) } }],
+      frames: [{ id: 'frame-1', layerData: { 'layer-1': new Array(w * h).fill(null) } }],
       selectedFrameIndices: [0],
+      zoom: Math.min(64, Math.floor(512 / Math.max(w, h))),
     };
     
     const initialEntry: HistoryEntry = {
@@ -363,7 +454,12 @@ export function useProject() {
         if (p.data.id !== activeProjectId) return p;
         if (p.historyIndex > 0) {
             const newIndex = p.historyIndex - 1;
-            return { ...p, data: p.history[newIndex].state, historyIndex: newIndex };
+            const historicalState = p.history[newIndex].state;
+            return { 
+                ...p, 
+                data: mergeUIState(historicalState, p.data), 
+                historyIndex: newIndex 
+            };
         }
         return p;
     }));
@@ -375,7 +471,12 @@ export function useProject() {
         if (p.data.id !== activeProjectId) return p;
         if (p.historyIndex < p.history.length - 1) {
             const newIndex = p.historyIndex + 1;
-            return { ...p, data: p.history[newIndex].state, historyIndex: newIndex };
+            const historicalState = p.history[newIndex].state;
+            return { 
+                ...p, 
+                data: mergeUIState(historicalState, p.data), 
+                historyIndex: newIndex 
+            };
         }
         return p;
     }));
@@ -386,11 +487,111 @@ export function useProject() {
     setProjects(prev => prev.map(p => {
       if (p.data.id !== activeProjectId) return p;
       if (index >= 0 && index < p.history.length) {
-        return { ...p, data: p.history[index].state, historyIndex: index };
+        const historicalState = p.history[index].state;
+        return { 
+            ...p, 
+            data: mergeUIState(historicalState, p.data), 
+            historyIndex: index 
+        };
       }
       return p;
     }));
   }, [activeProjectId]);
+
+  const setColorMode = useCallback((mode: ColorMode) => {
+    if (activeProjectId === 'home' || state.colorMode === mode) return;
+
+    let newPalette = [...state.palette];
+    const width = state.width;
+    const height = state.height;
+    const ditheringEnabled = state.ditheringEnabled;
+
+    let newFrames = state.frames.map(f => ({ ...f, layerData: { ...f.layerData } }));
+
+    if (mode === 'indexed') {
+        // Floyd-Steinberg Dithering conversion if enabled
+        newFrames = state.frames.map(f => {
+            const newLayerData: Record<string, PixelGrid> = {};
+            Object.keys(f.layerData).forEach(lid => {
+                const sourceGrid = f.layerData[lid];
+                const targetGrid: PixelGrid = new Array(width * height).fill(null);
+                
+                if (!ditheringEnabled) {
+                    // Standard Weighted Mapping
+                    targetGrid.fill(null);
+                    sourceGrid.forEach((val, i) => {
+                        if (val === null) return;
+                        const [r, g, b] = hexToRgb(typeof val === 'number' ? newPalette[val] : val);
+                        targetGrid[i] = findNearestPaletteIndex(r, g, b, newPalette);
+                    });
+                } else {
+                    // Floyd-Steinberg
+                    const errorBufferR = new Float32Array(width * height).fill(0);
+                    const errorBufferG = new Float32Array(width * height).fill(0);
+                    const errorBufferB = new Float32Array(width * height).fill(0);
+
+                    for (let y = 0; y < height; y++) {
+                        for (let x = 0; x < width; x++) {
+                            const i = getIndex(x, y, width);
+                            const val = sourceGrid[i];
+                            if (val === null) continue;
+
+                            const [r, g, b] = hexToRgb(typeof val === 'number' ? newPalette[val] : val);
+                            
+                            const curR = Math.max(0, Math.min(255, r + errorBufferR[i]));
+                            const curG = Math.max(0, Math.min(255, g + errorBufferG[i]));
+                            const curB = Math.max(0, Math.min(255, b + errorBufferB[i]));
+
+                            const paletteIndex = findNearestPaletteIndex(curR, curG, curB, newPalette);
+                            targetGrid[i] = paletteIndex;
+
+                            const [pr, pg, pb] = hexToRgb(newPalette[paletteIndex]);
+                            const errR = curR - pr;
+                            const errG = curG - pg;
+                            const errB = curB - pb;
+
+                            const distribute = (dx: number, dy: number, factor: number) => {
+                                const nx = x + dx;
+                                const ny = y + dy;
+                                if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                                    const ni = getIndex(nx, ny, width);
+                                    errorBufferR[ni] += errR * factor;
+                                    errorBufferG[ni] += errG * factor;
+                                    errorBufferB[ni] += errB * factor;
+                                }
+                            };
+
+                            distribute(1, 0, 7/16);
+                            distribute(-1, 1, 3/16);
+                            distribute(0, 1, 5/16);
+                            distribute(1, 1, 1/16);
+                        }
+                    }
+                }
+                newLayerData[lid] = targetGrid;
+            });
+            return { ...f, layerData: newLayerData };
+        });
+    } else {
+        // Convert Indexed -> RGBA
+        newFrames = state.frames.map(f => {
+            const newLayerData: Record<string, PixelGrid> = {};
+            Object.keys(f.layerData).forEach(lid => {
+                newLayerData[lid] = f.layerData[lid].map(val => {
+                    if (val === null) return null;
+                    if (typeof val === 'string') return val;
+                    return state.palette[val] || '#000000';
+                });
+            });
+            return { ...f, layerData: newLayerData };
+        });
+    }
+
+    updateState(
+        { ...state, colorMode: mode, palette: newPalette, frames: newFrames },
+        { action: `Switch to ${mode.toUpperCase()} mode${ditheringEnabled ? ' (Dithered)' : ''}` }
+    );
+  }, [state, activeProjectId, updateState]);
 
   const addFrame = useCallback(() => {
     if (activeProjectId === 'home') return;
@@ -485,6 +686,100 @@ export function useProject() {
         { action: `Delete ${selected.length} Frames` }
     );
   }, [state, updateState, activeProjectId]);
+
+  const tweenFrames = useCallback(() => {
+    if (activeProjectId === 'home') return;
+    const selected = [...state.selectedFrameIndices].sort((a, b) => a - b);
+    if (selected.length < 3) {
+      alert("Select 3 or more frames to interpolate between the first and last of the selection.");
+      return;
+    }
+
+    const startIdx = selected[0];
+    const endIdx = selected[selected.length - 1];
+    const layerId = state.activeLayerId;
+    const width = state.width;
+    const height = state.height;
+    const palette = state.palette;
+
+    const startPixelsArr = state.frames[startIdx].layerData[layerId] || [];
+    const endPixelsArr = state.frames[endIdx].layerData[layerId] || [];
+
+    // Resolve color helpers
+    const getHex = (val: string | number | null): string | null => {
+        if (val === null) return null;
+        if (typeof val === 'number') return palette[val];
+        return val;
+    };
+
+    // 1. Collect all non-null pixels from start and end frames
+    const startList: PixelPoint[] = [];
+    startPixelsArr.forEach((val, i) => {
+        const hex = getHex(val);
+        if (hex) {
+          const [r, g, b] = hexToRgb(hex);
+          startList.push({ ...getCoords(i, width), r, g, b });
+        }
+    });
+
+    const endList: PixelPoint[] = [];
+    endPixelsArr.forEach((val, i) => {
+        const hex = getHex(val);
+        if (hex) {
+          const [r, g, b] = hexToRgb(hex);
+          endList.push({ ...getCoords(i, width), r, g, b });
+        }
+    });
+
+    // Handle empty frames gracefully
+    if (startList.length === 0 && endList.length === 0) return;
+    
+    // Pairs map for interpolation
+    const pairs: { s: PixelPoint, e: PixelPoint }[] = [];
+
+    if (startList.length > 0 && endList.length > 0) {
+        for (const s of startList) pairs.push({ s, e: findNearestSpatially(s, endList) });
+        for (const e of endList) pairs.push({ s: findNearestSpatially(e, startList), e });
+    }
+
+    const newFrames = [...state.frames];
+
+    // 2. Interpolate intermediate selected frames
+    for (let i = 1; i < selected.length - 1; i++) {
+        const currentFrameIdx = selected[i];
+        const t = i / (selected.length - 1); 
+
+        const framePixels: PixelGrid = new Array(width * height).fill(null);
+
+        for (const pair of pairs) {
+            const { s, e } = pair;
+
+            const curX = Math.round(s.x + (e.x - s.x) * t);
+            const curY = Math.round(s.y + (e.y - s.y) * t);
+
+            const curR = s.r + (e.r - s.r) * t;
+            const curG = s.g + (e.g - s.g) * t;
+            const curB = s.b + (e.b - s.b) * t;
+
+            const curHex = findNearestPaletteColor(curR, curG, curB, palette);
+            const curVal = state.colorMode === 'indexed' ? palette.indexOf(curHex) : curHex;
+
+            if (curX >= 0 && curX < width && curY >= 0 && curY < height) {
+                framePixels[getIndex(curX, curY, width)] = (curVal === -1) ? (palette[0] || '#000000') : curVal;
+            }
+        }
+
+        newFrames[currentFrameIdx] = {
+            ...newFrames[currentFrameIdx],
+            layerData: {
+                ...newFrames[currentFrameIdx].layerData,
+                [layerId]: framePixels
+            }
+        };
+    }
+
+    updateState({ ...state, frames: newFrames }, { action: 'Interpolate Frames' });
+  }, [state, activeProjectId, updateState]);
 
   const addLayer = useCallback(() => {
     if (activeProjectId === 'home') return;
@@ -710,6 +1005,7 @@ export function useProject() {
     undo,
     redo,
     jumpToHistory, 
+    setColorMode,
     history: activeInstance.history, 
     historyIndex: activeInstance.historyIndex, 
     addFrame,
@@ -717,6 +1013,7 @@ export function useProject() {
     duplicateSelectedFrames,
     deleteFrame,
     deleteSelectedFrames,
+    tweenFrames,
     addLayer,
     deleteLayer,
     deleteSelectedLayers,

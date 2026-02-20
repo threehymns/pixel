@@ -1,8 +1,7 @@
-
 import React from 'react';
 import { Command, RecentProject } from '../types';
 import { Popover, PopoverTrigger, PopoverContent, PopoverClose } from './Popover';
-import { ChevronRight, Trash2 } from './Icons';
+import { ChevronRight, Trash2, Check } from './Icons';
 
 interface MenubarProps {
   commands: Command[];
@@ -27,23 +26,31 @@ export const Menubar: React.FC<MenubarProps> = ({
       setIsAnyMenuOpen(!!openPopover);
     };
     
-    // Listen for toggle events (native to the popover API) to update our open state
     document.addEventListener('toggle', handleToggle, true);
     return () => document.removeEventListener('toggle', handleToggle, true);
   }, []);
 
   const handleMouseEnter = (e: React.MouseEvent<HTMLButtonElement>) => {
-    // If a menu is already open, hovering over another menu trigger should switch to it
     if (isAnyMenuOpen) {
       const button = e.currentTarget;
       const targetId = button.getAttribute('popovertarget');
       const targetPopover = targetId ? document.getElementById(targetId) : null;
       
-      // If the hovered button's popover isn't open yet, trigger a click to switch menus
       if (targetPopover && !targetPopover.matches(':popover-open')) {
         button.click();
       }
     }
+  };
+
+  const handleSubmenuEnter = (e: React.MouseEvent<HTMLButtonElement>) => {
+      const button = e.currentTarget;
+      const targetId = button.getAttribute('popovertarget');
+      const targetPopover = targetId ? document.getElementById(targetId) : null;
+      if (targetPopover && !targetPopover.matches(':popover-open')) {
+          try {
+              targetPopover.showPopover();
+          } catch (err) {}
+      }
   };
 
   return (
@@ -61,8 +68,51 @@ export const Menubar: React.FC<MenubarProps> = ({
                 {category}
               </button>
             </PopoverTrigger>
-            <PopoverContent align="start" sideOffset={2} className="w-56 p-1 flex flex-col gap-0.5">
+            <PopoverContent align="start" sideOffset={2} className="w-56 p-1 flex flex-col gap-0.5 overflow-visible">
               {categoryCommands.map(cmd => {
+                // Special handling to group Color Mode commands into a nested Popover
+                if (cmd.id === 'sprite.modeRGBA') return null; 
+                
+                if (cmd.id === 'sprite.modeIndexed') {
+                    const indexedCmd = cmd;
+                    const rgbaCmd = categoryCommands.find(c => c.id === 'sprite.modeRGBA');
+                    
+                    return (
+                        <Popover key="color-mode-popover">
+                            <PopoverTrigger asChild onMouseEnter={handleSubmenuEnter}>
+                                <button className="w-full text-left px-3 py-1.5 rounded-sm hover:bg-primary hover:text-primary-foreground text-foreground flex items-center justify-between group">
+                                    <span className="text-xs">Color Mode</span>
+                                    <ChevronRight size={12} className="text-muted-foreground group-hover:text-primary-foreground" />
+                                </button>
+                            </PopoverTrigger>
+                            <PopoverContent side="right" align="start" sideOffset={4} className="w-44 p-1 flex flex-col gap-0.5 shadow-2xl z-[100]">
+                                <PopoverClose asChild>
+                                    <button 
+                                        onClick={indexedCmd.perform}
+                                        disabled={indexedCmd.disabled}
+                                        className="w-full text-left px-3 py-1.5 rounded-sm hover:bg-primary hover:text-primary-foreground text-foreground flex items-center justify-between group disabled:opacity-50"
+                                    >
+                                        <span className="text-xs">Indexed</span>
+                                        {indexedCmd.disabled && <Check size={12} className="text-primary group-hover:text-primary-foreground" />}
+                                    </button>
+                                </PopoverClose>
+                                {rgbaCmd && (
+                                    <PopoverClose asChild>
+                                        <button 
+                                            onClick={rgbaCmd.perform}
+                                            disabled={rgbaCmd.disabled}
+                                            className="w-full text-left px-3 py-1.5 rounded-sm hover:bg-primary hover:text-primary-foreground text-foreground flex items-center justify-between group disabled:opacity-50"
+                                        >
+                                            <span className="text-xs">RGBA</span>
+                                            {rgbaCmd.disabled && <Check size={12} className="text-primary group-hover:text-primary-foreground" />}
+                                        </button>
+                                    </PopoverClose>
+                                )}
+                            </PopoverContent>
+                        </Popover>
+                    );
+                }
+
                 const menuItem = (
                     <PopoverClose key={cmd.id} asChild>
                         <button 
@@ -82,15 +132,15 @@ export const Menubar: React.FC<MenubarProps> = ({
                    return (
                      <React.Fragment key="fragment-recent">
                        {menuItem}
-                       {/* Submenu for Open Recent */}
-                       <div className="relative group/recent w-full">
-                          <button className="w-full text-left px-3 py-1.5 rounded-sm hover:bg-primary hover:text-primary-foreground text-foreground flex items-center justify-between group">
-                              <span className="text-xs">Open Recent</span>
-                              <ChevronRight size={12} className="text-muted-foreground group-hover:text-primary-foreground" />
-                          </button>
-                          
-                          {/* Absolute positioned submenu - using CSS to show on hover */}
-                          <div className="absolute left-full top-0 ml-1 w-48 bg-popover border border-border rounded shadow-xl hidden group-hover/recent:flex flex-col gap-0.5 p-1 z-[60]">
+                       {/* Nested Popover for Open Recent */}
+                       <Popover>
+                          <PopoverTrigger asChild onMouseEnter={handleSubmenuEnter}>
+                              <button className="w-full text-left px-3 py-1.5 rounded-sm hover:bg-primary hover:text-primary-foreground text-foreground flex items-center justify-between group">
+                                  <span className="text-xs">Open Recent</span>
+                                  <ChevronRight size={12} className="text-muted-foreground group-hover:text-primary-foreground" />
+                              </button>
+                          </PopoverTrigger>
+                          <PopoverContent side="right" align="start" sideOffset={4} className="w-48 p-1 flex flex-col gap-0.5 shadow-2xl z-[100]">
                              {recentProjects.length === 0 ? (
                                 <div className="px-3 py-2 text-[10px] text-muted-foreground italic">No recent files</div>
                              ) : (
@@ -120,8 +170,8 @@ export const Menubar: React.FC<MenubarProps> = ({
                                   )}
                                 </>
                              )}
-                          </div>
-                       </div>
+                          </PopoverContent>
+                       </Popover>
                      </React.Fragment>
                    );
                 }

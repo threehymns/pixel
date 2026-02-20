@@ -4,14 +4,16 @@ import {
   Pencil, Eraser, PaintBucket, Pipette, 
   Plus, Layers, Play, Pause, Trash2, 
   Copy, Eye, EyeOff, Grid, ZoomIn, ZoomOut,
-  ChevronLeft, ChevronRight, Square, Undo, Redo,
+  ChevronLeft, ChevronRight, ChevronUp, Square, Undo, Redo,
   Download, FilePlus, Upload, GripVertical, Menu,
   ChevronDown, Circle,
   BoxSelect, Lasso, Wand2, MousePointer2, Scissors,
   Check, Command, Search, X, File, Settings, HelpCircle,
   Home, Github, ArrowRightLeft, Edit2,
   Lock, Unlock, Folder, FolderOpen, Image,
-  Maximize, Info, AlertCircle, Clock, Minus
+  Maximize, Info, AlertCircle, Clock, Minus,
+  Share, Palette, Sparkles, Droplets, Zap, Waves,
+  FlipHorizontal, FlipVertical, Hand
 } from 'lucide-react';
 
 export const AngleIcon = ({ size = 24, ...props }: React.SVGProps<SVGSVGElement> & { size?: number }) => (
@@ -34,12 +36,14 @@ export {
   Pencil, Eraser, PaintBucket, Pipette, 
   Plus, Layers, Play, Pause, Trash2, 
   Copy, Eye, EyeOff, Grid, ZoomIn, ZoomOut,
-  ChevronLeft, ChevronRight, Square, Undo, Redo,
+  ChevronLeft, ChevronRight, ChevronUp, Square, Undo, Redo,
   Download, FilePlus, Upload, GripVertical, Menu,
   ChevronDown, Circle,
   BoxSelect, Lasso, Wand2, MousePointer2, Scissors,
   Check, Command, Search, X, File, Settings, HelpCircle,
   Home, Github, ArrowRightLeft, Edit2,
   Lock, Unlock, Folder, FolderOpen, Image,
-  Maximize, Info, AlertCircle, Clock, Minus
+  Maximize, Info, AlertCircle, Clock, Minus,
+  Share, Palette, Sparkles, Droplets, Zap, Waves,
+  FlipHorizontal, FlipVertical, Hand
 };

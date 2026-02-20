@@ -2,16 +2,16 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ProjectState } from '../types';
 import { getCoords } from '../utils';
-import { Play, Pause } from 'lucide-react'; // Removed GripVertical
+import { Play, Pause } from 'lucide-react';
 
 interface PreviewProps {
-  width: number;
+  width: number; // Ignored
   state: ProjectState;
-  // onResizeStart: (e: React.MouseEvent) => void; // Removed
 }
 
-export const Preview: React.FC<PreviewProps> = ({ width, state /*, onResizeStart */ }) => {
+export const Preview: React.FC<PreviewProps> = ({ state }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [previewFrame, setPreviewFrame] = useState(0);
   const [fps, setFps] = useState(12);
@@ -56,11 +56,15 @@ export const Preview: React.FC<PreviewProps> = ({ width, state /*, onResizeStart
       const pixels = frame.layerData[layer.id];
       if (!pixels) return;
 
-      pixels.forEach((color, i) => {
-        if (color) {
-          const { x, y } = getCoords(i, state.width);
-          ctx.fillStyle = color;
-          ctx.fillRect(x * scale, y * scale, scale, scale);
+      pixels.forEach((val, i) => {
+        // Fix: resolve hex color correctly from PixelValue (string | number | null).
+        if (val !== null) {
+          const color = typeof val === 'number' ? state.palette[val] : val;
+          if (color) {
+            const { x, y } = getCoords(i, state.width);
+            ctx.fillStyle = color;
+            ctx.fillRect(x * scale, y * scale, scale, scale);
+          }
         }
       });
     });
@@ -69,11 +73,8 @@ export const Preview: React.FC<PreviewProps> = ({ width, state /*, onResizeStart
 
   return (
     <div 
-        className="bg-card flex flex-col" // Removed border-l, shadow-lg, relative
-        style={{ width: width, minWidth: 200, maxWidth: 500 }}
+        className="bg-card flex flex-col w-full"
     >
-        {/* Resize Handle (Left) - REMOVED from here, moved to parent in App.tsx */}
-
       <div className="bg-secondary px-2 py-1 text-xs font-bold text-gray-300 flex justify-between items-center border-b border-background">
         <span>Preview</span>
         <div className="flex gap-1">
@@ -83,12 +84,12 @@ export const Preview: React.FC<PreviewProps> = ({ width, state /*, onResizeStart
         </div>
       </div>
       
-      <div className="p-4 flex items-center justify-center bg-muted flex-1">
+      <div className="p-4 flex items-center justify-center bg-muted flex-1 min-h-[150px]" ref={containerRef}>
         <canvas
           ref={canvasRef}
-          width={Math.min(width - 32, 200)}
-          height={Math.min(width - 32, 200)}
-          className="bg-muted-foreground/10 pixelated border border-border shadow-md"
+          width={160}
+          height={160}
+          className="bg-muted-foreground/10 pixelated border border-border shadow-md max-w-full max-h-full object-contain"
         />
       </div>
 
