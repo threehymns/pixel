@@ -1,6 +1,70 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ProjectState, Layer } from '../types';
 import { Eye, EyeOff, Lock, Unlock, Plus, Copy, Trash2, Check, GripVertical } from './Icons';
+import { hexToRgb } from '../utils';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "./ui/context-menu";
+
+const LayerThumbnail: React.FC<{ layerId: string, state: ProjectState }> = ({ layerId, state }) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const frame = state.frames[state.activeFrameIndex];
+    if (!frame) return;
+    const pixels = frame.layerData[layerId];
+    
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (!pixels) return;
+
+    const imgData = ctx.createImageData(state.width, state.height);
+    const data = imgData.data;
+
+    for (let i = 0; i < pixels.length; i++) {
+      const val = pixels[i];
+      const color = typeof val === 'number' ? state.palette[val] : val;
+      if (color) {
+        const [r, g, b] = hexToRgb(color);
+        const idx = i * 4;
+        data[idx] = r;
+        data[idx + 1] = g;
+        data[idx + 2] = b;
+        data[idx + 3] = 255;
+      }
+    }
+    
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = state.width;
+    tempCanvas.height = state.height;
+    tempCanvas.getContext('2d')?.putImageData(imgData, 0, 0);
+
+    ctx.imageSmoothingEnabled = false;
+    
+    const scale = Math.min(canvas.width / state.width, canvas.height / state.height);
+    const w = state.width * scale;
+    const h = state.height * scale;
+    const x = (canvas.width - w) / 2;
+    const y = (canvas.height - h) / 2;
+    
+    ctx.drawImage(tempCanvas, 0, 0, state.width, state.height, x, y, w, h);
+
+  }, [state.frames, state.activeFrameIndex, state.palette, state.width, state.height, layerId]);
+
+  return (
+    <div className="w-8 h-8 rounded-md bg-muted/30 border border-border overflow-hidden shrink-0 relative flex items-center justify-center" style={{ backgroundImage: 'conic-gradient(#1a1a1a 90deg, #2a2a2a 90deg 180deg, #1a1a1a 180deg 270deg, #2a2a2a 270deg)', backgroundSize: '8px 8px' }}>
+      <canvas ref={canvasRef} width={32} height={32} className="w-full h-full object-contain" />
+    </div>
+  );
+};
 
 interface LayersPanelProps {
   state: ProjectState;
@@ -128,106 +192,125 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   const isMultiLayer = state.selectedLayerIds.length > 1;
 
   return (
-    <div className={`flex flex-col bg-background select-none ${className}`}>
-      {/* Refined Compact Header */}
-      <div className="bg-[#2a2a2a] px-3 h-8 flex justify-between items-center border-b border-background shrink-0">
-        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Layers</span>
-        <div className="flex items-center gap-1">
+    <div className={`flex flex-col bg-muted/20 select-none ${className}`}>
+      {/* Header */}
+      <div className="px-2 py-1.5 flex justify-between items-center border-b border-border shrink-0">
+        <span className="text-[10px] font-semibold text-muted-foreground tracking-wide uppercase">Layers</span>
+        <div className="flex items-center gap-0.5">
             <button 
                 onClick={() => isMultiLayer ? onDeleteSelectedLayers() : onDeleteLayer(state.activeLayerId)} 
-                className="p-1 text-gray-500 hover:text-red-400 transition-colors"
+                className="p-0.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors"
                 title="Delete Layer"
             >
-                <Trash2 size={13} />
+                <Trash2 size={12} />
             </button>
             <button 
                 onClick={() => isMultiLayer ? onDuplicateSelectedLayers() : onDuplicateLayer(state.activeLayerId)} 
-                className="p-1 text-gray-500 hover:text-gray-300 transition-colors"
+                className="p-0.5 text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors"
                 title="Duplicate Layer"
             >
-                <Copy size={13} />
+                <Copy size={12} />
             </button>
-            <button onClick={onAddLayer} className="p-1 text-primary hover:text-primary/80 transition-colors" title="Add Layer">
+            <button onClick={onAddLayer} className="p-0.5 text-primary hover:bg-primary/10 rounded transition-colors" title="Add Layer">
               <Plus size={14} />
             </button>
         </div>
       </div>
 
-      {/* Compact List Container */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar p-1.5 space-y-0.5">
-        {state.layers.slice().reverse().map((layer) => {
-            const isDragging = dragState?.id === layer.id;
-            const isOver = dragState?.overId === layer.id;
-            const isActive = state.activeLayerId === layer.id;
-            const isSelected = state.selectedLayerIds.includes(layer.id);
+      {/* List Container */}
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-1 space-y-0">
+            {state.layers.slice().reverse().map((layer) => {
+                const isDragging = dragState?.id === layer.id;
+                const isOver = dragState?.overId === layer.id;
+                const isActive = state.activeLayerId === layer.id;
+                const isSelected = state.selectedLayerIds.includes(layer.id);
 
-            return (
-                <div 
-                    key={layer.id}
-                    draggable={!editingId}
-                    onDragStart={(e) => handleDragStart(e, layer.id)}
-                    onDragOver={(e) => handleDragOver(e, layer.id)}
-                    onDrop={(e) => handleDrop(e, layer.id)}
-                    onDragEnd={() => { setDragState(null); dragStateRef.current = null; }}
-                    onClick={(e) => handleLayerClick(e, layer.id)}
-                    onDoubleClick={() => startEditing(layer)}
-                    className={`
-                        flex items-center h-8 gap-2 px-2 rounded-[4px] relative border transition-all cursor-default
-                        ${isActive ? 'bg-[#1a1a1a] border-primary/40' : isSelected ? 'bg-secondary/40 border-border/50' : 'bg-transparent border-transparent hover:bg-secondary/20'}
-                        ${isDragging ? 'opacity-30' : ''}
-                    `}
-                >
-                    {/* Drop Indicators */}
-                    {isOver && dragState?.position === 'before' && (
-                        <div className="absolute top-0 left-0 w-full h-[2px] bg-primary z-50 pointer-events-none"></div>
-                    )}
-                    {isOver && dragState?.position === 'after' && (
-                        <div className="absolute bottom-0 left-0 w-full h-[2px] bg-primary z-50 pointer-events-none"></div>
-                    )}
+                return (
+                    <ContextMenu key={layer.id}>
+                      <ContextMenuTrigger asChild>
+                        <div 
+                            draggable={!editingId}
+                            onDragStart={(e) => handleDragStart(e, layer.id)}
+                            onDragOver={(e) => handleDragOver(e, layer.id)}
+                            onDrop={(e) => handleDrop(e, layer.id)}
+                            onDragEnd={() => { setDragState(null); dragStateRef.current = null; }}
+                            onClick={(e) => handleLayerClick(e, layer.id)}
+                            onDoubleClick={() => startEditing(layer)}
+                            className={`
+                                flex items-center h-8 gap-1.5 px-1.5 rounded-md relative transition-all cursor-default group
+                                ${isActive ? 'bg-primary/10 shadow-sm' : isSelected ? 'bg-secondary/40' : 'bg-transparent hover:bg-accent/50'}
+                                ${isDragging ? 'opacity-30' : ''}
+                            `}
+                        >
+                            {/* Drop Indicators */}
+                            {isOver && dragState?.position === 'before' && (
+                                <div className="absolute top-0 left-0 w-full h-[2px] bg-primary z-50 pointer-events-none rounded-full"></div>
+                            )}
+                            {isOver && dragState?.position === 'after' && (
+                                <div className="absolute bottom-0 left-0 w-full h-[2px] bg-primary z-50 pointer-events-none rounded-full"></div>
+                            )}
 
-                    {/* Dragger */}
-                    <div className="cursor-grab text-gray-600 hover:text-gray-400">
-                        <GripVertical size={12} />
-                    </div>
+                            {/* Vis Toggle */}
+                            <button 
+                                onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { visible: !layer.visible }); }}
+                                className={`p-0.5 rounded transition-colors ${!layer.visible ? 'text-muted-foreground/50 hover:text-muted-foreground hover:bg-accent' : isActive ? 'text-primary hover:bg-primary/20' : 'text-muted-foreground hover:text-foreground hover:bg-accent'}`}
+                            >
+                                {layer.visible ? <Eye size={12} /> : <EyeOff size={12} />}
+                            </button>
 
-                    {/* Vis Toggle */}
-                    <button 
-                        onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { visible: !layer.visible }); }}
-                        className={`p-1 transition-colors ${!layer.visible ? 'text-gray-700' : isActive ? 'text-primary' : 'text-gray-400'}`}
-                    >
-                        {layer.visible ? <Eye size={14} /> : <EyeOff size={14} />}
-                    </button>
-                    
-                    {/* Lock Toggle */}
-                    <button 
-                        onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { locked: !layer.locked }); }}
-                        className={`p-1 transition-colors ${!layer.locked ? 'text-gray-700 hover:text-gray-500' : 'text-orange-500/80'}`}
-                    >
-                        {layer.locked ? <Lock size={12} /> : <Unlock size={12} />}
-                    </button>
+                            {/* Thumbnail */}
+                            <LayerThumbnail layerId={layer.id} state={state} />
 
-                    <div className="flex-1 min-w-0">
-                        {editingId === layer.id ? (
-                            <input
-                                ref={editInputRef}
-                                value={editName}
-                                autoFocus
-                                onChange={(e) => setEditName(e.target.value)}
-                                onBlur={saveEditing}
-                                onKeyDown={(e) => { if (e.key === 'Enter') saveEditing(); if (e.key === 'Escape') setEditingId(null); }}
-                                className="w-full bg-input text-foreground px-1 py-0.5 text-[11px] rounded outline-none ring-1 ring-primary"
-                                onClick={(e) => e.stopPropagation()}
-                            />
-                        ) : (
-                            <div className={`truncate text-[11px] select-none ${isActive ? 'text-gray-100 font-medium' : 'text-gray-400'}`}>
-                                {layer.name}
+                            <div className="flex-1 min-w-0 flex flex-col justify-center">
+                                {editingId === layer.id ? (
+                                    <input
+                                        ref={editInputRef}
+                                        value={editName}
+                                        autoFocus
+                                        onChange={(e) => setEditName(e.target.value)}
+                                        onBlur={saveEditing}
+                                        onKeyDown={(e) => { if (e.key === 'Enter') saveEditing(); if (e.key === 'Escape') setEditingId(null); }}
+                                        className="w-full bg-background text-foreground px-1 py-0 text-[10px] rounded outline-none border border-primary focus:ring-0"
+                                        onClick={(e) => e.stopPropagation()}
+                                    />
+                                ) : (
+                                    <div className={`truncate text-[10px] ${isActive ? 'text-foreground font-medium' : 'text-muted-foreground group-hover:text-foreground transition-colors'}`}>
+                                        {layer.name}
+                                    </div>
+                                )}
                             </div>
-                        )}
-                    </div>
-                </div>
-            );
-        })}
-      </div>
+
+                            {/* Lock Toggle */}
+                            <button 
+                                onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { locked: !layer.locked }); }}
+                                className={`p-0.5 rounded transition-colors ${!layer.locked ? 'text-muted-foreground/30 hover:text-muted-foreground hover:bg-accent opacity-0 group-hover:opacity-100' : 'text-primary/80 hover:bg-primary/20 opacity-100'}`}
+                            >
+                                {layer.locked ? <Lock size={10} /> : <Unlock size={10} />}
+                            </button>
+
+                            {/* Dragger */}
+                            <div className="cursor-grab text-muted-foreground/30 hover:text-muted-foreground p-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <GripVertical size={10} />
+                            </div>
+                        </div>
+                      </ContextMenuTrigger>
+                      <ContextMenuContent>
+                        <ContextMenuItem onClick={() => startEditing(layer)}>Rename</ContextMenuItem>
+                        <ContextMenuItem onClick={() => onDuplicateLayer(layer.id)}>Duplicate</ContextMenuItem>
+                        <ContextMenuSeparator />
+                        <ContextMenuItem onClick={() => onDeleteLayer(layer.id)} className="text-destructive focus:text-destructive">Delete</ContextMenuItem>
+                      </ContextMenuContent>
+                    </ContextMenu>
+                );
+            })}
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem onClick={onAddLayer}>New Layer</ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
     </div>
   );
 };

@@ -60,7 +60,7 @@ export const TooltipTrigger = forwardRef<HTMLElement, TooltipTriggerProps>(
 
     if (asChild && React.isValidElement(children)) {
       const child = children as React.ReactElement<any>;
-      const existingAnchorName = (child.props.style?.anchorName) || (child.props.style?.['anchor-name']) || (style as any)?.anchorName;
+      const existingAnchorName = (child.props.style?.anchorName) || (style as any)?.anchorName;
       const mergedAnchorName = existingAnchorName ? `${existingAnchorName}, ${anchorName}` : anchorName;
 
       return React.cloneElement(child, {
@@ -71,7 +71,6 @@ export const TooltipTrigger = forwardRef<HTMLElement, TooltipTriggerProps>(
           ...child.props.style,
           ...style,
           anchorName: mergedAnchorName,
-          'anchor-name': mergedAnchorName,
         } as any,
         onMouseEnter: (e: React.MouseEvent<HTMLElement>) => {
           child.props.onMouseEnter?.(e);
@@ -99,7 +98,7 @@ export const TooltipTrigger = forwardRef<HTMLElement, TooltipTriggerProps>(
         {...props} 
         ref={ref}
         className={`inline-flex ${className || ''}`}
-        style={{ ...style, anchorName: mergedAnchorName, 'anchor-name': mergedAnchorName } as any}
+        style={{ ...style, anchorName: mergedAnchorName } as any}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
         onFocus={handleFocus}
@@ -127,7 +126,6 @@ export const TooltipContent = forwardRef<HTMLDivElement, TooltipContentProps>(
     let baseStyle: any = {
       position: 'fixed',
       positionAnchor: anchorName,
-      'position-anchor': anchorName,
       margin: 0,
       inset: 'auto',
       width: 'max-content',

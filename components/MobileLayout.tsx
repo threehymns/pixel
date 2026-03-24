@@ -6,6 +6,8 @@ import { Palette } from './Palette';
 import { LayersPanel } from './LayersPanel';
 import { Timeline } from './Timeline';
 import { Preview } from './Preview';
+import { ColorPicker } from './ColorPicker';
+import { Popover, PopoverTrigger, PopoverContent } from './Popover';
 import { 
   Menu, Undo, Redo, Share, Plus,
   Pencil, Eraser, PaintBucket, Pipette, MousePointer2,
@@ -14,9 +16,10 @@ import {
   Check, Play, Droplets, Zap,
   Grid, Eye, Hand, FlipHorizontal, FlipVertical,
   Settings, Waves, ChevronUp, ChevronDown, Wand2,
-  Sparkles
+  Sparkles, ArrowRightLeft, Palette as PaletteIcon
 } from './Icons';
 import { SELECTION_TOOLS } from '../constants';
+import { CustomSlider } from './ui/slider';
 
 interface MobileLayoutProps {
   state: ProjectState;
@@ -193,12 +196,12 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                                     <span className="text-[10px] font-bold text-muted-foreground uppercase">Brush Size</span>
                                     <span className="text-xs font-mono bg-muted px-2 py-0.5 rounded">{state.brushSize}px</span>
                                 </div>
-                                <input 
-                                    type="range" 
-                                    min="1" max="32" 
+                                <CustomSlider
+                                    min={1} 
+                                    max={32} 
                                     value={state.brushSize} 
-                                    onChange={(e) => updateState({...state, brushSize: parseInt(e.target.value)})}
-                                    className="w-full h-2 bg-secondary rounded-lg appearance-none cursor-pointer accent-primary"
+                                    onValueChange={(val) => updateState({...state, brushSize: val})}
+                                    className="w-full"
                                 />
                             </div>
                             
@@ -322,40 +325,81 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
             
             <div className="h-16 flex items-center px-4 gap-3">
                 {/* Active Color Preview */}
-                <button 
-                    onClick={() => setActivePanel('palette')} 
-                    className="group relative shrink-0 active:scale-90 transition-transform"
-                    aria-label="Active Color Palette"
-                >
-                    <div className="w-11 h-11 rounded-2xl border-2 border-white shadow-xl flex items-center justify-center overflow-hidden" style={{ backgroundColor: state.primaryColor }}>
-                        {state.inkType === 'shading' && <Droplets size={16} className="text-white/40 mix-blend-difference" />}
-                    </div>
-                    <div className="absolute -bottom-1 -right-1 w-5 h-5 rounded-lg border-2 border-card shadow-lg bg-secondary" style={{ backgroundColor: state.secondaryColor }} />
-                </button>
+                <div className="relative shrink-0 flex items-center justify-center w-12 h-12">
+                    <Popover>
+                        <PopoverTrigger asChild>
+                            <button 
+                                className="absolute inset-0 group active:scale-90 transition-transform z-10"
+                                aria-label="Primary Color"
+                            >
+                                <div className="w-11 h-11 rounded-2xl border-2 border-white shadow-xl flex items-center justify-center overflow-hidden" style={{ backgroundColor: state.primaryColor }}>
+                                    {state.inkType === 'shading' && <Droplets size={16} className="text-white/40 mix-blend-difference" />}
+                                </div>
+                            </button>
+                        </PopoverTrigger>
+                        <PopoverContent side="top" align="start" sideOffset={10} className="p-0 border-none bg-transparent shadow-none">
+                            <ColorPicker color={state.primaryColor} onChange={(c) => updateState({...state, primaryColor: c})} />
+                        </PopoverContent>
+                    </Popover>
+
+                    <Popover>
+                        <PopoverTrigger asChild>
+                            <button 
+                                className="absolute -bottom-1 -right-1 w-5 h-5 rounded-lg border-2 border-card shadow-lg z-0" 
+                                style={{ backgroundColor: state.secondaryColor }} 
+                                aria-label="Secondary Color"
+                            />
+                        </PopoverTrigger>
+                        <PopoverContent side="top" align="start" sideOffset={10} className="p-0 border-none bg-transparent shadow-none">
+                            <ColorPicker color={state.secondaryColor} onChange={(c) => updateState({...state, secondaryColor: c})} />
+                        </PopoverContent>
+                    </Popover>
+
+                    <button 
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            const p = state.primaryColor;
+                            updateState({...state, primaryColor: state.secondaryColor, secondaryColor: p});
+                            if (state.inkType === 'shading') {
+                                updateState({...state, primaryColor: state.secondaryColor, secondaryColor: p, shades: [...state.shades].reverse()});
+                            }
+                        }}
+                        className="absolute -bottom-2 -right-2 w-6 h-6 bg-card rounded-full border border-border flex items-center justify-center text-muted-foreground hover:text-foreground shadow-sm z-20 active:scale-90 transition-transform"
+                        title="Swap Colors (X)"
+                    >
+                        <ArrowRightLeft size={10} className="rotate-45" />
+                    </button>
+                </div>
 
                 <div className="w-[1px] h-8 bg-border/60 mx-1 shrink-0"></div>
                 
                 {/* Scrollable Tool Strip */}
                 <div className="flex-1 flex items-center gap-3 overflow-x-auto no-scrollbar scroll-smooth h-full mask-fade-edges">
-                    {tools.map(tool => (
-                        <button 
-                            key={tool.id} 
-                            onClick={() => updateState({ ...state, tool: tool.id })} 
-                            className={`shrink-0 flex flex-col items-center justify-center gap-1 min-w-[48px] h-full transition-all ${state.tool === tool.id ? 'text-primary scale-110' : 'text-muted-foreground/70 active:scale-90'}`}
-                            aria-label={`Select ${tool.label} Tool`}
-                        >
-                            <div className={`p-2.5 rounded-2xl transition-all ${state.tool === tool.id ? 'bg-primary/10 shadow-inner' : 'bg-transparent'}`}>
-                                {tool.icon}
-                            </div>
-                            <span className={`text-[8px] font-bold uppercase tracking-tight ${state.tool === tool.id ? 'opacity-100' : 'opacity-0'}`}>{tool.label}</span>
-                        </button>
-                    ))}
+                    <div className="flex items-center gap-3 h-full">
+                        {tools.map(tool => (
+                            <button 
+                                key={tool.id} 
+                                onClick={() => updateState({ ...state, tool: tool.id })} 
+                                className={`shrink-0 flex items-center justify-center min-w-[36px] h-[26px] rounded-md transition-all ${state.tool === tool.id ? 'bg-primary text-primary-foreground shadow-inner' : 'text-muted-foreground hover:bg-accent active:scale-95'}`}
+                                aria-label={`Select ${tool.label} Tool`}
+                            >
+                                {React.cloneElement(tool.icon as React.ReactElement, { size: 16 })}
+                            </button>
+                        ))}
+                    </div>
                 </div>
 
                 <div className="w-[1px] h-8 bg-border/60 mx-1 shrink-0"></div>
 
                 {/* Bottom Panel Toggles */}
                 <div className="flex items-center gap-1 shrink-0">
+                    <button 
+                        onClick={() => setActivePanel('palette')} 
+                        className={`p-2.5 rounded-2xl active:scale-90 transition-all ${activePanel === 'palette' ? 'bg-primary/10 text-primary' : 'text-muted-foreground'}`}
+                        aria-label="Palette Panel"
+                    >
+                        <PaletteIcon size={22} />
+                    </button>
                     <button 
                         onClick={() => setActivePanel('layers')} 
                         className={`p-2.5 rounded-2xl active:scale-90 transition-all ${activePanel === 'layers' ? 'bg-primary/10 text-primary' : 'text-muted-foreground'}`}
@@ -412,6 +456,9 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                                 onSelectPalette={project.selectPalette} 
                                 onImportPalette={project.importPalette} 
                                 onResizeStart={() => {}} 
+                                onColorsSelected={(selectedColors) => {
+                                    updateState({...state, shades: selectedColors, inkType: 'shading'});
+                                }}
                               />
                           </div>
                       )}
@@ -440,6 +487,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                                 onDeleteFrame={project.deleteFrame} 
                                 onDuplicateSelectedFrames={project.duplicateSelectedFrames} 
                                 onDeleteSelectedFrames={project.deleteSelectedFrames} 
+                                onInsertFrame={project.insertFrame}
                                 onTweenFrames={project.tweenFrames}
                                 onSelectLayer={(id) => updateState({...state, activeLayerId: id, selectedLayerIds: [id]})} 
                                 onAddLayer={project.addLayer} 
@@ -452,7 +500,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                       )}
                       {activePanel === 'preview' && ( 
                         <div className="h-[450px] flex flex-col bg-card overflow-hidden">
-                            <Preview state={state} width={0} />
+                            <Preview state={state} width={0} isFloating={false} />
                         </div> 
                       )}
                       {activePanel === 'menu' && (
@@ -463,7 +511,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                                     <span className="text-xs font-bold uppercase tracking-widest">New Sprite</span>
                                 </button>
                                 <button onClick={() => { fileInputRef.current?.click(); closePanel(); }} className="p-4 rounded-3xl bg-secondary/30 text-foreground flex flex-col items-center gap-3 active:scale-95 transition-transform border border-border">
-                                    <div className="w-12 h-12 bg-orange-500/10 rounded-2xl flex items-center justify-center"><Hand className="text-orange-500" size={24}/></div>
+                                    <div className="w-12 h-12 bg-primary/10 rounded-2xl flex items-center justify-center"><Hand className="text-primary" size={24}/></div>
                                     <span className="text-xs font-bold uppercase tracking-widest">Open File</span>
                                 </button>
                                 <button onClick={() => { project.saveProject(); closePanel(); }} className="p-4 rounded-3xl bg-secondary/30 text-foreground flex flex-col items-center gap-3 active:scale-95 transition-transform border border-border">

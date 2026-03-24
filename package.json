@@ -6,13 +6,18 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "lint": "tsc --noEmit",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@base-ui/react": "^1.2.0",
+    "@radix-ui/react-context-menu": "^2.2.16",
+    "allotment": "1.20.2",
+    "clsx": "^2.1.1",
+    "lucide-react": "0.460.0",
     "react": "19.0.0",
     "react-dom": "19.0.0",
-    "lucide-react": "0.460.0",
-    "allotment": "1.20.2"
+    "tailwind-merge": "^3.5.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

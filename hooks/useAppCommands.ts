@@ -125,11 +125,13 @@ export function useAppCommands({
         },
         { 
             id: 'view.grid', label: 'Toggle Grid', category: 'View', hotkey: 'Shift+G', keys: ['Shift+G'],
-            perform: () => updateState({...state, showGrid: !state.showGrid}) 
+            perform: () => updateState({...state, showGrid: !state.showGrid}),
+            checked: state.showGrid
         },
         { 
             id: 'view.onion', label: 'Toggle Onion Skin', category: 'View', hotkey: 'Shift+O', keys: ['Shift+O'],
-            perform: () => updateState({...state, onionSkin: !state.onionSkin}) 
+            perform: () => updateState({...state, onionSkin: !state.onionSkin}),
+            checked: state.onionSkin
         },
         { 
             id: 'layer.new', label: 'New Layer', category: 'Layer', hotkey: 'Shift+N', keys: ['Shift+N'],
@@ -149,7 +151,8 @@ export function useAppCommands({
         },
         { 
             id: 'sprite.dithering', label: 'Toggle Dithering', category: 'Sprite', 
-            perform: () => updateState({...state, ditheringEnabled: !state.ditheringEnabled})
+            perform: () => updateState({...state, ditheringEnabled: !state.ditheringEnabled}),
+            checked: state.ditheringEnabled
         },
         { 
             id: 'sprite.modeIndexed', label: 'Color Mode: Indexed', category: 'Sprite', 

@@ -2,6 +2,13 @@
 import React, { useState } from 'react';
 import { ProjectState } from '../types';
 import { Eye, EyeOff, Lock, Unlock, Plus, Copy, Trash2, GripVertical, FilePlus, Sparkles } from './Icons';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "./ui/context-menu";
 
 interface TimelineProps {
   state: ProjectState;
@@ -11,6 +18,7 @@ interface TimelineProps {
   onDeleteFrame: () => void;
   onDuplicateSelectedFrames: () => void;
   onDeleteSelectedFrames: () => void;
+  onInsertFrame: (index: number) => void;
   onTweenFrames: () => void;
   onSelectLayer: (id: string) => void;
   onToggleLayerVisibility: (id: string) => void;
@@ -35,6 +43,7 @@ export const Timeline: React.FC<TimelineProps> = ({
   onDeleteFrame,
   onDuplicateSelectedFrames,
   onDeleteSelectedFrames,
+  onInsertFrame,
   onTweenFrames,
   onSelectLayer,
   onToggleLayerVisibility,
@@ -127,6 +136,25 @@ export const Timeline: React.FC<TimelineProps> = ({
     setDragState(null);
   };
 
+  const handleInsertButtonDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    if (dragState?.type !== 'frame') return;
+    if (dragState.overId !== `insert-${index}`) {
+      setDragState({ ...dragState, overId: `insert-${index}`, position: 'before' });
+    }
+  };
+
+  const handleInsertButtonDrop = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    if (dragState?.type === 'frame') {
+       const fromIndex = parseInt(dragState.id);
+       let insertIndex = index;
+       if (fromIndex < insertIndex) insertIndex--;
+       onReorderFrames(fromIndex, insertIndex);
+    }
+    setDragState(null);
+  };
+
   const isMultiFrame = state.selectedFrameIndices.length > 1;
   const canTween = state.selectedFrameIndices.length >= 3;
 
@@ -181,7 +209,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                   <button onClick={(e) => { e.stopPropagation(); onToggleLayerVisibility(layer.id); }} className={`p-1 shrink-0 ${!layer.visible ? 'text-gray-800' : isActive ? 'text-primary' : 'text-gray-500'}`}>
                     {layer.visible ? <Eye size={13} /> : <EyeOff size={13} />}
                   </button>
-                  <button onClick={(e) => { e.stopPropagation(); onToggleLayerLock(layer.id); }} className={`p-1 shrink-0 ${!layer.locked ? 'text-gray-800' : 'text-orange-500/50'}`}>
+                  <button onClick={(e) => { e.stopPropagation(); onToggleLayerLock(layer.id); }} className={`p-1 shrink-0 ${!layer.locked ? 'text-gray-800' : 'text-primary/50'}`}>
                     {layer.locked ? <Lock size={11} /> : <Unlock size={11} />}
                   </button>
                   <span className={`truncate flex-1 text-[11px] ${isActive ? 'text-gray-100 font-medium' : 'text-gray-400'}`}>{layer.name}</span>
@@ -191,70 +219,112 @@ export const Timeline: React.FC<TimelineProps> = ({
         </div>
 
         {/* Frames Grid (Right) */}
-        <div className="flex-1 overflow-x-auto bg-[#171717] relative custom-scrollbar">
-           <div className="flex flex-col min-w-max">
-             {/* Header Row for Frame Numbers */}
-             <div className="flex h-8 border-b border-background bg-muted">
-                {state.frames.map((_, idx) => {
-                  const isDragging = dragState?.type === 'frame' && dragState.id === idx.toString();
-                  const isOver = dragState?.type === 'frame' && dragState.overId === idx.toString();
-                  const isActive = state.activeFrameIndex === idx;
-                  const isSelected = state.selectedFrameIndices.includes(idx);
-
-                  return (
-                    <div 
-                        key={idx} 
-                        draggable
-                        onDragStart={(e) => handleFrameDragStart(e, idx)}
-                        onDragOver={(e) => handleFrameDragOver(e, idx)}
-                        onDrop={(e) => handleFrameDrop(e, idx)}
-                        onDragEnd={() => setDragState(null)}
-                        onClick={(e) => handleFrameClick(e, idx)}
-                        className={`min-w-[40px] w-10 border-r border-background flex items-center justify-center text-[10px] cursor-pointer hover:bg-secondary/30 relative
-                        ${isActive ? 'bg-[#1a1a1a] text-primary font-bold shadow-[inset_0_-2px_0_var(--primary)]' : isSelected ? 'bg-secondary/40 text-foreground' : 'text-gray-600'}
-                        ${isDragging ? 'opacity-30' : ''}
-                        `}
-                    >
-                        {isOver && dragState.position === 'before' && <div className="absolute top-0 left-0 h-full w-[2px] bg-primary z-50 pointer-events-none" />}
-                        {isOver && dragState.position === 'after' && <div className="absolute top-0 right-0 h-full w-[2px] bg-primary z-50 pointer-events-none" />}
-                        {idx + 1}
-                    </div>
-                  );
-                })}
-             </div>
-             
-             {/* Frame Cells */}
-             <div className="flex flex-col">
-                {state.layers.slice().reverse().map((layer) => (
-                  <div key={layer.id} className="flex h-8 border-b border-background">
-                    {state.frames.map((frame, frameIdx) => {
-                      const hasContent = frame.layerData[layer.id]?.some(p => p !== null);
-                      const isActive = state.activeFrameIndex === frameIdx && state.activeLayerId === layer.id;
-                      const isFrameSelected = state.selectedFrameIndices.includes(frameIdx);
-                      const isLayerSelected = state.selectedLayerIds.includes(layer.id);
-                      
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <div className="flex-1 overflow-x-auto bg-[#171717] relative custom-scrollbar">
+               <div className="flex flex-col min-w-max relative">
+                 {/* Insert Buttons Overlay */}
+                 <div className="absolute top-0 left-0 w-full h-8 pointer-events-none z-30">
+                    {Array.from({ length: state.frames.length + 1 }).map((_, i) => {
+                      const isOver = dragState?.type === 'frame' && dragState.overId === `insert-${i}`;
                       return (
                         <div 
-                          key={`${layer.id}-${frame.id}`}
-                          onClick={(e) => {
-                            if (e.shiftKey || e.ctrlKey || e.metaKey) handleFrameClick(e, frameIdx);
-                            else { onSelectFrames([frameIdx], frameIdx); onSelectLayer(layer.id); }
-                          }}
-                          className={`min-w-[40px] w-10 border-r border-background flex items-center justify-center cursor-pointer relative transition-colors
-                             ${isActive ? 'bg-primary/10' : (isFrameSelected || isLayerSelected) ? 'bg-secondary/10' : 'hover:bg-white/[0.02]'}
-                          `}
+                          key={`insert-${i}`}
+                          onDragOver={(e) => handleInsertButtonDragOver(e, i)}
+                          onDrop={(e) => handleInsertButtonDrop(e, i)}
+                          className="absolute top-0 bottom-0 w-4 -ml-2 pointer-events-auto group flex items-center justify-center cursor-pointer"
+                          style={{ left: i * 40 }}
                         >
-                          {hasContent && (
-                            <div className={`w-2.5 h-2.5 rounded-full transition-transform ${isActive ? 'bg-primary scale-110 shadow-[0_0_8px_rgba(var(--primary),0.5)]' : isFrameSelected || isLayerSelected ? 'bg-gray-400' : 'bg-gray-700'}`}></div>
-                          )}
+                           <div className={`w-[2px] h-full bg-primary transition-opacity ${isOver ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`} />
+                           <button 
+                             onClick={() => onInsertFrame(i)}
+                             className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 bg-primary text-white rounded-full opacity-0 group-hover:opacity-100 flex items-center justify-center shadow-lg hover:scale-125 transition-all"
+                             title="Insert Frame"
+                           >
+                             <Plus size={10} />
+                           </button>
                         </div>
                       );
                     })}
-                  </div>
-                ))}
-             </div>
-           </div>
-        </div>
+                 </div>
+
+                 {/* Header Row for Frame Numbers */}
+                 <div className="flex h-8 border-b border-background bg-muted">
+                    {state.frames.map((_, idx) => {
+                      const isDragging = dragState?.type === 'frame' && dragState.id === idx.toString();
+                      const isOver = dragState?.type === 'frame' && dragState.overId === idx.toString();
+                      const isActive = state.activeFrameIndex === idx;
+                      const isSelected = state.selectedFrameIndices.includes(idx);
+
+                      return (
+                        <ContextMenu key={idx}>
+                          <ContextMenuTrigger asChild>
+                            <div 
+                                draggable
+                                onDragStart={(e) => handleFrameDragStart(e, idx)}
+                                onDragOver={(e) => handleFrameDragOver(e, idx)}
+                                onDrop={(e) => handleFrameDrop(e, idx)}
+                                onDragEnd={() => setDragState(null)}
+                                onClick={(e) => handleFrameClick(e, idx)}
+                                className={`min-w-[40px] w-10 border-r border-background flex items-center justify-center text-[10px] cursor-pointer hover:bg-secondary/30 relative
+                                ${isActive ? 'bg-[#1a1a1a] text-primary font-bold shadow-[inset_0_-2px_0_var(--primary)]' : isSelected ? 'bg-secondary/40 text-foreground' : 'text-gray-600'}
+                                ${isDragging ? 'opacity-30' : ''}
+                                `}
+                            >
+                                {isOver && dragState.position === 'before' && <div className="absolute top-0 left-0 h-full w-[2px] bg-primary z-50 pointer-events-none" />}
+                                {isOver && dragState.position === 'after' && <div className="absolute top-0 right-0 h-full w-[2px] bg-primary z-50 pointer-events-none" />}
+                                {idx + 1}
+                            </div>
+                          </ContextMenuTrigger>
+                          <ContextMenuContent>
+                            <ContextMenuItem onClick={() => { onSelectFrames([idx], idx); onDuplicateFrame(); }}>Duplicate</ContextMenuItem>
+                            <ContextMenuItem onClick={() => onInsertFrame(idx)}>Insert Before</ContextMenuItem>
+                            <ContextMenuItem onClick={() => onInsertFrame(idx + 1)}>Insert After</ContextMenuItem>
+                            <ContextMenuSeparator />
+                            <ContextMenuItem onClick={() => { onSelectFrames([idx], idx); onDeleteFrame(); }} className="text-destructive focus:text-destructive">Delete</ContextMenuItem>
+                          </ContextMenuContent>
+                        </ContextMenu>
+                      );
+                    })}
+                 </div>
+                 
+                 {/* Frame Cells */}
+                 <div className="flex flex-col">
+                    {state.layers.slice().reverse().map((layer) => (
+                      <div key={layer.id} className="flex h-8 border-b border-background">
+                        {state.frames.map((frame, frameIdx) => {
+                          const hasContent = frame.layerData[layer.id]?.some(p => p !== null);
+                          const isActive = state.activeFrameIndex === frameIdx && state.activeLayerId === layer.id;
+                          const isFrameSelected = state.selectedFrameIndices.includes(frameIdx);
+                          const isLayerSelected = state.selectedLayerIds.includes(layer.id);
+                          
+                          return (
+                            <div 
+                              key={`${layer.id}-${frame.id}`}
+                              onClick={(e) => {
+                                if (e.shiftKey || e.ctrlKey || e.metaKey) handleFrameClick(e, frameIdx);
+                                else { onSelectFrames([frameIdx], frameIdx); onSelectLayer(layer.id); }
+                              }}
+                              className={`min-w-[40px] w-10 border-r border-background flex items-center justify-center cursor-pointer relative transition-colors
+                                 ${isActive ? 'bg-primary/10' : (isFrameSelected || isLayerSelected) ? 'bg-secondary/10' : 'hover:bg-white/[0.02]'}
+                              `}
+                            >
+                              {hasContent && (
+                                <div className={`w-2.5 h-2.5 rounded-full transition-transform ${isActive ? 'bg-primary scale-110 shadow-[0_0_8px_rgba(var(--primary),0.5)]' : isFrameSelected || isLayerSelected ? 'bg-gray-400' : 'bg-gray-700'}`}></div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ))}
+                 </div>
+               </div>
+            </div>
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuItem onClick={onAddFrame}>New Frame</ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
       </div>
     </div>
   );

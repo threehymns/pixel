@@ -1,6 +1,6 @@
 import React, { useRef, useEffect } from 'react';
 import { ProjectInstance } from '../types';
-import { Plus, X, Home } from './Icons';
+import { Plus, X, Home } from 'lucide-react';
 
 interface TabStripProps {
     projects: ProjectInstance[];
@@ -30,24 +30,25 @@ export const TabStrip: React.FC<TabStripProps> = ({
     }, [activeProjectId]);
 
     return (
-        <div className="flex bg-muted h-9 border-b border-background pt-1 px-1 gap-1 select-none overflow-hidden">
+        <div className="flex bg-muted/30 h-8 border-b border-border px-2 gap-1 select-none overflow-hidden shrink-0 items-end">
             <button
                 onClick={() => onSelectProject('home')}
                 className={`
-                    flex items-center justify-center w-10 h-full rounded-t-sm border-t border-x
+                    flex items-center justify-center w-10 h-7 rounded-t-md transition-colors
                     ${activeProjectId === 'home' 
-                        ? 'bg-secondary border-secondary text-orange-500' 
-                        : 'bg-transparent border-transparent text-muted-foreground hover:bg-background hover:text-foreground'}
+                        ? 'bg-card text-primary shadow-[0_-1px_2px_rgba(0,0,0,0.05)]' 
+                        : 'bg-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground'}
                 `}
                 title="Home"
             >
-                <Home size={16} />
+                <Home size={14} />
             </button>
-            <div className="w-[1px] h-5 bg-border my-auto mx-1"></div>
+            
+            <div className="w-[1px] h-4 bg-border/50 my-auto mx-1"></div>
             
             <div 
                 ref={scrollRef}
-                className="flex-1 flex overflow-x-auto custom-scrollbar gap-0.5"
+                className="flex-1 flex overflow-x-auto no-scrollbar gap-1 h-full items-end"
                 onWheel={(e) => {
                     if (e.deltaY !== 0) {
                         e.currentTarget.scrollLeft += e.deltaY;
@@ -65,17 +66,17 @@ export const TabStrip: React.FC<TabStripProps> = ({
                             data-active={isActive}
                             onClick={() => onSelectProject(p.data.id)}
                             className={`
-                                group flex items-center min-w-[120px] max-w-[200px] h-full px-3 gap-2 rounded-t-sm cursor-pointer border-t border-x text-xs
+                                group flex items-center min-w-[120px] max-w-[200px] h-7 px-3 gap-2 rounded-t-md cursor-pointer text-xs transition-colors
                                 ${isActive 
-                                    ? 'bg-secondary border-secondary text-foreground' 
-                                    : 'bg-background/50 border-transparent text-muted-foreground hover:bg-background hover:text-foreground'}
+                                    ? 'bg-card text-foreground shadow-[0_-1px_2px_rgba(0,0,0,0.05)]' 
+                                    : 'bg-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground'}
                             `}
                         >
-                            <span className="flex-1 truncate">{p.data.title}</span>
+                            <span className="flex-1 truncate font-medium">{p.data.title}</span>
                             
                             <div className="ml-1 w-4 h-4 flex items-center justify-center relative">
                                 {isDirty && (
-                                    <div className={`w-2 h-2 rounded-full group-hover:opacity-0 transition-opacity ${isActive ? 'bg-primary' : 'bg-foreground'}`} />
+                                    <div className={`w-1.5 h-1.5 rounded-full group-hover:opacity-0 transition-opacity ${isActive ? 'bg-primary' : 'bg-muted-foreground'}`} />
                                 )}
                                 <button
                                     onClick={(e) => {
@@ -85,10 +86,10 @@ export const TabStrip: React.FC<TabStripProps> = ({
                                     className={`
                                         absolute inset-0 flex items-center justify-center rounded-sm transition-all
                                         ${isDirty 
-                                            ? 'opacity-0 group-hover:opacity-100 hover:bg-white/10 hover:text-white' 
+                                            ? 'opacity-0 group-hover:opacity-100 hover:bg-muted hover:text-foreground' 
                                             : isActive 
-                                                ? 'opacity-50 hover:opacity-100 hover:bg-white/10 hover:text-white' 
-                                                : 'opacity-0 group-hover:opacity-100 hover:bg-white/10 hover:text-white'}
+                                                ? 'opacity-50 hover:opacity-100 hover:bg-muted hover:text-foreground' 
+                                                : 'opacity-0 group-hover:opacity-100 hover:bg-muted hover:text-foreground'}
                                     `}
                                 >
                                     <X size={12} />
@@ -98,13 +99,15 @@ export const TabStrip: React.FC<TabStripProps> = ({
                     );
                 })}
             </div>
-            <button
-                onClick={onNewProject}
-                className="w-8 h-8 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary rounded-sm"
-                title="New Project"
-            >
-                <Plus size={16} />
-            </button>
+            <div className="flex items-center h-full pb-0.5">
+                <button
+                    onClick={onNewProject}
+                    className="w-6 h-6 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors"
+                    title="New Project"
+                >
+                    <Plus size={14} />
+                </button>
+            </div>
         </div>
     );
 };

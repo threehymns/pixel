@@ -687,6 +687,23 @@ export function useProject() {
     );
   }, [state, updateState, activeProjectId]);
 
+  const insertFrame = useCallback((index: number) => {
+    if (activeProjectId === 'home') return;
+    const newFrame: Frame = { id: `frame-${Date.now()}`, layerData: {} };
+    state.layers.forEach(l => newFrame.layerData[l.id] = new Array(state.width * state.height).fill(null));
+    const newFrames = [...state.frames];
+    newFrames.splice(index, 0, newFrame);
+    updateState(
+        { 
+          ...state, 
+          frames: newFrames, 
+          activeFrameIndex: index,
+          selectedFrameIndices: [index]
+        }, 
+        { action: 'Insert Frame' }
+    );
+  }, [state, updateState, activeProjectId]);
+
   const tweenFrames = useCallback(() => {
     if (activeProjectId === 'home') return;
     const selected = [...state.selectedFrameIndices].sort((a, b) => a - b);
@@ -1013,6 +1030,7 @@ export function useProject() {
     duplicateSelectedFrames,
     deleteFrame,
     deleteSelectedFrames,
+    insertFrame,
     tweenFrames,
     addLayer,
     deleteLayer,

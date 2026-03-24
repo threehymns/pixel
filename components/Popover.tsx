@@ -34,7 +34,7 @@ export const PopoverTrigger = React.forwardRef<HTMLButtonElement, PopoverTrigger
 
     if (asChild && React.isValidElement(children)) {
       const child = children as React.ReactElement<any>;
-      const existingAnchorName = (child.props.style?.anchorName) || (child.props.style?.['anchor-name']) || (style as any)?.anchorName;
+      const existingAnchorName = (child.props.style?.anchorName) || (style as any)?.anchorName;
       const mergedAnchorName = existingAnchorName ? `${existingAnchorName}, ${anchorName}` : anchorName;
 
       return React.cloneElement(child, {
@@ -45,7 +45,6 @@ export const PopoverTrigger = React.forwardRef<HTMLButtonElement, PopoverTrigger
           ...child.props.style,
           ...style,
           anchorName: mergedAnchorName,
-          'anchor-name': mergedAnchorName,
         } as any,
         popoverTarget: id,
         onClick: (e: React.MouseEvent<HTMLButtonElement>) => {
@@ -62,7 +61,7 @@ export const PopoverTrigger = React.forwardRef<HTMLButtonElement, PopoverTrigger
         {...props} 
         ref={ref} 
         className={className}
-        style={{ ...style, anchorName: mergedAnchorName, 'anchor-name': mergedAnchorName } as any}
+        style={{ ...style, anchorName: mergedAnchorName } as any}
         popoverTarget={id}
         onClick={onClick}
       >
@@ -86,7 +85,6 @@ export const PopoverContent = React.forwardRef<HTMLDivElement, PopoverContentPro
     let baseStyle: any = {
         position: 'fixed',
         positionAnchor: anchorName,
-        'position-anchor': anchorName,
         margin: 0,
         inset: 'auto',
         width: 'max-content',

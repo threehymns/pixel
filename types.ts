@@ -144,6 +144,7 @@ export interface Command {
   keys?: string[]; // Code matchers, e.g. ["Control+z", "Meta+z"]
   perform: () => void;
   disabled?: boolean;
+  checked?: boolean;
 }
 
 // --- File System Access API Types (Partial) ---

@@ -54,7 +54,7 @@ export const Menubar: React.FC<MenubarProps> = ({
   };
 
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex items-center gap-0.5">
       {categories.map(category => {
         const categoryCommands = commands.filter(c => c.category === category);
         
@@ -64,11 +64,11 @@ export const Menubar: React.FC<MenubarProps> = ({
               asChild 
               onMouseEnter={handleMouseEnter}
             >
-              <button className="px-3 py-1 text-sm text-gray-300 hover:bg-accent rounded-sm focus:outline-none focus:bg-accent data-[state=open]:bg-accent">
+              <button className="px-2.5 py-1 text-[13px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-md focus:outline-none focus:bg-muted/50 data-[state=open]:bg-muted/50 data-[state=open]:text-foreground transition-colors">
                 {category}
               </button>
             </PopoverTrigger>
-            <PopoverContent align="start" sideOffset={2} className="w-56 p-1 flex flex-col gap-0.5 overflow-visible">
+            <PopoverContent align="start" sideOffset={4} className="w-56 p-1 flex flex-col gap-0.5 overflow-visible shadow-lg border-border/50 bg-card/95 backdrop-blur-sm rounded-lg">
               {categoryCommands.map(cmd => {
                 // Special handling to group Color Mode commands into a nested Popover
                 if (cmd.id === 'sprite.modeRGBA') return null; 
@@ -85,7 +85,7 @@ export const Menubar: React.FC<MenubarProps> = ({
                                     <ChevronRight size={12} className="text-muted-foreground group-hover:text-primary-foreground" />
                                 </button>
                             </PopoverTrigger>
-                            <PopoverContent side="right" align="start" sideOffset={4} className="w-44 p-1 flex flex-col gap-0.5 shadow-2xl z-[100]">
+                            <PopoverContent side="right" align="start" sideOffset={4} className="w-44 p-1 flex flex-col gap-0.5 shadow-lg border border-border/50 bg-card/95 backdrop-blur-sm rounded-lg z-[100]">
                                 <PopoverClose asChild>
                                     <button 
                                         onClick={indexedCmd.perform}
@@ -120,7 +120,14 @@ export const Menubar: React.FC<MenubarProps> = ({
                             disabled={cmd.disabled}
                             className="w-full text-left px-3 py-1.5 rounded-sm hover:bg-primary hover:text-primary-foreground text-foreground flex items-center justify-between group disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                            <span className="text-xs">{cmd.label}</span>
+                            <span className="text-xs flex items-center gap-2">
+                                {cmd.checked !== undefined && (
+                                    <span className="w-3 flex justify-center">
+                                        {cmd.checked && <Check size={12} className="text-foreground group-hover:text-primary-foreground" />}
+                                    </span>
+                                )}
+                                {cmd.label}
+                            </span>
                             {cmd.hotkey && (
                                 <span className="text-[10px] text-muted-foreground group-hover:text-primary-foreground/80">{cmd.hotkey}</span>
                             )}
@@ -140,7 +147,7 @@ export const Menubar: React.FC<MenubarProps> = ({
                                   <ChevronRight size={12} className="text-muted-foreground group-hover:text-primary-foreground" />
                               </button>
                           </PopoverTrigger>
-                          <PopoverContent side="right" align="start" sideOffset={4} className="w-48 p-1 flex flex-col gap-0.5 shadow-2xl z-[100]">
+                          <PopoverContent side="right" align="start" sideOffset={4} className="w-48 p-1 flex flex-col gap-0.5 shadow-lg border border-border/50 bg-card/95 backdrop-blur-sm rounded-lg z-[100]">
                              {recentProjects.length === 0 ? (
                                 <div className="px-3 py-2 text-[10px] text-muted-foreground italic">No recent files</div>
                              ) : (

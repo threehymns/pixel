@@ -2,7 +2,7 @@
 import React, { useRef, useEffect, useState, useCallback, useLayoutEffect } from 'react';
 import { ProjectState, Position, Modifiers, PixelGrid, PixelValue } from '../types';
 import { 
-  drawCheckeredBackground, getIndex, getCoords,
+  getIndex, getCoords,
   getRectSelection, getEllipseSelection, getPolygonSelection, getWandSelection,
   hexToRgb, getSelectionBoundingBox, rotateSelectionPixels, scaleSelectionPixels
 } from '../utils';
@@ -36,11 +36,27 @@ export const Canvas: React.FC<CanvasProps> = ({
   onMousePosUpdate
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const artCanvasRef = useRef<HTMLCanvasElement>(null);
+  const uiCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const cursorRef = useRef<HTMLDivElement>(null);
   const mousePosRef = useRef<{x: number, y: number}>({ x: -100, y: -100 });
   const touchTimeoutRef = useRef<number | null>(null);
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+
+  useLayoutEffect(() => {
+    const updateSize = () => {
+      if (containerRef.current) {
+        setContainerSize({
+          width: containerRef.current.clientWidth,
+          height: containerRef.current.clientHeight
+        });
+      }
+    };
+    updateSize();
+    window.addEventListener('resize', updateSize);
+    return () => window.removeEventListener('resize', updateSize);
+  }, []);
   
   const callbacks = useRef({ onDrawStart, onDraw, onDrawEnd });
   useEffect(() => {
@@ -51,6 +67,22 @@ export const Canvas: React.FC<CanvasProps> = ({
   const [cursorPos, setCursorPos] = useState<{x: number, y: number} | null>(null);
   const [showCursor, setShowCursor] = useState(false);
   const [pan, setPan] = useState<Position>({ x: 0, y: 0 });
+  const [localZoom, setLocalZoom] = useState(state.zoom);
+  const panRef = useRef<Position>({ x: 0, y: 0 });
+  const zoomRef = useRef(state.zoom);
+  
+  useEffect(() => {
+    panRef.current = pan;
+  }, [pan]);
+
+  useEffect(() => {
+    zoomRef.current = localZoom;
+  }, [localZoom]);
+
+  useEffect(() => {
+    setLocalZoom(state.zoom);
+  }, [state.zoom]);
+
   const [startPos, setStartPos] = useState<Position | null>(null);
   const [polyPoints, setPolyPoints] = useState<Position[]>([]);
   const [dashOffset, setDashOffset] = useState(0);
@@ -79,8 +111,8 @@ export const Canvas: React.FC<CanvasProps> = ({
   useLayoutEffect(() => {
     if (containerRef.current) {
         const { clientWidth, clientHeight } = containerRef.current;
-        const contentW = state.width * state.zoom;
-        const contentH = state.height * state.zoom;
+        const contentW = state.width * localZoom;
+        const contentH = state.height * localZoom;
         setPan({
             x: (clientWidth - contentW) / 2,
             y: (clientHeight - contentH) / 2
@@ -99,13 +131,15 @@ export const Canvas: React.FC<CanvasProps> = ({
   }, []);
 
   const getPixelCoords = useCallback((clientX: number, clientY: number) => {
-    if (!canvasRef.current) return null;
-    const rect = canvasRef.current.getBoundingClientRect();
-    const scale = state.zoom;
-    const x = Math.floor((clientX - rect.left) / scale);
-    const y = Math.floor((clientY - rect.top) / scale);
+    if (!containerRef.current) return null;
+    const rect = containerRef.current.getBoundingClientRect();
+    const mx = clientX - rect.left;
+    const my = clientY - rect.top;
+    
+    const x = Math.floor((mx - pan.x) / localZoom);
+    const y = Math.floor((my - pan.y) / localZoom);
     return { x, y };
-  }, [state.zoom]);
+  }, [localZoom, pan]);
 
   const updateCustomCursor = (clientX: number, clientY: number) => {
     mousePosRef.current = { x: clientX, y: clientY };
@@ -374,26 +408,35 @@ export const Canvas: React.FC<CanvasProps> = ({
     e.preventDefault();
     const container = containerRef.current;
     if (!container) return;
-    if (e.ctrlKey) {
-        const rect = container.getBoundingClientRect();
-        const mx = e.clientX - rect.left;
-        const my = e.clientY - rect.top;
-        const cx = mx - pan.x;
-        const cy = my - pan.y;
-        let delta = e.deltaY;
-        if (e.deltaMode === 1) delta *= 33;
-        const ZOOM_SPEED = 0.006;
-        const newZoom = Math.min(Math.max(state.zoom * Math.exp(-delta * ZOOM_SPEED), 0.1), 128);
-        let newPanX = mx - (cx / state.zoom) * newZoom;
-        let newPanY = my - (cy / state.zoom) * newZoom;
-        setPan({ x: newPanX, y: newPanY });
-        onZoom(newZoom);
-    } else {
-        const dX = e.deltaX * (e.deltaMode === 1 ? 33 : 1);
-        const dY = e.deltaY * (e.deltaMode === 1 ? 33 : 1);
-        setPan(prev => ({ x: prev.x - dX, y: prev.y - dY }));
-    }
-  }, [state.zoom, pan, onZoom]);
+    
+    requestAnimationFrame(() => {
+        const currentPan = panRef.current;
+        const currentZoom = zoomRef.current;
+        
+        // Zoom logic (Ctrl + Wheel)
+        if (e.ctrlKey) {
+            const rect = container.getBoundingClientRect();
+            const mx = e.clientX - rect.left;
+            const my = e.clientY - rect.top;
+            const cx = mx - currentPan.x;
+            const cy = my - currentPan.y;
+            let delta = e.deltaY;
+            if (e.deltaMode === 1) delta *= 33;
+            const ZOOM_SPEED = 0.006;
+            const newZoom = Math.min(Math.max(currentZoom * Math.exp(-delta * ZOOM_SPEED), 0.1), 128);
+            let newPanX = mx - (cx / currentZoom) * newZoom;
+            let newPanY = my - (cy / currentZoom) * newZoom;
+            setPan({ x: newPanX, y: newPanY });
+            setLocalZoom(newZoom);
+            onZoom(newZoom);
+        } else {
+            // Pan logic
+            const dX = e.deltaX * (e.deltaMode === 1 ? 33 : 1);
+            const dY = e.deltaY * (e.deltaMode === 1 ? 33 : 1);
+            setPan(prev => ({ x: prev.x - dX, y: prev.y - dY }));
+        }
+    });
+  }, [onZoom]);
 
   const handleTouchStart = useCallback((e: TouchEvent) => {
      // Cancel any pending draw trigger
@@ -416,7 +459,7 @@ export const Canvas: React.FC<CanvasProps> = ({
          const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
          const cx = (t1.clientX + t2.clientX) / 2;
          const cy = (t1.clientY + t2.clientY) / 2;
-         gestureState.current = { startZoom: state.zoom, startDist: dist, startPan: { ...pan }, startCenter: { x: cx, y: cy } };
+         gestureState.current = { startZoom: zoomRef.current, startDist: dist, startPan: { ...panRef.current }, startCenter: { x: cx, y: cy } };
      } else if (e.touches.length === 1) {
          e.preventDefault();
          const t = e.touches[0];
@@ -428,7 +471,7 @@ export const Canvas: React.FC<CanvasProps> = ({
              touchTimeoutRef.current = null;
          }, 45);
      }
-  }, [state.zoom, pan, isDrawing, handlePointerDown]);
+  }, [isDrawing, handlePointerDown]);
 
   const handleTouchMove = useCallback((e: TouchEvent) => {
       if (e.touches.length >= 2) {
@@ -458,6 +501,7 @@ export const Canvas: React.FC<CanvasProps> = ({
          let newPanX = mx - (canvasX / startZoom) * newZoom + dx;
          let newPanY = my - (canvasY / startZoom) * newZoom + dy;
          setPan({ x: newPanX, y: newPanY });
+         setLocalZoom(newZoom);
          onZoom(newZoom);
       } else if (e.touches.length === 1) {
           // Only move if we aren't waiting for a potential second finger
@@ -493,11 +537,13 @@ export const Canvas: React.FC<CanvasProps> = ({
     };
   }, [handleWheel, handleTouchStart, handleTouchMove, handleTouchEnd]);
 
+  // Art Rendering Effect (Double Buffered)
   useEffect(() => {
-    const canvas = canvasRef.current;
+    const canvas = artCanvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d', { alpha: true });
     if (!ctx) return;
+    
     if (!offscreenCanvasRef.current) offscreenCanvasRef.current = document.createElement('canvas');
     const offscreen = offscreenCanvasRef.current;
     if (offscreen.width !== state.width || offscreen.height !== state.height) {
@@ -505,11 +551,11 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
     const offCtx = offscreen.getContext('2d');
     if (!offCtx) return;
+    
     const imgData = offCtx.createImageData(state.width, state.height);
     const data = imgData.data;
-    ctx.imageSmoothingEnabled = false;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    drawCheckeredBackground(ctx, state.width, state.height, state.zoom);
+    
+    // 1. Draw Onion Skin to offscreen
     if (state.onionSkin && state.activeFrameIndex > 0) {
       const prevFrame = state.frames[state.activeFrameIndex - 1];
       data.fill(0);
@@ -523,24 +569,28 @@ export const Canvas: React.FC<CanvasProps> = ({
             if (color) {
                 const [r, g, b] = hexToRgb(color);
                 const idx = i * 4;
-                data[idx] = r; data[idx+1] = g; data[idx+2] = b; data[idx+3] = 255; 
+                data[idx] = r; data[idx+1] = g; data[idx+2] = b; data[idx+3] = 100; // Semi-transparent
             }
         }
       });
       offCtx.putImageData(imgData, 0, 0);
-      ctx.globalAlpha = 0.3;
-      ctx.drawImage(offscreen, 0, 0, state.width * state.zoom, state.height * state.zoom);
-      ctx.globalAlpha = 1.0;
+    } else {
+      offCtx.clearRect(0, 0, state.width, state.height);
     }
 
-    data.fill(0);
+    // 2. Draw Layers to offscreen
     const currentFrame = state.frames[state.activeFrameIndex];
     state.layers.forEach((layer) => {
       if (!layer.visible) return;
       const layerPixels = currentFrame.layerData[layer.id];
       if (!layerPixels) return;
+      
       const isTargetLayer = layer.id === state.activeLayerId;
       const shouldSkip = (isMoving || isRotating || isScaling) && isTargetLayer && state.selection;
+      
+      const layerImgData = offCtx.createImageData(state.width, state.height);
+      const layerData = layerImgData.data;
+      
       for (let i = 0; i < layerPixels.length; i++) {
          if (shouldSkip && state.selection!.has(i)) continue;
          const val = layerPixels[i];
@@ -548,78 +598,118 @@ export const Canvas: React.FC<CanvasProps> = ({
          if (color) {
              const [r, g, b] = hexToRgb(color);
              const idx = i * 4;
-             data[idx] = r; data[idx+1] = g; data[idx+2] = b; data[idx+3] = 255; 
+             layerData[idx] = r; layerData[idx+1] = g; layerData[idx+2] = b; layerData[idx+3] = 255; 
          }
       }
+      
+      // Create temporary canvas to composite layer
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = state.width; tempCanvas.height = state.height;
+      tempCanvas.getContext('2d')?.putImageData(layerImgData, 0, 0);
+      offCtx.drawImage(tempCanvas, 0, 0);
     });
-    offCtx.putImageData(imgData, 0, 0);
-    ctx.drawImage(offscreen, 0, 0, state.width * state.zoom, state.height * state.zoom);
-    
-    if (isScaling && initialBox && currentBox && floatingPixels && state.selection) {
-        const tempGrid: PixelGrid = new Array(state.width * state.height).fill(null);
-        floatingPixels.forEach((color, idx) => tempGrid[idx] = color);
-        const scaledGrid = scaleSelectionPixels(state.selection, tempGrid, initialBox, currentBox, state.width, state.height);
-        data.fill(0);
-        for (let i = 0; i < scaledGrid.length; i++) {
-            const val = scaledGrid[i];
+
+    // 3. Draw Floating Pixels (Transformations)
+    if ((isScaling || isRotating || isMoving) && floatingPixels && state.selection) {
+        let transformedGrid: PixelGrid;
+        if (isScaling && initialBox && currentBox) {
+            const tempGrid: PixelGrid = new Array(state.width * state.height).fill(null);
+            floatingPixels.forEach((color, idx) => tempGrid[idx] = color);
+            transformedGrid = scaleSelectionPixels(state.selection, tempGrid, initialBox, currentBox, state.width, state.height);
+        } else if (isRotating && rotationPivot) {
+            const tempGrid: PixelGrid = new Array(state.width * state.height).fill(null);
+            floatingPixels.forEach((color, idx) => tempGrid[idx] = color);
+            transformedGrid = rotateSelectionPixels(state.selection, tempGrid, rotationAngle, rotationPivot, state.width, state.height, state.rotationAlgorithm);
+        } else if (isMoving) {
+            const tempGrid: PixelGrid = new Array(state.width * state.height).fill(null);
+            floatingPixels.forEach((val, idx) => {
+                const { x, y } = getCoords(idx, state.width);
+                const nx = x + moveOffset.x;
+                const ny = y + moveOffset.y;
+                if (nx >= 0 && nx < state.width && ny >= 0 && ny < state.height) {
+                    tempGrid[getIndex(nx, ny, state.width)] = val;
+                }
+            });
+            transformedGrid = tempGrid;
+        } else {
+            transformedGrid = new Array(state.width * state.height).fill(null);
+        }
+
+        const floatImgData = offCtx.createImageData(state.width, state.height);
+        const floatData = floatImgData.data;
+        for (let i = 0; i < transformedGrid.length; i++) {
+            const val = transformedGrid[i];
             const color = typeof val === 'number' ? state.palette[val] : val;
             if (color) {
                 const [r, g, b] = hexToRgb(color);
                 const pIdx = i * 4;
-                data[pIdx] = r; data[pIdx+1] = g; data[pIdx+2] = b; data[pIdx+3] = 255;
+                floatData[pIdx] = r; floatData[pIdx+1] = g; floatData[pIdx+2] = b; floatData[pIdx+3] = 255;
             }
         }
-        offCtx.putImageData(imgData, 0, 0);
-        ctx.drawImage(offscreen, 0, 0, state.width * state.zoom, state.height * state.zoom);
-    } else if (isRotating && rotationPivot && floatingPixels && state.selection) {
-        const tempGrid: PixelGrid = new Array(state.width * state.height).fill(null);
-        floatingPixels.forEach((color, idx) => tempGrid[idx] = color);
-        const rotatedGrid = rotateSelectionPixels(state.selection, tempGrid, rotationAngle, rotationPivot, state.width, state.height, state.rotationAlgorithm);
-        data.fill(0);
-        for (let i = 0; i < rotatedGrid.length; i++) {
-            const val = rotatedGrid[i];
-            const color = typeof val === 'number' ? state.palette[val] : val;
-            if (color) {
-                const [r, g, b] = hexToRgb(color);
-                const pIdx = i * 4;
-                data[pIdx] = r; data[pIdx+1] = g; data[pIdx+2] = b; data[pIdx+3] = 255;
-            }
-        }
-        offCtx.putImageData(imgData, 0, 0);
-        ctx.drawImage(offscreen, 0, 0, state.width * state.zoom, state.height * state.zoom);
-    } else if (isMoving && floatingPixels) {
-      data.fill(0);
-      floatingPixels.forEach((val, idx) => {
-         const color = typeof val === 'number' ? state.palette[val] : val;
-         if (color) {
-            const [r, g, b] = hexToRgb(color);
-            const pIdx = idx * 4;
-            data[pIdx] = r; data[pIdx+1] = g; data[pIdx+2] = b; data[pIdx+3] = 255;
-         }
-      });
-      offCtx.putImageData(imgData, 0, 0);
-      const dx = moveOffset.x * state.zoom;
-      const dy = moveOffset.y * state.zoom;
-      ctx.drawImage(offscreen, 0, 0, state.width, state.height, dx, dy, state.width * state.zoom, state.height * state.zoom);
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = state.width; tempCanvas.height = state.height;
+        tempCanvas.getContext('2d')?.putImageData(floatImgData, 0, 0);
+        offCtx.drawImage(tempCanvas, 0, 0);
     }
 
-    if (state.showGrid && state.zoom > 4) {
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)'; ctx.lineWidth = 1; ctx.beginPath();
-      for (let x = 0; x <= state.width; x++) { ctx.moveTo(x * state.zoom, 0); ctx.lineTo(x * state.zoom, state.height * state.zoom); }
-      for (let y = 0; y <= state.height; y++) { ctx.moveTo(0, y * state.zoom); ctx.lineTo(state.width * state.zoom, y * state.zoom); }
+    // Final Transfer to Art Canvas
+    ctx.clearRect(0, 0, state.width, state.height);
+    ctx.drawImage(offscreen, 0, 0);
+  }, [state.frames, state.activeFrameIndex, state.layers, state.activeLayerId, state.palette, state.width, state.height, state.onionSkin, isMoving, isRotating, isScaling, floatingPixels, moveOffset, rotationAngle, rotationPivot, initialBox, currentBox]);
+
+  // UI Rendering Effect (Grid, Selection, Brush)
+  useEffect(() => {
+    const canvas = uiCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const z = localZoom;
+    const px = pan.x;
+    const py = pan.y;
+
+    // 1. Draw Grid
+    if (state.showGrid && z > 4) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let x = 0; x <= state.width; x++) {
+        const screenX = px + x * z;
+        ctx.moveTo(screenX, py);
+        ctx.lineTo(screenX, py + state.height * z);
+      }
+      for (let y = 0; y <= state.height; y++) {
+        const screenY = py + y * z;
+        ctx.moveTo(px, screenY);
+        ctx.lineTo(px + state.width * z, screenY);
+      }
       ctx.stroke();
+      ctx.restore();
     }
 
+    // 2. Draw Symmetry Lines
     if (state.symmetry.x || state.symmetry.y) {
-        ctx.save(); ctx.strokeStyle = 'rgba(255, 165, 0, 0.5)'; ctx.lineWidth = 1; ctx.setLineDash([2, 2]);
-        if (state.symmetry.x) { const x = (state.width / 2) * state.zoom; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, state.height * state.zoom); ctx.stroke(); }
-        if (state.symmetry.y) { const y = (state.height / 2) * state.zoom; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(state.width * state.zoom, y); ctx.stroke(); }
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255, 165, 0, 0.6)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        if (state.symmetry.x) {
+            const x = px + (state.width / 2) * z;
+            ctx.beginPath(); ctx.moveTo(x, py); ctx.lineTo(x, py + state.height * z); ctx.stroke();
+        }
+        if (state.symmetry.y) {
+            const y = py + (state.height / 2) * z;
+            ctx.beginPath(); ctx.moveTo(px, y); ctx.lineTo(px + state.width * z, y); ctx.stroke();
+        }
         ctx.restore();
     }
-    
+
+    // 3. Draw Selection (Marching Ants)
     if (state.selection && state.selection.size > 0) {
       ctx.save();
-      const z = state.zoom;
+      ctx.translate(px, py);
       
       if (isScaling && currentBox) {
           ctx.beginPath();
@@ -628,13 +718,14 @@ export const Canvas: React.FC<CanvasProps> = ({
           ctx.strokeStyle = '#000'; ctx.lineDashOffset = -dashOffset + 4; ctx.stroke();
       } else {
           if (isRotating && rotationPivot) {
-            const px = rotationPivot.x * z; const py = rotationPivot.y * z;
-            ctx.translate(px, py); ctx.rotate(rotationAngle); ctx.translate(-px, -py);
+            const rpx = rotationPivot.x * z; const rpy = rotationPivot.y * z;
+            ctx.translate(rpx, rpy); ctx.rotate(rotationAngle); ctx.translate(-rpx, -rpy);
           }
           
           ctx.beginPath(); ctx.lineWidth = 1;
           const ox = (isMoving && !isRotating) ? moveOffset.x : 0;
           const oy = (isMoving && !isRotating) ? moveOffset.y : 0;
+          
           state.selection.forEach(idx => {
              const { x, y } = getCoords(idx, state.width);
              const dx = x + ox; const dy = y + oy;
@@ -644,12 +735,12 @@ export const Canvas: React.FC<CanvasProps> = ({
              if (x===state.width-1 || !state.selection!.has(idx + 1)) { ctx.moveTo((dx+1)*z, dy*z); ctx.lineTo((dx+1)*z, (dy+1)*z); }
           });
           ctx.strokeStyle = '#fff'; ctx.setLineDash([4, 4]); ctx.lineDashOffset = -dashOffset; ctx.stroke();
-          ctx.strokeStyle = '#000'; ctx.lineDashOffset = -dashOffset + 4; ctx.stroke(); ctx.setLineDash([]);
+          ctx.strokeStyle = '#000'; ctx.lineDashOffset = -dashOffset + 4; ctx.stroke();
       }
 
+      // Transformation Handles
       if (state.tool === 'move' && !isMoving) {
           const box = isScaling && currentBox ? currentBox : getSelectionBoundingBox(state.selection, state.width);
-          
           if (!isScaling) {
               const hx = (box.x + box.w / 2) * z;
               const hy = (box.y - 1.5) * z;
@@ -657,20 +748,12 @@ export const Canvas: React.FC<CanvasProps> = ({
               ctx.fillStyle = isRotating ? 'white' : 'rgba(255,255,255,0.8)';
               ctx.beginPath(); ctx.arc(hx, hy, 4, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = 'black'; ctx.stroke();
           }
-
-          // Render Transformation Handles
-          const hs = 3; // Handle half-size in pixels
+          const hs = 4;
           const handles = [
-              {x: box.x, y: box.y}, // TL
-              {x: box.x + box.w/2, y: box.y}, // TC
-              {x: box.x + box.w, y: box.y}, // TR
-              {x: box.x + box.w, y: box.y + box.h/2}, // RC
-              {x: box.x + box.w, y: box.y + box.h}, // BR
-              {x: box.x + box.w/2, y: box.y + box.h}, // BC
-              {x: box.x, y: box.y + box.h}, // BL
-              {x: box.x, y: box.y + box.h/2} // LC
+              {x: box.x, y: box.y}, {x: box.x + box.w/2, y: box.y}, {x: box.x + box.w, y: box.y},
+              {x: box.x + box.w, y: box.y + box.h/2}, {x: box.x + box.w, y: box.y + box.h},
+              {x: box.x + box.w/2, y: box.y + box.h}, {x: box.x, y: box.y + box.h}, {x: box.x, y: box.y + box.h/2}
           ];
-
           ctx.fillStyle = 'white'; ctx.strokeStyle = 'black'; ctx.setLineDash([]);
           handles.forEach(h => {
               ctx.fillRect(h.x * z - hs, h.y * z - hs, hs*2, hs*2);
@@ -680,38 +763,46 @@ export const Canvas: React.FC<CanvasProps> = ({
       ctx.restore();
     }
 
+    // 4. Draw Active Selection Preview (Rect/Ellipse/Lasso)
     if (isDrawing && startPos && cursorPos) {
+        ctx.save();
+        ctx.translate(px, py);
         ctx.strokeStyle = 'white'; ctx.setLineDash([4, 4]);
-        const x = startPos.x * state.zoom; const y = startPos.y * state.zoom;
-        const w = (cursorPos.x - startPos.x + (cursorPos.x >= startPos.x ? 1 : 0)) * state.zoom;
-        const h = (cursorPos.y - startPos.y + (cursorPos.y >= startPos.y ? 1 : 0)) * state.zoom;
+        const x = startPos.x * z; const y = startPos.y * z;
+        const w = (cursorPos.x - startPos.x + (cursorPos.x >= startPos.x ? 1 : 0)) * z;
+        const h = (cursorPos.y - startPos.y + (cursorPos.y >= startPos.y ? 1 : 0)) * z;
         if (state.tool === 'rect-select') ctx.strokeRect(Math.min(x, x+w), Math.min(y, y+h), Math.abs(w), Math.abs(h));
         else if (state.tool === 'ellipse-select') { ctx.beginPath(); ctx.ellipse(Math.min(x, x+w) + Math.abs(w)/2, Math.min(y, y+h) + Math.abs(h)/2, Math.abs(w)/2, Math.abs(h)/2, 0, 0, 2 * Math.PI); ctx.stroke(); }
-        ctx.setLineDash([]);
+        ctx.restore();
     }
 
+    // 5. Draw Lasso/PolyLasso Points
     if (polyPoints.length > 0) {
+        ctx.save();
+        ctx.translate(px, py);
         ctx.strokeStyle = 'white'; ctx.setLineDash([4, 4]); ctx.beginPath();
-        const z = state.zoom; ctx.moveTo(polyPoints[0].x * z + z/2, polyPoints[0].y * z + z/2);
+        ctx.moveTo(polyPoints[0].x * z + z/2, polyPoints[0].y * z + z/2);
         for(let i=1; i<polyPoints.length; i++) ctx.lineTo(polyPoints[i].x * z + z/2, polyPoints[i].y * z + z/2);
         if (cursorPos && (state.tool === 'lasso-select' || state.tool === 'poly-lasso-select')) ctx.lineTo(cursorPos.x * z + z/2, cursorPos.y * z + z/2);
-        ctx.stroke(); ctx.setLineDash([]);
+        ctx.stroke();
+        ctx.restore();
     }
 
+    // 6. Draw Brush Preview
     const isBrushTool = ['pencil', 'eraser', 'smudge', 'blur', 'sharpen'].includes(state.tool);
     const isOtherToolWithPreview = ['bucket', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'eyedropper'].includes(state.tool);
-
     if (cursorPos && !isMoving && !isRotating && !isScaling && (isBrushTool || (!isDrawing && isOtherToolWithPreview))) {
         const { x, y } = cursorPos;
         const size = (state.tool === 'bucket' || state.tool === 'eyedropper') ? 1 : state.brushSize;
         const startOffset = Math.floor(size / 2);
         const radiusSq = Math.pow(size / 2 - 0.1, 2);
-        const z = state.zoom;
         const variants = [{ x, y }];
         if (state.symmetry.x) variants.push({ x: state.width - 1 - x, y: y });
         if (state.symmetry.y) variants.push({ x: x, y: state.height - 1 - y });
         if (state.symmetry.x && state.symmetry.y) variants.push({ x: state.width - 1 - x, y: state.height - 1 - y });
 
+        ctx.save();
+        ctx.translate(px, py);
         ctx.beginPath();
         variants.forEach(variant => {
             const brushPixels = new Set<number>();
@@ -723,22 +814,23 @@ export const Canvas: React.FC<CanvasProps> = ({
                         if (cx * cx + cy * cy > radiusSq) inBrush = false;
                     }
                     if (inBrush) {
-                        const px = variant.x - startOffset + dx; const py = variant.y - startOffset + dy;
-                        if (px >= 0 && px < state.width && py >= 0 && py < state.height) brushPixels.add(getIndex(px, py, state.width));
+                        const bpx = variant.x - startOffset + dx; const bpy = variant.y - startOffset + dy;
+                        if (bpx >= 0 && bpx < state.width && bpy >= 0 && bpy < state.height) brushPixels.add(getIndex(bpx, bpy, state.width));
                     }
                 }
             }
             brushPixels.forEach(idx => {
-               const { x: px, y: py } = getCoords(idx, state.width);
-               if (!brushPixels.has(getIndex(px, py - 1, state.width))) { ctx.moveTo(px * z, py * z); ctx.lineTo((px + 1) * z, py * z); }
-               if (!brushPixels.has(getIndex(px, py + 1, state.width))) { ctx.moveTo(px * z, (py + 1) * z); ctx.lineTo((px + 1) * z, (py + 1) * z); }
-               if (!brushPixels.has(getIndex(px - 1, py, state.width))) { ctx.moveTo(px * z, py * z); ctx.lineTo(px * z, (py + 1) * z); }
-               if (!brushPixels.has(getIndex(px + 1, py, state.width))) { ctx.moveTo((px + 1) * z, py * z); ctx.lineTo((px + 1) * z, (py + 1) * z); }
+               const { x: bpx, y: bpy } = getCoords(idx, state.width);
+               if (!brushPixels.has(getIndex(bpx, bpy - 1, state.width))) { ctx.moveTo(bpx * z, bpy * z); ctx.lineTo((bpx + 1) * z, bpy * z); }
+               if (!brushPixels.has(getIndex(bpx, bpy + 1, state.width))) { ctx.moveTo(bpx * z, (bpy + 1) * z); ctx.lineTo((bpx + 1) * z, (bpy + 1) * z); }
+               if (!brushPixels.has(getIndex(bpx - 1, bpy, state.width))) { ctx.moveTo(bpx * z, bpy * z); ctx.lineTo(bpx * z, (bpy + 1) * z); }
+               if (!brushPixels.has(getIndex(bpx + 1, bpy, state.width))) { ctx.moveTo((bpx + 1) * z, bpy * z); ctx.lineTo((bpx + 1) * z, (bpy + 1) * z); }
             });
         });
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)'; ctx.lineWidth = 1; ctx.stroke();
+        ctx.restore();
     }
-  }, [state, cursorPos, dashOffset, startPos, polyPoints, isMoving, isDrawing, moveOffset, floatingPixels, isRotating, rotationAngle, rotationPivot, isScaling, currentBox]);
+  }, [state, localZoom, pan, cursorPos, dashOffset, startPos, polyPoints, isMoving, isDrawing, moveOffset, floatingPixels, isRotating, rotationAngle, rotationPivot, isScaling, currentBox]);
 
   return (
     <div 
@@ -752,13 +844,37 @@ export const Canvas: React.FC<CanvasProps> = ({
         onMouseUp={handlePointerUp}
         onDoubleClick={() => { if (state.tool === 'poly-lasso-select' && polyPoints.length > 2) { combineSelection(getPolygonSelection(polyPoints, state.width, state.height)); setPolyPoints([]); } }}
     >
+      {/* Art Layer Wrapper (Handles Pan/Zoom via CSS) */}
+      <div 
+        className="absolute top-0 left-0 shadow-2xl"
+        style={{ 
+          width: state.width, 
+          height: state.height,
+          transform: `translate(${pan.x}px, ${pan.y}px) scale(${localZoom})`, 
+          transformOrigin: 'top left',
+          pointerEvents: 'none',
+          imageRendering: 'pixelated',
+          backgroundImage: 'conic-gradient(#1a1a1a 90deg, #2a2a2a 90deg 180deg, #1a1a1a 180deg 270deg, #2a2a2a 270deg)',
+          backgroundPosition: '0 0',
+          backgroundSize: `${16 / localZoom}px ${16 / localZoom}px`
+        }}
+      >
+        <canvas
+          ref={artCanvasRef}
+          width={state.width}
+          height={state.height}
+          className="w-full h-full block"
+        />
+      </div>
+
+      {/* UI Overlay Layer (Grid, Selection, Handles) */}
       <canvas
-        ref={canvasRef}
-        width={state.width * state.zoom}
-        height={state.height * state.zoom}
-        className="shadow-2xl bg-white pixelated"
-        style={{ position: 'absolute', top: 0, left: 0, transform: `translate(${pan.x}px, ${pan.y}px)`, transformOrigin: 'top left', cursor: 'none', pointerEvents: 'none' }}
+        ref={uiCanvasRef}
+        width={containerSize.width}
+        height={containerSize.height}
+        className="absolute inset-0 pointer-events-none"
       />
+
       {showCursor && (
         <div ref={cursorRef} className="fixed top-0 left-0 pointer-events-none z-[9999] mix-blend-difference hidden md:block" style={{ width: '24px', height: '24px', marginLeft: '-12px', marginTop: '-12px', backgroundImage: `url('${CURSOR_URI}')`, backgroundSize: 'contain', backgroundRepeat: 'no-repeat', transform: `translate(${mousePosRef.current.x}px, ${mousePosRef.current.y}px)` }} />
       )}

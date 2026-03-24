@@ -1,6 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { FileSystemDirectoryHandle, FileSystemFileHandle, FileSystemHandle } from '../types';
 import { Folder, FolderOpen, File, Image, ChevronRight, ChevronDown } from './Icons';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "./ui/context-menu";
 
 interface FileTreeProps {
   rootHandle: FileSystemDirectoryHandle | null;
@@ -72,23 +78,38 @@ const TreeNode: React.FC<TreeNodeProps> = ({ handle, depth, onFileOpen }) => {
       Icon = Image;
   }
 
+  const nodeContent = (
+    <div 
+      className={`flex items-center gap-1 py-1 px-2 hover:bg-accent cursor-pointer text-xs select-none ${depth === 0 ? 'font-medium' : ''}`}
+      style={{ paddingLeft: `${depth * 12 + 8}px` }}
+      onClick={handleClick}
+    >
+      {handle.kind === 'directory' && (
+        <span className="text-muted-foreground">
+           {isExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+        </span>
+      )}
+      {handle.kind === 'file' && <span className="w-2.5" />} {/* Spacer for no chevron */}
+      
+      <Icon size={14} className={handle.kind === 'directory' ? 'text-blue-400' : 'text-gray-400'} />
+      <span className="truncate">{handle.name}</span>
+    </div>
+  );
+
   return (
     <div>
-      <div 
-        className={`flex items-center gap-1 py-1 px-2 hover:bg-accent cursor-pointer text-xs select-none ${depth === 0 ? 'font-medium' : ''}`}
-        style={{ paddingLeft: `${depth * 12 + 8}px` }}
-        onClick={handleClick}
-      >
-        {handle.kind === 'directory' && (
-          <span className="text-muted-foreground">
-             {isExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-          </span>
-        )}
-        {handle.kind === 'file' && <span className="w-2.5" />} {/* Spacer for no chevron */}
-        
-        <Icon size={14} className={handle.kind === 'directory' ? 'text-blue-400' : 'text-gray-400'} />
-        <span className="truncate">{handle.name}</span>
-      </div>
+      {handle.kind === 'directory' ? (
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            {nodeContent}
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuItem onClick={loadChildren}>Refresh</ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
+      ) : (
+        nodeContent
+      )}
       
       {isExpanded && (
         <div>
@@ -122,21 +143,28 @@ export const FileTree: React.FC<FileTreeProps> = ({ rootHandle, onFileOpen, onOp
             )}
         </div>
         
-        <div className="flex-1 overflow-y-auto custom-scrollbar">
-            {rootHandle ? (
-                <TreeNode handle={rootHandle} depth={0} onFileOpen={onFileOpen} />
-            ) : (
-                <div className="p-4 text-center">
-                    <p className="text-xs text-muted-foreground mb-2">No folder opened.</p>
-                    <button 
-                        onClick={onOpenFolder}
-                        className="text-xs border border-border bg-background hover:bg-accent px-3 py-1 rounded transition-colors"
-                    >
-                        Browse System...
-                    </button>
-                </div>
-            )}
-        </div>
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <div className="flex-1 overflow-y-auto custom-scrollbar">
+                {rootHandle ? (
+                    <TreeNode handle={rootHandle} depth={0} onFileOpen={onFileOpen} />
+                ) : (
+                    <div className="p-4 text-center">
+                        <p className="text-xs text-muted-foreground mb-2">No folder opened.</p>
+                        <button 
+                            onClick={onOpenFolder}
+                            className="text-xs border border-border bg-background hover:bg-accent px-3 py-1 rounded transition-colors"
+                        >
+                            Browse System...
+                        </button>
+                    </div>
+                )}
+            </div>
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuItem onClick={onOpenFolder}>Open Folder...</ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
     </div>
   );
 };
