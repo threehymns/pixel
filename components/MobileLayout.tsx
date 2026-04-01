@@ -1,5 +1,6 @@
 
 import React, { useState } from 'react';
+import { Drawer } from 'vaul';
 import { ProjectState, ToolType, Command, Position } from '../types';
 import { Canvas } from './Canvas';
 import { Palette } from './Palette';
@@ -420,26 +421,26 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
       </div>
 
       {/* Full-Screen Panels (Bottom Sheets) */}
-      {activePanel && (
-          <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/40 backdrop-blur-sm animate-in fade-in duration-300" onClick={closePanel}>
-              <div 
-                className="bg-card border-t border-border rounded-t-[2.5rem] shadow-2xl w-full max-h-[90vh] flex flex-col overflow-hidden animate-in slide-in-from-bottom-8 duration-500 ease-out" 
-                onClick={e => e.stopPropagation()}
-              >
-                  {/* Sheet Drag Handle */}
-                  <div className="flex justify-center pt-3 pb-2" onClick={closePanel}>
-                    <div className="w-16 h-1.5 bg-muted-foreground/20 rounded-full hover:bg-muted-foreground/40 transition-colors"></div>
-                  </div>
+      <Drawer.Root open={!!activePanel} onOpenChange={(open) => !open && closePanel()}>
+        <Drawer.Portal>
+          <Drawer.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm" />
+          <Drawer.Content className="fixed bottom-0 left-0 right-0 z-50 flex flex-col bg-card border-t border-border rounded-t-[2.5rem] shadow-2xl max-h-[90vh] overflow-hidden outline-none">
+              <div className="flex justify-center pt-3 pb-2">
+                <div className="w-16 h-1.5 bg-muted-foreground/20 rounded-full" />
+              </div>
 
-                  <div className="h-12 border-b border-border flex items-center justify-between px-6 shrink-0">
-                    <span className="font-bold text-foreground text-sm uppercase tracking-widest">{activePanel}</span>
-                    <button onClick={closePanel} className="w-8 h-8 flex items-center justify-center bg-muted rounded-full text-muted-foreground active:scale-75 transition-transform">
-                        <X size={18} />
-                    </button>
-                  </div>
+              <div className="h-12 border-b border-border flex items-center justify-between px-6 shrink-0">
+                <Drawer.Title className="font-bold text-foreground text-sm uppercase tracking-widest">{activePanel}</Drawer.Title>
+                <button onClick={closePanel} className="w-8 h-8 flex items-center justify-center bg-muted rounded-full text-muted-foreground active:scale-75 transition-transform">
+                    <X size={18} />
+                </button>
+              </div>
 
-                  <div className="flex-1 overflow-y-auto min-h-0 relative pb-safe-bottom">
-                      {activePanel === 'palette' && (
+              <div className="flex-1 overflow-y-auto min-h-0 relative pb-safe-bottom">
+                  <Drawer.Description className="sr-only">
+                    {activePanel} settings and options
+                  </Drawer.Description>
+                  {activePanel === 'palette' && (
                           <div className="h-[450px]">
                               <Palette 
                                 width={0} 
@@ -545,9 +546,9 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                           </div>
                       )}
                   </div>
-              </div>
-          </div>
-      )}
+          </Drawer.Content>
+        </Drawer.Portal>
+      </Drawer.Root>
     </div>
   );
 };
