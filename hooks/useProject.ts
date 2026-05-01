@@ -2,7 +2,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { ProjectState, Frame, Layer, SavedPalette, PixelGrid, HistoryEntry, ToolType, RecentProject, FileSystemFileHandle, ProjectInstance, ColorMode, PixelValue } from '../types';
 import { INITIAL_STATE, DEFAULT_PALETTE, GAMEBOY_PALETTE, ENDESGA_64_PALETTE } from '../constants';
-import { parseASE, parseGPL, extractColorsFromPNG, fileToProjectState, renderFrameToCanvas, getCoords, getIndex, hexToRgb, rgbToHex, findNearestPaletteIndex } from '../utils';
+import { parseASE, parseGPL, extractColorsFromPNG, fileToProjectState, renderFrameToCanvas, renderSpriteSheet, getCoords, getIndex, hexToRgb, rgbToHex, findNearestPaletteIndex, getSelectionBoundingBox } from '../utils';
 
 // UI fields that should not be affected by Undo/Redo
 const UI_FIELDS: (keyof ProjectState)[] = [
@@ -67,14 +67,19 @@ export function useProject() {
       const stored = localStorage.getItem('pixel-forge-recents');
       if (stored) {
         const parsed = JSON.parse(stored);
-        const sanitized = parsed.map((p: RecentProject) => ({
+      const sanitized = parsed.map((p: RecentProject) => ({
              ...p,
              data: {
                  ...p.data,
                  selection: null,
-                 fileHandle: undefined // Do not restore handles from localstorage
+                 fileHandle: undefined, // Do not restore handles from localstorage
+                 layers: p.data.layers?.map(l => ({ 
+                     ...l, 
+                     opacity: l.opacity ?? 100,
+                     blendMode: l.blendMode ?? 'normal'
+                 })) ?? []
              }
-        }));
+      }));
         setRecentProjects(sanitized);
       }
     } catch (e) {
@@ -192,7 +197,7 @@ export function useProject() {
       width: w,
       height: h,
       colorMode: mode,
-      layers: [{ id: 'layer-1', name: 'Layer 1', visible: true, locked: false }],
+      layers: [{ id: 'layer-1', name: 'Layer 1', visible: true, locked: false, opacity: 100, blendMode: 'normal' }],
       selectedLayerIds: ['layer-1'],
       frames: [{ id: 'frame-1', layerData: { 'layer-1': new Array(w * h).fill(null) } }],
       selectedFrameIndices: [0],
@@ -802,7 +807,7 @@ export function useProject() {
     if (activeProjectId === 'home') return;
     const newId = `layer-${Date.now()}`;
     let n = 1; while (state.layers.some(l => l.name === `Layer ${n}`)) n++;
-    const newLayer: Layer = { id: newId, name: `Layer ${n}`, visible: true, locked: false };
+    const newLayer: Layer = { id: newId, name: `Layer ${n}`, visible: true, locked: false, opacity: 100, blendMode: 'normal' };
     const newFrames = state.frames.map(f => ({ ...f, layerData: { ...f.layerData, [newId]: new Array(state.width * state.height).fill(null) } }));
     const newLayers = [...state.layers]; const idx = state.layers.findIndex(l => l.id === state.activeLayerId);
     if(idx!==-1) newLayers.splice(idx+1, 0, newLayer); else newLayers.push(newLayer);
@@ -864,7 +869,7 @@ export function useProject() {
      
      const sourceLayer = state.layers[layerIndex];
      const newId = `layer-${Date.now()}`;
-     const newLayer = { ...sourceLayer, id: newId, name: `${sourceLayer.name} (Copy)` };
+     const newLayer: Layer = { ...sourceLayer, id: newId, name: `${sourceLayer.name} (Copy)` };
      
      const newLayers = [...state.layers];
      newLayers.splice(layerIndex + 1, 0, newLayer); // Insert above
@@ -893,11 +898,11 @@ export function useProject() {
     const duplicatedIds: string[] = [];
 
     // Duplicate each selected layer
-    selected.forEach(id => {
+    selected.forEach((id, i) => {
         const layerIndex = newLayers.findIndex(l => l.id === id);
         const sourceLayer = newLayers[layerIndex];
-        const newId = `layer-${Date.now()}-${id}`;
-        const newLayer = { ...sourceLayer, id: newId, name: `${sourceLayer.name} (Copy)` };
+        const newId = `layer-${Date.now()}-${i}`;
+        const newLayer: Layer = { ...sourceLayer, id: newId, name: `${sourceLayer.name} (Copy)` };
         newLayers.splice(layerIndex + 1, 0, newLayer);
         duplicatedIds.push(newId);
 
@@ -995,11 +1000,191 @@ export function useProject() {
       if (selected) updateState({ ...state, palette: selected.colors, activePaletteId: selected.id });
   }, [state, updateState, activeProjectId]);
 
+  const resizeCanvas = useCallback((newWidth: number, newHeight: number, anchor: string = 'cc') => {
+      if (activeProjectId === 'home') return;
+      if (newWidth === state.width && newHeight === state.height) return;
+
+      const oldWidth = state.width;
+      const oldHeight = state.height;
+
+      const getOffsets = (aw: number, ah: number, nw: number, nh: number, anch: string) => {
+          let ox = 0, oy = 0;
+          if (anch.includes('l')) ox = 0;
+          else if (anch.includes('r')) ox = nw - aw;
+          else ox = Math.floor((nw - aw) / 2);
+
+          if (anch.includes('t')) oy = 0;
+          else if (anch.includes('b')) oy = nh - ah;
+          else oy = Math.floor((nh - ah) / 2);
+          
+          return { ox, oy };
+      };
+
+      const { ox, oy } = getOffsets(oldWidth, oldHeight, newWidth, newHeight, anchor);
+
+      const newFrames = state.frames.map(f => {
+          const newLayerData: Record<string, PixelGrid> = {};
+          Object.keys(f.layerData).forEach(lid => {
+              const oldGrid = f.layerData[lid];
+              const newGrid: PixelGrid = new Array(newWidth * newHeight).fill(null);
+              for (let y = 0; y < oldHeight; y++) {
+                  for (let x = 0; x < oldWidth; x++) {
+                      const nx = x + ox;
+                      const ny = y + oy;
+                      if (nx >= 0 && nx < newWidth && ny >= 0 && ny < newHeight) {
+                          newGrid[ny * newWidth + nx] = oldGrid[y * oldWidth + x];
+                      }
+                  }
+              }
+              newLayerData[lid] = newGrid;
+          });
+          return { ...f, layerData: newLayerData };
+      });
+
+      updateState(
+          { ...state, width: newWidth, height: newHeight, frames: newFrames, selection: null },
+          { action: `Resize Canvas to ${newWidth}x${newHeight}` }
+      );
+  }, [state, updateState, activeProjectId]);
+
+  const setReferenceImage = useCallback((config: ProjectState['referenceImage']) => {
+      if (activeProjectId === 'home') return;
+      updateState({ ...state, referenceImage: config }, { action: 'Update Reference Image' });
+  }, [state, activeProjectId, updateState]);
+
+  const setTiled = useCallback((tiled: boolean) => {
+      if (activeProjectId === 'home') return;
+      updateState({ ...state, tiled }, { action: tiled ? 'Enable Tiled Mode' : 'Disable Tiled Mode' });
+  }, [state, activeProjectId, updateState]);
+
+  const flipPixels = useCallback((axis: 'h' | 'v') => {
+      if (activeProjectId === 'home') return;
+      const { frames, width, height, activeFrameIndex, selectedLayerIds, selection } = state;
+      
+      const box = selection 
+          ? getSelectionBoundingBox(selection, width) 
+          : { x: 0, y: 0, w: width, h: height };
+
+      const newFrames = frames.map((f, i) => {
+          if (i !== activeFrameIndex) return f;
+          const newLayerData = { ...f.layerData };
+          selectedLayerIds.forEach(lId => {
+              const layerPixels = [...(f.layerData[lId] || new Array(width * height).fill(null))];
+              const updatedPixels = [...layerPixels];
+
+              if (selection) {
+                  // Clear original selection pixels
+                  selection.forEach(idx => updatedPixels[idx] = null);
+              }
+
+              for (let y = 0; y < box.h; y++) {
+                  for (let x = 0; x < box.w; x++) {
+                      const srcX = box.x + x;
+                      const srcY = box.y + y;
+                      const destX = axis === 'h' ? box.x + box.w - 1 - x : srcX;
+                      const destY = axis === 'v' ? box.y + box.h - 1 - y : srcY;
+
+                      const srcIdx = getIndex(srcX, srcY, width);
+                      const destIdx = getIndex(destX, destY, width);
+
+                      if (!selection || selection.has(srcIdx)) {
+                          if (layerPixels[srcIdx] !== null) {
+                              updatedPixels[destIdx] = layerPixels[srcIdx];
+                          }
+                      }
+                  }
+              }
+              newLayerData[lId] = updatedPixels;
+          });
+          return { ...f, layerData: newLayerData };
+      });
+
+      let newSelection = selection;
+      if (selection) {
+          newSelection = new Set<number>();
+          selection.forEach(idx => {
+               const {x, y} = getCoords(idx, width);
+               const relX = x - box.x;
+               const relY = y - box.y;
+               const destX = axis === 'h' ? box.x + box.w - 1 - relX : x;
+               const destY = axis === 'v' ? box.y + box.h - 1 - relY : y;
+               newSelection!.add(getIndex(destX, destY, width));
+          });
+      }
+
+      updateState(
+          { ...state, frames: newFrames, selection: newSelection },
+          { action: `Flip ${axis === 'h' ? 'Horizontal' : 'Vertical'}` }
+      );
+  }, [state, activeProjectId, updateState]);
+
+  const clearSelection = useCallback(() => {
+      if (activeProjectId === 'home') return;
+      const { frames, width, height, activeFrameIndex, selectedLayerIds, selection } = state;
+      if (!selection || selection.size === 0) return;
+
+      const newFrames = frames.map((f, i) => {
+          if (i !== activeFrameIndex) return f;
+          const newLayerData = { ...f.layerData };
+          selectedLayerIds.forEach(lId => {
+              const layerPixels = [...(f.layerData[lId] || new Array(width * height).fill(null))];
+              selection.forEach(idx => layerPixels[idx] = null);
+              newLayerData[lId] = layerPixels;
+          });
+          return { ...f, layerData: newLayerData };
+      });
+
+      updateState(
+          { ...state, frames: newFrames },
+          { action: `Clear Selection` }
+      );
+  }, [state, activeProjectId, updateState]);
+
+  const cropCanvas = useCallback(() => {
+      if (activeProjectId === 'home') return;
+      const { frames, width, height, activeFrameIndex, selectedLayerIds, selection } = state;
+      if (!selection || selection.size === 0) return;
+
+      const box = getSelectionBoundingBox(selection, width);
+      const newFrames = frames.map(f => {
+          const newLayerData: Record<string, PixelGrid> = {};
+          Object.keys(f.layerData).forEach(lid => {
+              const oldGrid = f.layerData[lid];
+              const newGrid: PixelGrid = new Array(box.w * box.h).fill(null);
+              for (let y = 0; y < box.h; y++) {
+                  for (let x = 0; x < box.w; x++) {
+                      const srcX = box.x + x;
+                      const srcY = box.y + y;
+                      if (srcX >= 0 && srcX < width && srcY >= 0 && srcY < height) {
+                          newGrid[y * box.w + x] = oldGrid[srcY * width + srcX];
+                      }
+                  }
+              }
+              newLayerData[lid] = newGrid;
+          });
+          return { ...f, layerData: newLayerData };
+      });
+
+      updateState(
+          { ...state, width: box.w, height: box.h, frames: newFrames, selection: null },
+          { action: `Crop Canvas` }
+      );
+  }, [state, activeProjectId, updateState]);
+
   const downloadImage = useCallback(() => {
      if (activeProjectId === 'home') return;
      const canvas = renderFrameToCanvas(state, state.activeFrameIndex);
      const link = document.createElement('a'); 
      link.download = `${state.title}.png`; 
+     link.href = canvas.toDataURL(); 
+     link.click();
+  }, [state, activeProjectId]);
+
+  const downloadSpriteSheet = useCallback(() => {
+     if (activeProjectId === 'home') return;
+     const canvas = renderSpriteSheet(state);
+     const link = document.createElement('a'); 
+     link.download = `${state.title}_spritesheet.png`; 
      link.href = canvas.toDataURL(); 
      link.click();
   }, [state, activeProjectId]);
@@ -1043,6 +1228,13 @@ export function useProject() {
     importPalette,
     selectPalette,
     downloadImage,
+    downloadSpriteSheet,
+    resizeCanvas,
+    setReferenceImage,
+    setTiled,
+    flipPixels,
+    clearSelection,
+    cropCanvas,
     canUndo: activeInstance.historyIndex > 0,
     canRedo: activeInstance.historyIndex < activeInstance.history.length - 1
   };

@@ -189,7 +189,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   const isFreeformTool = state.tool === 'pencil' || state.tool === 'eraser' || state.tool === 'smudge' || state.tool === 'blur' || state.tool === 'sharpen';
 
   return (
-    <div className="h-7 bg-muted border-t border-background flex items-center px-2 text-[10px] text-muted-foreground select-none overflow-hidden shrink-0">
+    <div className="h-7 bg-muted border-t border-border/30 flex items-center px-2 text-[10px] text-muted-foreground select-none overflow-hidden shrink-0">
       <div className="flex-1 min-w-0 mr-4">
         {renderHints()}
       </div>

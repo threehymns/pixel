@@ -104,16 +104,16 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
       />
 
       {/* Top Bar: Minimal Status & Global Actions */}
-      <div className="absolute top-0 left-0 right-0 h-14 flex items-center justify-between px-3 z-20 pointer-events-none safe-top">
+      <div className="absolute top-0 left-0 right-0 h-16 flex items-center justify-between px-2 z-20 pointer-events-none safe-top">
         <div className="pointer-events-auto flex items-center gap-2">
            <button 
             onClick={() => setActivePanel('menu')} 
-            className="w-10 h-10 bg-card/90 backdrop-blur-md border border-border rounded-full flex items-center justify-center shadow-lg text-foreground active:scale-90 transition-transform"
+            className="w-10 h-10 bg-card/90 backdrop-blur-md border border-border/30 rounded-full flex items-center justify-center shadow-lg text-foreground active:scale-90 transition-transform"
             aria-label="Menu"
            >
              <Menu size={20} />
            </button>
-           <div className="flex gap-1 bg-card/90 backdrop-blur-md border border-border rounded-full p-1 shadow-lg">
+           <div className="flex gap-1 bg-card/90 backdrop-blur-md border border-border/30 rounded-full p-1 shadow-lg">
              <button 
                 onClick={() => commands.find(c => c.id === 'edit.undo')?.perform()} 
                 className="p-2 text-foreground hover:text-primary active:scale-75 transition-transform"
@@ -134,7 +134,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
         </div>
         
         <div className="pointer-events-auto flex items-center gap-2">
-           <div className="flex gap-1 bg-card/90 backdrop-blur-md border border-border rounded-full p-1 shadow-lg mr-1">
+           <div className="flex gap-1 bg-card/90 backdrop-blur-md border border-border/40 rounded-full p-1 shadow-lg mr-1">
                 <button 
                     onClick={() => updateState({...state, showGrid: !state.showGrid})}
                     className={`p-2 rounded-full transition-colors ${state.showGrid ? 'text-primary' : 'text-muted-foreground'}`}
@@ -152,7 +152,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
            </div>
            <button 
             onClick={() => setActivePanel('preview')} 
-            className="w-10 h-10 bg-secondary/90 backdrop-blur-md text-foreground border border-border rounded-full flex items-center justify-center shadow-lg active:scale-90 transition-transform"
+            className="w-10 h-10 bg-secondary/90 backdrop-blur-md text-foreground border border-border/30 rounded-full flex items-center justify-center shadow-lg active:scale-90 transition-transform"
             aria-label="Preview"
            >
              <Play size={18} fill="currentColor" />
@@ -184,7 +184,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
             
             {/* Expanded Tool Settings Area */}
             {(isSettingsExpanded && hasAnySettings) && (
-                <div className="w-full max-w-sm bg-card/95 backdrop-blur-xl border border-border rounded-2xl shadow-2xl p-4 flex flex-col gap-4 animate-in slide-in-from-bottom-4 zoom-in-95 duration-200">
+                <div className="w-full max-w-sm bg-card/95 backdrop-blur-xl border border-border/30 rounded-2xl shadow-2xl p-4 flex flex-col gap-4 animate-in slide-in-from-bottom-4 zoom-in-95 duration-200">
                     <div className="flex items-center justify-between">
                         <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Tool Settings</span>
                         <button onClick={() => setIsSettingsExpanded(false)} className="p-1 text-muted-foreground hover:text-foreground"><ChevronDown size={18}/></button>
@@ -308,7 +308,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
             {!isSettingsExpanded && hasAnySettings && (
                 <button 
                     onClick={() => setIsSettingsExpanded(true)}
-                    className="flex items-center gap-3 px-4 py-2 bg-card/90 backdrop-blur-xl border border-border rounded-full shadow-lg text-xs font-bold text-foreground active:scale-95 transition-all animate-in slide-in-from-bottom-2"
+                    className="flex items-center gap-3 px-4 py-2 bg-card/90 backdrop-blur-xl border border-border/30 rounded-full shadow-lg text-xs font-bold text-foreground active:scale-95 transition-all animate-in slide-in-from-bottom-2"
                 >
                     <Settings size={14} className="text-primary" />
                     <span>{getSettingsSummary()}</span>
@@ -318,9 +318,9 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
         </div>
 
         {/* Bottom Bar: Color, Tools, Panels */}
-        <div className="bg-card/95 backdrop-blur-2xl border-t border-border pointer-events-auto">
+        <div className="bg-card/95 backdrop-blur-2xl border-t border-border/30 pointer-events-auto">
             {/* Visual Status Indicator */}
-            <div className="h-5 flex items-center justify-center bg-background/30 text-[9px] text-muted-foreground/60 border-b border-border/50 uppercase tracking-widest font-bold">
+            <div className="h-5 flex items-center justify-center bg-background/30 text-[9px] text-muted-foreground/60 border-b border-border grayscale-[0.5] uppercase tracking-widest font-bold">
                 {statusMessage.text || `${state.width}×${state.height} • ${state.tool}`}
             </div>
             
@@ -333,7 +333,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                                 className="absolute inset-0 group active:scale-90 transition-transform z-10"
                                 aria-label="Primary Color"
                             >
-                                <div className="w-11 h-11 rounded-2xl border-2 border-white shadow-xl flex items-center justify-center overflow-hidden" style={{ backgroundColor: state.primaryColor }}>
+                                <div className="w-11 h-11 rounded-2xl border-2 border-border shadow-xl flex items-center justify-center overflow-hidden" style={{ backgroundColor: state.primaryColor }}>
                                     {state.inkType === 'shading' && <Droplets size={16} className="text-white/40 mix-blend-difference" />}
                                 </div>
                             </button>
@@ -365,7 +365,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                                 updateState({...state, primaryColor: state.secondaryColor, secondaryColor: p, shades: [...state.shades].reverse()});
                             }
                         }}
-                        className="absolute -bottom-2 -right-2 w-6 h-6 bg-card rounded-full border border-border flex items-center justify-center text-muted-foreground hover:text-foreground shadow-sm z-20 active:scale-90 transition-transform"
+                        className="absolute -bottom-2 -right-2 w-6 h-6 bg-card rounded-full border border-border/20 flex items-center justify-center text-muted-foreground hover:text-foreground shadow-sm z-20 active:scale-90 transition-transform"
                         title="Swap Colors (X)"
                     >
                         <ArrowRightLeft size={10} className="rotate-45" />
@@ -424,19 +424,15 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
       <Drawer.Root open={!!activePanel} onOpenChange={(open) => !open && closePanel()}>
         <Drawer.Portal>
           <Drawer.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm" />
-          <Drawer.Content className="fixed bottom-0 left-0 right-0 z-50 flex flex-col bg-card border-t border-border rounded-t-[2.5rem] shadow-2xl max-h-[90vh] overflow-hidden outline-none">
-              <div className="flex justify-center pt-3 pb-2">
-                <div className="w-16 h-1.5 bg-muted-foreground/20 rounded-full" />
-              </div>
-
-              <div className="h-12 border-b border-border flex items-center justify-between px-6 shrink-0">
-                <Drawer.Title className="font-bold text-foreground text-sm uppercase tracking-widest">{activePanel}</Drawer.Title>
-                <button onClick={closePanel} className="w-8 h-8 flex items-center justify-center bg-muted rounded-full text-muted-foreground active:scale-75 transition-transform">
+          <Drawer.Content className="fixed bottom-0 left-0 right-0 z-50 flex flex-col bg-card border-t border-border/30 rounded-t-3xl shadow-2xl max-h-[90vh] overflow-hidden outline-none">
+              <div className="h-16 flex items-center justify-between px-3 shrink-0">
+                <Drawer.Title className="font-bold text-foreground text-xs uppercase tracking-[0.2em]">{activePanel}</Drawer.Title>
+                <button onClick={closePanel} className="w-10 h-10 flex items-center justify-center bg-muted/50 rounded-full text-muted-foreground active:scale-75 transition-transform border border-border/30">
                     <X size={18} />
                 </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto min-h-0 relative pb-safe-bottom">
+              <div className="flex-1 overflow-y-auto min-h-0 relative pb-safe-bottom pt-2">
                   <Drawer.Description className="sr-only">
                     {activePanel} settings and options
                   </Drawer.Description>
@@ -505,39 +501,46 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                         </div> 
                       )}
                       {activePanel === 'menu' && (
-                          <div className="p-6 flex flex-col gap-6">
-                             <div className="grid grid-cols-2 gap-3">
-                                <button onClick={() => { project.createProject(); closePanel(); }} className="p-4 rounded-3xl bg-secondary/30 text-foreground flex flex-col items-center gap-3 active:scale-95 transition-transform border border-border">
-                                    <div className="w-12 h-12 bg-primary/10 rounded-2xl flex items-center justify-center"><Plus className="text-primary" size={24}/></div>
-                                    <span className="text-xs font-bold uppercase tracking-widest">New Sprite</span>
+                          <div className="p-4 flex flex-col gap-6">
+                             <div className="grid grid-cols-2 gap-2">
+                                <button onClick={() => { project.createProject(); closePanel(); }} className="flex items-center gap-3 p-3 rounded-xl bg-secondary/5 border border-border/40 active:bg-secondary/20 text-left transition-colors">
+                                    <Plus size={20} className="text-muted-foreground/60" />
+                                    <span className="text-xs font-medium">New Canvas</span>
                                 </button>
-                                <button onClick={() => { fileInputRef.current?.click(); closePanel(); }} className="p-4 rounded-3xl bg-secondary/30 text-foreground flex flex-col items-center gap-3 active:scale-95 transition-transform border border-border">
-                                    <div className="w-12 h-12 bg-primary/10 rounded-2xl flex items-center justify-center"><Hand className="text-primary" size={24}/></div>
-                                    <span className="text-xs font-bold uppercase tracking-widest">Open File</span>
+                                <button onClick={() => { fileInputRef.current?.click(); closePanel(); }} className="flex items-center gap-3 p-3 rounded-xl bg-secondary/5 border border-border/40 active:bg-secondary/20 text-left transition-colors">
+                                    <Hand size={20} className="text-muted-foreground/60" />
+                                    <span className="text-xs font-medium">Open Local</span>
                                 </button>
-                                <button onClick={() => { project.saveProject(); closePanel(); }} className="p-4 rounded-3xl bg-secondary/30 text-foreground flex flex-col items-center gap-3 active:scale-95 transition-transform border border-border">
-                                    <div className="w-12 h-12 bg-green-500/10 rounded-2xl flex items-center justify-center"><Check className="text-green-500" size={24}/></div>
-                                    <span className="text-xs font-bold uppercase tracking-widest">Save Sprite</span>
+                                <button onClick={() => { project.saveProject(); closePanel(); }} className="flex items-center gap-3 p-3 rounded-xl bg-secondary/5 border border-border/40 active:bg-secondary/20 text-left transition-colors">
+                                    <Check size={20} className="text-muted-foreground/60" />
+                                    <span className="text-xs font-medium">Save Pixel</span>
                                 </button>
-                                <button onClick={() => { project.downloadImage(); closePanel(); }} className="p-4 rounded-3xl bg-primary text-primary-foreground flex flex-col items-center gap-3 active:scale-95 transition-transform shadow-lg">
-                                    <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center"><Share size={24}/></div>
-                                    <span className="text-xs font-bold uppercase tracking-widest">Export PNG</span>
+                                <button onClick={() => { project.downloadImage(); closePanel(); }} className="flex items-center gap-3 p-3 rounded-xl bg-primary text-primary-foreground shadow-sm active:opacity-90 text-left">
+                                    <Share size={20} />
+                                    <span className="text-xs font-medium">Export PNG</span>
                                 </button>
                              </div>
-
-                             <div className="space-y-3">
-                                <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest px-2">Recent Projects</div>
-                                <div className="flex flex-col gap-2">
+                             
+                             <div className="flex flex-col gap-3">
+                                <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest px-1">Recent Works</div>
+                                <div className="flex flex-col gap-1">
                                     {project.recentProjects.length === 0 ? ( 
-                                        <div className="text-center p-8 bg-muted/20 rounded-3xl border border-dashed border-border text-muted-foreground italic text-xs">No recent projects</div> 
+                                        <div className="p-8 border border-dashed border-border rounded-xl text-center text-muted-foreground/40 text-xs">
+                                            No recent projects
+                                        </div> 
                                     ) : (
                                         project.recentProjects.map((p: any) => (
-                                            <button key={p.id} onClick={() => { project.loadRecentProject(p); closePanel(); }} className="p-4 text-left rounded-2xl bg-secondary/20 hover:bg-accent text-foreground transition-all flex justify-between items-center group active:bg-primary/10">
+                                            <button 
+                                              key={p.id} 
+                                              onClick={() => { project.loadRecentProject(p); closePanel(); }} 
+                                              className="w-full p-3 text-left rounded-xl hover:bg-secondary/10 active:bg-secondary/20 transition-colors flex items-center justify-between group border border-border/40"
+                                            >
                                                 <div className="flex flex-col gap-0.5">
-                                                    <div className="font-bold text-sm">{p.title}</div>
-                                                    <div className="text-[10px] text-muted-foreground">{new Date(p.timestamp).toLocaleDateString()}</div>
+                                                    <div className="text-sm font-medium">{p.title}</div>
+                                                    <div className="text-[10px] text-muted-foreground/60 font-mono">
+                                                      {p.width}x{p.height} • {new Date(p.timestamp).toLocaleDateString()}
+                                                    </div>
                                                 </div>
-                                                <ChevronRight size={16} className="text-muted-foreground group-hover:text-primary" />
                                             </button>
                                         ))
                                     )}

@@ -306,10 +306,11 @@ export const renderFrameToCanvas = (state: ProjectState, frameIndex: number): HT
     if (!frame) return canvas;
 
     state.layers.forEach(l => {
-        if (!l.visible) return;
+        if (!l.visible || l.opacity <= 0) return;
         const px = frame.layerData[l.id];
         if (!px) return;
         
+        ctx.globalAlpha = l.opacity / 100;
         px.forEach((val, i) => {
             if (val !== null) {
                 const color = typeof val === 'number' ? state.palette[val] : val;
@@ -319,6 +320,23 @@ export const renderFrameToCanvas = (state: ProjectState, frameIndex: number): HT
                 }
             }
         });
+        ctx.globalAlpha = 1.0;
+    });
+
+    return canvas;
+};
+
+export const renderSpriteSheet = (state: ProjectState): HTMLCanvasElement => {
+    const { frames, width, height } = state;
+    const canvas = document.createElement('canvas');
+    canvas.width = width * frames.length;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return canvas;
+
+    frames.forEach((_, i) => {
+        const frameCanvas = renderFrameToCanvas(state, i);
+        ctx.drawImage(frameCanvas, i * width, 0);
     });
 
     return canvas;
@@ -566,7 +584,7 @@ export const fileToProjectState = async (file: File): Promise<ProjectState> => {
           width,
           height,
           colorMode: 'rgba', 
-          layers: [{ id: layerId, name: 'Layer 1', visible: true, locked: false }],
+          layers: [{ id: layerId, name: 'Layer 1', visible: true, locked: false, opacity: 100, blendMode: 'normal' }],
           frames: [{ id: frameId, layerData: { [layerId]: pixels } }],
           activeLayerId: layerId,
           selectedLayerIds: [layerId],
@@ -594,6 +612,8 @@ export const fileToProjectState = async (file: File): Promise<ProjectState> => {
           showGrid: false,
           selection: null,
           selectionMode: 'replace',
+          tiled: false,
+          referenceImage: null,
         };
         resolve(state);
       };

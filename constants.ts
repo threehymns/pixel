@@ -50,7 +50,7 @@ export const INITIAL_STATE: ProjectState = {
   width: CANVAS_SIZE,
   height: CANVAS_SIZE,
   colorMode: 'indexed',
-  layers: [{ id: INITIAL_LAYER_ID, name: 'Layer 1', visible: true, locked: false }],
+  layers: [{ id: INITIAL_LAYER_ID, name: 'Layer 1', visible: true, locked: false, opacity: 100, blendMode: 'normal' }],
   frames: [{ 
     id: INITIAL_FRAME_ID, 
     layerData: { [INITIAL_LAYER_ID]: new Array(CANVAS_SIZE * CANVAS_SIZE).fill(null) } 
@@ -80,6 +80,8 @@ export const INITIAL_STATE: ProjectState = {
   zoom: 16,
   onionSkin: false,
   showGrid: false,
+  tiled: false,
+  referenceImage: null,
   selection: null,
   selectionMode: 'replace'
 };

@@ -4,6 +4,8 @@ import { Position } from './types';
 import { CommandPalette } from './components/CommandPalette';
 import { TooltipProvider } from './components/ui/tooltip';
 import { NewProjectDialog } from './components/NewProjectDialog';
+import { CanvasResizeDialog } from './components/CanvasResizeDialog';
+import { ReferenceImageDialog } from './components/ReferenceImageDialog';
 
 // Layouts
 import { DesktopLayout } from './components/DesktopLayout';
@@ -21,6 +23,8 @@ import { getCoords } from './utils';
 export default function App() {
   const [isCmdPaletteOpen, setIsCmdPaletteOpen] = useState(false);
   const [isNewProjectDialogOpen, setIsNewProjectDialogOpen] = useState(false);
+  const [isResizeCanvasDialogOpen, setIsResizeCanvasDialogOpen] = useState(false);
+  const [isReferenceImageDialogOpen, setIsReferenceImageDialogOpen] = useState(false);
   const [mousePos, setMousePos] = useState<Position | null>(null);
   const [dragStartPos, setDragStartPos] = useState<Position | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ text: string, type: 'info' | 'error' | 'success' }>({ text: '', type: 'info' });
@@ -80,7 +84,9 @@ export default function App() {
             project.setColorMode(mode);
             setStatusMessage({ text: `Changed to ${mode.toUpperCase()} mode`, type: 'info' });
         },
-        createProject: () => setIsNewProjectDialogOpen(true)
+        createProject: () => setIsNewProjectDialogOpen(true),
+        openResizeDialog: () => setIsResizeCanvasDialogOpen(true),
+        openReferenceImageDialog: () => setIsReferenceImageDialogOpen(true)
       },
       fileSystemActions: fileSystem,
       uiActions: {
@@ -149,6 +155,21 @@ export default function App() {
           isOpen={isNewProjectDialogOpen}
           onClose={() => setIsNewProjectDialogOpen(false)}
           onCreate={project.createProject}
+        />
+
+        <CanvasResizeDialog
+          isOpen={isResizeCanvasDialogOpen}
+          onClose={() => setIsResizeCanvasDialogOpen(false)}
+          currentWidth={state.width}
+          currentHeight={state.height}
+          onResize={project.resizeCanvas}
+        />
+
+        <ReferenceImageDialog
+            isOpen={isReferenceImageDialogOpen}
+            onClose={() => setIsReferenceImageDialogOpen(false)}
+            referenceImage={state.referenceImage}
+            onUpdate={project.setReferenceImage}
         />
 
         {isMobile ? (

@@ -46,7 +46,7 @@ const SliderTrack = React.forwardRef<
   <Slider.Track
     ref={ref}
     className={cn(
-      "relative h-1.5 w-full grow overflow-hidden rounded-full bg-secondary/50 border border-white/5",
+      "relative h-1.5 w-full grow overflow-hidden rounded-full bg-secondary/50 border border-border/30",
       className
     )}
     {...props}

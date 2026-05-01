@@ -14,11 +14,15 @@ export interface Modifiers {
 export type PixelValue = string | number | null;
 export type PixelGrid = PixelValue[]; // Flat array of hex colors (RGBA), indices (Indexed), or null (transparent)
 
+export type LayerBlendMode = 'normal' | 'multiply' | 'screen' | 'overlay' | 'darken' | 'lighten' | 'color-dodge' | 'color-burn' | 'hard-light' | 'soft-light' | 'difference' | 'exclusion';
+
 export interface Layer {
   id: string;
   name: string;
   visible: boolean;
   locked: boolean;
+  opacity: number; // 0 to 100
+  blendMode: LayerBlendMode;
 }
 
 export interface Frame {
@@ -74,6 +78,17 @@ export interface ProjectState {
   zoom: number;
   onionSkin: boolean;
   showGrid: boolean;
+  tiled: boolean;
+
+  // Reference Image
+  referenceImage: {
+    url: string;
+    opacity: number;
+    x: number;
+    y: number;
+    scale: number;
+    visible: boolean;
+  } | null;
 
   // Selection
   selection: Set<number> | null;

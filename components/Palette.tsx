@@ -98,13 +98,13 @@ export const Palette: React.FC<PaletteProps> = ({
         <Popover>
             <PopoverTrigger asChild>
                 <button 
-                    className="flex-1 min-w-0 bg-background/40 text-[9px] font-bold text-muted-foreground hover:text-foreground border border-border rounded-sm px-1.5 py-0.5 flex items-center justify-between hover:bg-secondary/40 transition-colors focus:outline-none"
+                    className="flex-1 min-w-0 bg-background/40 text-[9px] font-bold text-muted-foreground hover:text-foreground border border-border/30 rounded-sm px-1.5 py-0.5 flex items-center justify-between hover:bg-secondary/40 transition-colors focus:outline-none"
                 >
                     <span className="truncate uppercase tracking-tight">{activePalette?.name || 'Palette'}</span>
                     <ChevronDown size={8} className="ml-1 shrink-0 opacity-40" />
                 </button>
             </PopoverTrigger>
-            <PopoverContent align="start" className="w-44 p-1 flex flex-col gap-0.5 max-h-[300px] overflow-y-auto z-50 shadow-2xl bg-card border-border">
+            <PopoverContent align="start" className="w-44 p-1 flex flex-col gap-0.5 max-h-[300px] overflow-y-auto z-50 shadow-2xl bg-card border border-border/30">
                 {palettes.map((p) => (
                     <PopoverClose key={p.id} asChild>
                         <button

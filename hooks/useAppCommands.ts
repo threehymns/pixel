@@ -15,12 +15,18 @@ interface UseAppCommandsProps {
         duplicateFrame: () => void;
         tweenFrames: () => void;
         downloadImage: () => void;
+        downloadSpriteSheet: () => void;
         saveProject: () => void;
         saveProjectAs: () => void;
         createProject: () => void;
         closeProject: (id: string) => void;
         switchTab: (dir: 'next' | 'prev') => void;
         setColorMode: (mode: ColorMode) => void;
+        openResizeDialog: () => void;
+        openReferenceImageDialog: () => void;
+        flipPixels: (axis: 'h' | 'v') => void;
+        clearSelection: () => void;
+        cropCanvas: () => void;
     };
     fileSystemActions: {
         openFolder: () => void;
@@ -76,8 +82,12 @@ export function useAppCommands({
             perform: () => projectActions.closeProject(state.id) 
         },
         { 
-            id: 'file.export', label: 'Export PNG', category: 'File', hotkey: 'Shift+E', 
+            id: 'file.export', label: 'Export Frame (PNG)', category: 'File', hotkey: 'Shift+E', 
             perform: projectActions.downloadImage 
+        },
+        { 
+            id: 'file.exportSpritesheet', label: 'Export Sprite Sheet...', category: 'File', 
+            perform: projectActions.downloadSpriteSheet 
         },
         { 
             id: 'view.nextTab', label: 'Next Tab', category: 'View', hotkey: 'Ctrl+Tab', keys: ['Control+Tab'], 
@@ -112,6 +122,19 @@ export function useAppCommands({
             perform: projectActions.redo, disabled: !projectActions.canRedo
         },
         { 
+            id: 'edit.flipH', label: 'Flip Horizontal', category: 'Edit', hotkey: 'Shift+H', keys: ['Shift+h'],
+            perform: () => projectActions.flipPixels('h')
+        },
+        { 
+            id: 'edit.flipV', label: 'Flip Vertical', category: 'Edit', hotkey: 'Shift+V', keys: ['Shift+v'],
+            perform: () => projectActions.flipPixels('v')
+        },
+        { 
+            id: 'edit.clearEdit', label: 'Clear Selection', category: 'Edit', hotkey: 'Del', keys: ['Backspace', 'Delete'],
+            perform: projectActions.clearSelection,
+            disabled: !state.selection || state.selection.size === 0
+        },
+        { 
             id: 'select.all', label: 'Select All', category: 'Select', hotkey: 'Ctrl+A', keys: ['Control+a', 'Meta+a'],
             perform: () => {
                 const all = new Set<number>();
@@ -124,6 +147,16 @@ export function useAppCommands({
             perform: () => updateState({...state, selection: null}, { action: 'Deselect' }) 
         },
         { 
+            id: 'select.invert', label: 'Invert Selection', category: 'Select', hotkey: 'Ctrl+Shift+I', keys: ['Control+I', 'Meta+I'],
+            perform: () => {
+                const newSel = new Set<number>();
+                for(let i=0; i<state.width*state.height; i++) {
+                    if (!state.selection?.has(i)) newSel.add(i);
+                }
+                updateState({...state, selection: newSel}, { action: 'Invert Selection' });
+            }
+        },
+        { 
             id: 'view.grid', label: 'Toggle Grid', category: 'View', hotkey: 'Shift+G', keys: ['Shift+G'],
             perform: () => updateState({...state, showGrid: !state.showGrid}),
             checked: state.showGrid
@@ -132,6 +165,15 @@ export function useAppCommands({
             id: 'view.onion', label: 'Toggle Onion Skin', category: 'View', hotkey: 'Shift+O', keys: ['Shift+O'],
             perform: () => updateState({...state, onionSkin: !state.onionSkin}),
             checked: state.onionSkin
+        },
+        { 
+            id: 'view.tiled', label: 'Tiled View', category: 'View', hotkey: 'T', keys: ['t'],
+            perform: () => updateState({...state, tiled: !state.tiled}),
+            checked: state.tiled
+        },
+        { 
+            id: 'view.referenceImage', label: 'Reference Image...', category: 'View', hotkey: 'Alt+R', keys: ['Alt+r'],
+            perform: projectActions.openReferenceImageDialog
         },
         { 
             id: 'layer.new', label: 'New Layer', category: 'Layer', hotkey: 'Shift+N', keys: ['Shift+N'],
@@ -163,6 +205,15 @@ export function useAppCommands({
             id: 'sprite.modeRGBA', label: 'Color Mode: RGBA', category: 'Sprite', 
             perform: () => projectActions.setColorMode('rgba'),
             disabled: state.colorMode === 'rgba'
+        },
+        {
+            id: 'sprite.resize', label: 'Canvas Size...', category: 'Sprite', hotkey: 'Alt+C', keys: ['Alt+c'],
+            perform: projectActions.openResizeDialog
+        },
+        {
+            id: 'sprite.crop', label: 'Crop to Selection', category: 'Sprite',
+            perform: projectActions.cropCanvas,
+            disabled: !state.selection || state.selection.size === 0
         },
         { 
           id: 'tool.pencil', label: 'Pencil Tool', category: 'Edit', hotkey: 'B', keys: ['b'],
@@ -239,6 +290,22 @@ export function useAppCommands({
         { 
           id: 'tool.select.wand', label: 'Magic Wand', category: 'Select', hotkey: 'W', keys: ['w'],
           perform: () => updateState({ ...state, tool: 'magic-wand' })
+        },
+        {
+          id: 'tool.brushSize.increase', label: 'Increase Brush Size', category: 'Edit', hotkey: ']', keys: [']'],
+          perform: () => updateState({ ...state, brushSize: Math.min(64, state.brushSize + 1) })
+        },
+        {
+          id: 'tool.brushSize.decrease', label: 'Decrease Brush Size', category: 'Edit', hotkey: '[', keys: ['['],
+          perform: () => updateState({ ...state, brushSize: Math.max(1, state.brushSize - 1) })
+        },
+        {
+          id: 'view.zoomIn', label: 'Zoom In', category: 'View', hotkey: 'Ctrl++', keys: ['Control+=', 'Meta+='],
+          perform: () => updateState({ ...state, zoom: Math.min(128, state.zoom * 2) })
+        },
+        {
+          id: 'view.zoomOut', label: 'Zoom Out', category: 'View', hotkey: 'Ctrl+-', keys: ['Control+-', 'Meta+-'],
+          perform: () => updateState({ ...state, zoom: Math.max(1, state.zoom / 2) })
         },
         {
           id: 'app.commandPalette', label: 'Command Palette', category: 'View', hotkey: 'Ctrl+P', keys: ['Control+p', 'Meta+p', 'F1'],

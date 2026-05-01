@@ -159,9 +159,9 @@ export const Timeline: React.FC<TimelineProps> = ({
   const canTween = state.selectedFrameIndices.length >= 3;
 
   return (
-    <div className="h-full bg-card border-t border-background flex flex-col text-sm select-none">
+    <div className="h-full bg-card border-t border-border/30 flex flex-col text-sm select-none">
       {/* Timeline Controls */}
-      <div className="h-8 bg-[#2a2a2a] border-b border-background flex items-center px-3 gap-1 shrink-0">
+      <div className="h-8 bg-card/50 border-b border-border/30 flex items-center px-3 gap-1 shrink-0">
          <span className="font-bold text-gray-500 mr-2 text-[10px] uppercase tracking-wider hidden sm:block">Timeline</span>
          <button onClick={onAddFrame} className="p-1 hover:text-white text-gray-400" title="New Frame"><Plus size={14} /></button>
          <button onClick={() => isMultiFrame ? onDuplicateSelectedFrames() : onDuplicateFrame()} className={`p-1 hover:text-white ${isMultiFrame ? 'text-primary' : 'text-gray-400'}`} title="Duplicate Frame"><Copy size={14} /></button>
@@ -181,7 +181,7 @@ export const Timeline: React.FC<TimelineProps> = ({
 
       <div className="flex flex-1 overflow-hidden">
         {/* Compact Layers Column (Left) */}
-        <div className="w-40 pt-8 bg-muted border-r border-background flex flex-col overflow-y-auto overflow-x-hidden">
+        <div className="w-40 pt-8 bg-muted border-r border-border/30 flex flex-col overflow-y-auto overflow-x-hidden">
           {state.layers.slice().reverse().map((layer) => {
              const isDragging = dragState?.type === 'layer' && dragState.id === layer.id;
              const isOver = dragState?.type === 'layer' && dragState.overId === layer.id;
@@ -196,8 +196,8 @@ export const Timeline: React.FC<TimelineProps> = ({
                   onDragOver={(e) => handleLayerDragOver(e, layer.id)}
                   onDrop={(e) => handleLayerDrop(e, layer.id)}
                   onDragEnd={() => setDragState(null)}
-                  className={`h-8 flex items-center px-1.5 gap-1 border-b border-background cursor-pointer group relative
-                    ${isActive ? 'bg-[#1a1a1a] border-primary/20' : isSelected ? 'bg-secondary/20' : 'text-gray-500 hover:bg-secondary/10'}
+                  className={`h-8 flex items-center px-1.5 gap-1 border-b border-border/20 cursor-pointer group relative
+                    ${isActive ? 'bg-secondary/40 border-primary/20' : isSelected ? 'bg-secondary/20' : 'text-gray-500 hover:bg-secondary/10'}
                     ${isDragging ? 'opacity-30' : ''}
                   `}
                   onClick={() => onSelectLayer(layer.id)}
@@ -249,7 +249,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                  </div>
 
                  {/* Header Row for Frame Numbers */}
-                 <div className="flex h-8 border-b border-background bg-muted">
+                 <div className="flex h-8 border-b border-border/30 bg-muted">
                     {state.frames.map((_, idx) => {
                       const isDragging = dragState?.type === 'frame' && dragState.id === idx.toString();
                       const isOver = dragState?.type === 'frame' && dragState.overId === idx.toString();
@@ -266,8 +266,8 @@ export const Timeline: React.FC<TimelineProps> = ({
                                 onDrop={(e) => handleFrameDrop(e, idx)}
                                 onDragEnd={() => setDragState(null)}
                                 onClick={(e) => handleFrameClick(e, idx)}
-                                className={`min-w-[40px] w-10 border-r border-background flex items-center justify-center text-[10px] cursor-pointer hover:bg-secondary/30 relative
-                                ${isActive ? 'bg-[#1a1a1a] text-primary font-bold shadow-[inset_0_-2px_0_var(--primary)]' : isSelected ? 'bg-secondary/40 text-foreground' : 'text-gray-600'}
+                                className={`min-w-[40px] w-10 border-r border-border/30 flex items-center justify-center text-[10px] cursor-pointer hover:bg-secondary/30 relative
+                                ${isActive ? 'bg-secondary/40 text-primary font-bold shadow-[inset_0_-2px_0_var(--primary)]' : isSelected ? 'bg-secondary/40 text-foreground' : 'text-gray-600'}
                                 ${isDragging ? 'opacity-30' : ''}
                                 `}
                             >
@@ -291,7 +291,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                  {/* Frame Cells */}
                  <div className="flex flex-col">
                     {state.layers.slice().reverse().map((layer) => (
-                      <div key={layer.id} className="flex h-8 border-b border-background">
+                      <div key={layer.id} className="flex h-8 border-b border-border/20">
                         {state.frames.map((frame, frameIdx) => {
                           const hasContent = frame.layerData[layer.id]?.some(p => p !== null);
                           const isActive = state.activeFrameIndex === frameIdx && state.activeLayerId === layer.id;
@@ -305,7 +305,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                                 if (e.shiftKey || e.ctrlKey || e.metaKey) handleFrameClick(e, frameIdx);
                                 else { onSelectFrames([frameIdx], frameIdx); onSelectLayer(layer.id); }
                               }}
-                              className={`min-w-[40px] w-10 border-r border-background flex items-center justify-center cursor-pointer relative transition-colors
+                              className={`min-w-[40px] w-10 border-r border-border/20 flex items-center justify-center cursor-pointer relative transition-colors
                                  ${isActive ? 'bg-primary/10' : (isFrameSelected || isLayerSelected) ? 'bg-secondary/10' : 'hover:bg-white/[0.02]'}
                               `}
                             >

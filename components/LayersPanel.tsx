@@ -1,7 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ProjectState, Layer } from '../types';
-import { Eye, EyeOff, Lock, Unlock, Plus, Copy, Trash2, Check, GripVertical } from './Icons';
+import { Eye, EyeOff, Lock, Unlock, Plus, Copy, Trash2, Check, GripVertical, Settings, ChevronDown } from './Icons';
 import { hexToRgb } from '../utils';
+import { CustomSlider } from './ui/slider';
+import { LayerBlendMode } from '../types';
+
+const BLEND_MODES: LayerBlendMode[] = ['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'color-dodge', 'color-burn', 'hard-light', 'soft-light', 'difference', 'exclusion'];
+
 import {
   ContextMenu,
   ContextMenuContent,
@@ -103,6 +108,9 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const editInputRef = useRef<HTMLInputElement>(null);
+  
+  const [showOpacity, setShowOpacity] = useState(false);
+  const activeLayer = state.layers.find(l => l.id === state.activeLayerId);
 
   const startEditing = (layer: Layer) => {
     setEditingId(layer.id);
@@ -198,6 +206,13 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
         <span className="text-[10px] font-semibold text-muted-foreground tracking-wide uppercase">Layers</span>
         <div className="flex items-center gap-0.5">
             <button 
+                onClick={() => setShowOpacity(!showOpacity)} 
+                className={`p-0.5 transition-colors rounded ${showOpacity ? 'text-primary bg-primary/10' : 'text-muted-foreground hover:text-foreground hover:bg-accent'}`}
+                title="Layer Opacity"
+            >
+                <Settings size={12} />
+            </button>
+            <button 
                 onClick={() => isMultiLayer ? onDeleteSelectedLayers() : onDeleteLayer(state.activeLayerId)} 
                 className="p-0.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors"
                 title="Delete Layer"
@@ -216,6 +231,35 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
             </button>
         </div>
       </div>
+
+      {showOpacity && activeLayer && (
+        <div className="px-2 py-2 border-b border-border bg-accent/20 flex flex-col gap-2 animate-in slide-in-from-top-1 duration-200">
+            <div className="flex flex-col gap-1.5">
+                <div className="flex justify-between items-center">
+                    <span className="text-[9px] font-medium text-muted-foreground uppercase">Blend Mode</span>
+                    <select 
+                        value={activeLayer.blendMode}
+                        onChange={(e) => onUpdateLayer(activeLayer.id, { blendMode: e.target.value as LayerBlendMode })}
+                        className="bg-background border border-border rounded px-1 py-0.5 text-[10px] outline-none focus:ring-1 focus:ring-primary h-5 capitalize"
+                    >
+                        {BLEND_MODES.map(m => <option key={m} value={m}>{m}</option>)}
+                    </select>
+                </div>
+                
+                <div className="flex justify-between items-center">
+                    <span className="text-[9px] font-medium text-muted-foreground uppercase">Opacity</span>
+                    <span className="text-[9px] font-mono">{activeLayer.opacity}%</span>
+                </div>
+                <CustomSlider
+                    value={activeLayer.opacity}
+                    onValueChange={(val) => onUpdateLayer(activeLayer.id, { opacity: val })}
+                    min={0}
+                    max={100}
+                    className="h-4"
+                />
+            </div>
+        </div>
+      )}
 
       {/* List Container */}
       <ContextMenu>

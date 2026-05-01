@@ -149,8 +149,8 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
           <Home onCreateProject={project.createProject} onImportProject={() => fileInputRef.current?.click()} />
         ) : (
           <>
-            <div className="h-10 bg-secondary/50 border-b border-background flex items-center px-2 space-x-2 text-xs shrink-0 overflow-x-auto no-scrollbar">
-              <div className="flex items-center space-x-1 border-r border-input pr-2 shrink-0">
+            <div className="h-10 bg-secondary/50 border-b border-border/30 flex items-center px-2 space-x-2 text-xs shrink-0 overflow-x-auto no-scrollbar">
+              <div className="flex items-center space-x-1 border-r border-border/50 pr-2 shrink-0">
                   <ToolButton active={false} onClick={() => commands.find(c => c.id === 'edit.undo')?.perform()} icon={<Undo size={16} />} label="Undo (Ctrl+Z)" />
                   <ToolButton active={false} onClick={() => commands.find(c => c.id === 'edit.redo')?.perform()} icon={<Redo size={16} />} label="Redo (Ctrl+Y)" />
               </div>
@@ -175,7 +175,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                   {state.inkType === 'shading' && (
                       <div className="flex items-center gap-2 px-2 py-1 bg-background/40 border border-border rounded-md animate-in slide-in-from-left-2 duration-200">
                           <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-tight">Shades:</span>
-                          <div className="flex gap-0.5 bg-background p-0.5 rounded border border-input min-w-[100px] h-6 items-center">
+                          <div className="flex gap-0.5 bg-background p-0.5 rounded border border-border/50 min-w-[100px] h-6 items-center">
                               {state.shades.map((color, idx) => (
                                   <div 
                                     key={idx} 
@@ -192,7 +192,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                                             updateState({...state, shades: newShades});
                                         }
                                     }}
-                                    className="w-4 h-full relative group cursor-grab active:cursor-grabbing border border-black/20"
+                                    className="w-4 h-full relative group cursor-grab active:cursor-grabbing border border-border/20"
                                     style={{ backgroundColor: color }}
                                     title={`Step ${idx + 1}: ${color}`}
                                   >
@@ -220,7 +220,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                                       <ChevronDown size={12} />
                                   </button>
                               </PopoverTrigger>
-                              <PopoverContent align="end" className="w-32 p-1 flex flex-col gap-0.5 shadow-xl bg-card border-border rounded-lg">
+                              <PopoverContent align="end" className="w-32 p-1 flex flex-col gap-0.5 shadow-xl bg-card border border-border rounded-lg text-foreground">
                                   <PopoverClose asChild>
                                       <button 
                                           onClick={() => updateState({...state, shades: [...state.shades].reverse()})}
@@ -326,7 +326,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                   )}
               </div>
 
-              <div className="flex items-center space-x-1 pl-2 border-l border-input shrink-0">
+              <div className="flex items-center space-x-1 pl-2 border-l border-border/50 shrink-0">
                   <ToolButton active={showPreview} onClick={() => setShowPreview(!showPreview)} icon={<PlaySquare size={16} />} label="Toggle Preview" />
                   <ToolButton active={state.showGrid} onClick={() => updateState({...state, showGrid: !state.showGrid})} icon={<Grid size={16} />} label="Toggle Grid" />
                   <ToolButton active={state.onionSkin} onClick={() => updateState({...state, onionSkin: !state.onionSkin})} icon={<Eye size={16} />} label="Onion Skin" />
@@ -349,7 +349,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                      </Allotment.Pane>
 
                     <Allotment.Pane minSize={44} maxSize={44} priority={1 as any}>
-                        <div className="w-full h-full bg-card border-r border-background flex flex-col items-center py-2 overflow-y-auto overflow-x-hidden z-50 shadow-lg scrollbar-hide">
+                        <div className="w-full h-full bg-card border-r border-border/30 flex flex-col items-center py-2 overflow-y-auto overflow-x-hidden z-50 shadow-lg scrollbar-hide">
                             <div className="flex flex-col gap-1 p-1">
                                 <ToolButton active={state.tool === 'pencil'} onClick={() => updateState({...state, tool: 'pencil'})} icon={<Pencil size={18} />} label="Pencil (B)" />
                                 <ToolButton active={state.tool === 'eraser'} onClick={() => updateState({...state, tool: 'eraser'})} icon={<Eraser size={18} />} label="Eraser (E)" />
@@ -370,7 +370,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                                     </TooltipTrigger>
                                     <TooltipContent side="right" sideOffset={12}>Shape Tools (U)</TooltipContent>
                                   </Tooltip>
-                                  <PopoverContent side="right" align="start" className="flex flex-col gap-1 w-40 p-1.5 shadow-xl bg-card border-border rounded-lg">
+                                  <PopoverContent side="right" align="start" className="flex flex-col gap-1 w-40 p-1.5 shadow-xl bg-card border border-border rounded-lg text-foreground">
                                     <PopoverClose asChild>
                                         <button onClick={() => updateState({...state, tool: 'rect'})} className={`flex items-center gap-2 p-1.5 rounded hover:bg-accent text-foreground text-xs text-left w-full transition-colors ${state.tool === 'rect' ? 'bg-primary text-primary-foreground font-medium' : ''}`}>
                                           <Square size={14} /> <span>Rectangle (U)</span>
@@ -413,7 +413,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                                         </TooltipTrigger>
                                         <TooltipContent side="right" sideOffset={12}>Effect Brushes (R)</TooltipContent>
                                     </Tooltip>
-                                    <PopoverContent side="right" align="start" className="flex flex-col gap-1 w-40 p-1.5 shadow-xl bg-card border-border rounded-lg">
+                                    <PopoverContent side="right" align="start" className="flex flex-col gap-1 w-40 p-1.5 shadow-xl bg-card border border-border rounded-lg text-foreground">
                                         <PopoverClose asChild>
                                             <button onClick={() => updateState({...state, tool: 'blur'})} className={`flex items-center gap-2 p-1.5 rounded hover:bg-accent text-foreground text-xs text-left w-full transition-colors ${state.tool === 'blur' ? 'bg-primary text-primary-foreground font-medium' : ''}`}>
                                                 <Droplets size={14} /> <span>Blur (R)</span>
@@ -445,7 +445,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                                     </TooltipTrigger>
                                     <TooltipContent side="right" sideOffset={12}>Selection Tools</TooltipContent>
                                   </Tooltip>
-                                  <PopoverContent side="right" align="start" className="flex flex-col gap-1 w-48 p-1.5 shadow-xl bg-card border-border rounded-lg">
+                                  <PopoverContent side="right" align="start" className="flex flex-col gap-1 w-48 p-1.5 shadow-xl bg-card border border-border rounded-lg text-foreground">
                                     {SELECTION_TOOLS.map(t => (
                                         <PopoverClose key={t} asChild>
                                           <button 
@@ -469,7 +469,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                                 <Popover>
                                     <PopoverTrigger asChild>
                                         <button 
-                                            className="absolute bottom-0 right-0 w-6 h-6 rounded-sm border border-[#3f3f3f] overflow-hidden"
+                                            className="absolute bottom-0 right-0 w-6 h-6 rounded-sm border border-border overflow-hidden"
                                             style={{ backgroundColor: state.secondaryColor }}
                                             title="Secondary Color"
                                         />
@@ -483,7 +483,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                                 <Popover>
                                     <PopoverTrigger asChild>
                                         <button 
-                                            className="absolute top-0 left-0 w-6 h-6 rounded-sm border border-[#3f3f3f] overflow-hidden z-10"
+                                            className="absolute top-0 left-0 w-6 h-6 rounded-sm border border-border overflow-hidden z-10"
                                             style={{ backgroundColor: state.primaryColor }}
                                             title="Primary Color"
                                         />
@@ -502,7 +502,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                                             updateState({...state, primaryColor: state.secondaryColor, secondaryColor: p, shades: [...state.shades].reverse()});
                                         }
                                     }}
-                                    className="absolute top-0 right-0 w-4 h-4 bg-card rounded-bl-sm border-b border-l border-[#3f3f3f] flex items-center justify-center text-muted-foreground hover:text-foreground z-20"
+                                    className="absolute top-0 right-0 w-4 h-4 bg-card rounded-bl-sm border-b border-l border-border flex items-center justify-center text-muted-foreground hover:text-foreground z-20"
                                     title="Swap Colors (X)"
                                 >
                                     <ArrowRightLeft size={8} className="rotate-45" />
@@ -545,14 +545,14 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                     </Allotment.Pane>
 
                     <Allotment.Pane visible={showRightPanel} preferredSize={150} minSize={120} priority={1 as any}>
-                      <div className="w-full h-full bg-card border-l border-background shadow-lg flex flex-col relative">
+                      <div className="w-full h-full bg-card border-l border-border/30 shadow-lg flex flex-col relative">
                         <div className="flex-1 flex flex-col min-h-0">
                           <LayersPanel 
                               state={state} onSelectLayers={(ids, active) => updateState({...state, selectedLayerIds: ids, activeLayerId: active})}
                               onUpdateLayer={project.updateLayer} onAddLayer={project.addLayer} onDuplicateLayer={project.duplicateLayer}
                               onDeleteLayer={project.deleteLayer} onDuplicateSelectedLayers={project.duplicateSelectedLayers}
                               onDeleteSelectedLayers={project.deleteSelectedLayers} onReorderLayers={project.reorderLayers}
-                              className="flex-1 border-b border-background min-h-[150px]"
+                              className="flex-1 border-b border-border/30 min-h-[150px]"
                           />
                           <HistoryPanel history={project.history} historyIndex={project.historyIndex} onJumpToHistory={project.jumpToHistory} className="flex-1 min-h-[100px]" />
                         </div>

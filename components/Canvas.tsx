@@ -555,12 +555,12 @@ export const Canvas: React.FC<CanvasProps> = ({
     const imgData = offCtx.createImageData(state.width, state.height);
     const data = imgData.data;
     
-    // 1. Draw Onion Skin to offscreen
+      // 1. Draw Onion Skin to offscreen
     if (state.onionSkin && state.activeFrameIndex > 0) {
       const prevFrame = state.frames[state.activeFrameIndex - 1];
       data.fill(0);
       state.layers.forEach(layer => {
-        if (!layer.visible) return;
+        if (!layer.visible || layer.opacity <= 0) return;
         const pixels = prevFrame.layerData[layer.id];
         if (!pixels) return;
         for (let i = 0; i < pixels.length; i++) {
@@ -569,7 +569,7 @@ export const Canvas: React.FC<CanvasProps> = ({
             if (color) {
                 const [r, g, b] = hexToRgb(color);
                 const idx = i * 4;
-                data[idx] = r; data[idx+1] = g; data[idx+2] = b; data[idx+3] = 100; // Semi-transparent
+                data[idx] = r; data[idx+1] = g; data[idx+2] = b; data[idx+3] = (layer.opacity / 100) * 80; // Semi-transparent
             }
         }
       });
@@ -581,7 +581,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     // 2. Draw Layers to offscreen
     const currentFrame = state.frames[state.activeFrameIndex];
     state.layers.forEach((layer) => {
-      if (!layer.visible) return;
+      if (!layer.visible || layer.opacity <= 0) return;
       const layerPixels = currentFrame.layerData[layer.id];
       if (!layerPixels) return;
       
@@ -598,7 +598,7 @@ export const Canvas: React.FC<CanvasProps> = ({
          if (color) {
              const [r, g, b] = hexToRgb(color);
              const idx = i * 4;
-             layerData[idx] = r; layerData[idx+1] = g; layerData[idx+2] = b; layerData[idx+3] = 255; 
+             layerData[idx] = r; layerData[idx+1] = g; layerData[idx+2] = b; layerData[idx+3] = Math.round(layer.opacity * 2.55); 
          }
       }
       
@@ -606,7 +606,9 @@ export const Canvas: React.FC<CanvasProps> = ({
       const tempCanvas = document.createElement('canvas');
       tempCanvas.width = state.width; tempCanvas.height = state.height;
       tempCanvas.getContext('2d')?.putImageData(layerImgData, 0, 0);
+      offCtx.globalCompositeOperation = layer.blendMode === 'normal' ? 'source-over' : layer.blendMode;
       offCtx.drawImage(tempCanvas, 0, 0);
+      offCtx.globalCompositeOperation = 'source-over';
     });
 
     // 3. Draw Floating Pixels (Transformations)
@@ -844,6 +846,53 @@ export const Canvas: React.FC<CanvasProps> = ({
         onMouseUp={handlePointerUp}
         onDoubleClick={() => { if (state.tool === 'poly-lasso-select' && polyPoints.length > 2) { combineSelection(getPolygonSelection(polyPoints, state.width, state.height)); setPolyPoints([]); } }}
     >
+      {/* Reference Image Layer */}
+      {state.referenceImage && state.referenceImage.visible && (
+        <div 
+          className="absolute top-0 left-0 pointer-events-none"
+          style={{
+            transform: `translate(${pan.x + state.referenceImage.x * localZoom}px, ${pan.y + state.referenceImage.y * localZoom}px) scale(${state.referenceImage.scale * localZoom})`,
+            opacity: state.referenceImage.opacity / 100,
+            transformOrigin: 'top left',
+          }}
+        >
+          <img src={state.referenceImage.url} className="block" alt="Reference" referrerPolicy="no-referrer" />
+        </div>
+      )}
+
+      {/* Tiled Mode Overlays - Rendered below main art */}
+      {state.tiled && [-1, 0, 1].map(ty => [-1, 0, 1].map(tx => {
+        if (tx === 0 && ty === 0) return null;
+        return (
+          <div 
+            key={`tile-${tx}-${ty}`}
+            className="absolute top-0 left-0 pointer-events-none opacity-40 grayscale-[0.2]"
+            style={{ 
+              width: state.width, 
+              height: state.height,
+              transform: `translate(${pan.x + tx * state.width * localZoom}px, ${pan.y + ty * state.height * localZoom}px) scale(${localZoom})`, 
+              transformOrigin: 'top left',
+              imageRendering: 'pixelated',
+            }}
+          >
+            <canvas
+              width={state.width}
+              height={state.height}
+              className="w-full h-full block"
+              ref={(el) => {
+                  if (el && artCanvasRef.current) {
+                      const ctx = el.getContext('2d');
+                      if (ctx) {
+                          ctx.clearRect(0, 0, state.width, state.height);
+                          ctx.drawImage(artCanvasRef.current, 0, 0);
+                      }
+                  }
+              }}
+            />
+          </div>
+        );
+      }))}
+
       {/* Art Layer Wrapper (Handles Pan/Zoom via CSS) */}
       <div 
         className="absolute top-0 left-0 shadow-2xl"

@@ -68,7 +68,7 @@ export const Menubar: React.FC<MenubarProps> = ({
                 {category}
               </button>
             </PopoverTrigger>
-            <PopoverContent align="start" sideOffset={4} className="w-56 p-1 flex flex-col gap-0.5 overflow-visible shadow-lg border-border/50 bg-card/95 backdrop-blur-sm rounded-lg">
+            <PopoverContent align="start" sideOffset={4} className="w-56 p-1 flex flex-col gap-0.5 overflow-visible shadow-lg border border-border/50 bg-card/95 backdrop-blur-sm rounded-lg">
               {categoryCommands.map(cmd => {
                 // Special handling to group Color Mode commands into a nested Popover
                 if (cmd.id === 'sprite.modeRGBA') return null; 
