@@ -1118,6 +1118,157 @@ export function useProject() {
       );
   }, [state, activeProjectId, updateState]);
 
+  const centerContent = useCallback(() => {
+      if (activeProjectId === 'home') return;
+      const { frames, width, height, activeFrameIndex, selectedLayerIds } = state;
+      
+      const currentFrame = frames[activeFrameIndex];
+      let minX = width, minY = height, maxX = -1, maxY = -1;
+      let hasPixels = false;
+
+      selectedLayerIds.forEach(lId => {
+          const pixels = currentFrame.layerData[lId];
+          if (!pixels) return;
+          for (let y = 0; y < height; y++) {
+              for (let x = 0; x < width; x++) {
+                  if (pixels[y * width + x] !== null) {
+                      if (x < minX) minX = x;
+                      if (x > maxX) maxX = x;
+                      if (y < minY) minY = y;
+                      if (y > maxY) maxY = y;
+                      hasPixels = true;
+                  }
+              }
+          }
+      });
+
+      if (!hasPixels) return;
+
+      const contentW = maxX - minX + 1;
+      const contentH = maxY - minY + 1;
+      const targetX = Math.floor((width - contentW) / 2);
+      const targetY = Math.floor((height - contentH) / 2);
+      const offsetX = targetX - minX;
+      const offsetY = targetY - minY;
+
+      if (offsetX === 0 && offsetY === 0) return;
+
+      const newFrames = frames.map((f, i) => {
+          if (i !== activeFrameIndex) return f;
+          const newLayerData = { ...f.layerData };
+          selectedLayerIds.forEach(lId => {
+              const oldPixels = f.layerData[lId] || new Array(width * height).fill(null);
+              const newPixels = new Array(width * height).fill(null);
+              for (let y = 0; y < height; y++) {
+                  for (let x = 0; x < width; x++) {
+                      const val = oldPixels[y * width + x];
+                      if (val !== null) {
+                          const nx = x + offsetX;
+                          const ny = y + offsetY;
+                          if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                              newPixels[ny * width + nx] = val;
+                          }
+                      }
+                  }
+              }
+              newLayerData[lId] = newPixels;
+          });
+          return { ...f, layerData: newLayerData };
+      });
+
+      let newSelection = state.selection;
+      if (state.selection) {
+          newSelection = new Set<number>();
+          state.selection.forEach(idx => {
+              const { x, y } = getCoords(idx, width);
+              const nx = x + offsetX;
+              const ny = y + offsetY;
+              if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                  newSelection!.add(getIndex(nx, ny, width));
+              }
+          });
+      }
+
+      updateState(
+          { ...state, frames: newFrames, selection: newSelection },
+          { action: 'Center Content' }
+      );
+  }, [state, activeProjectId, updateState]);
+
+  const generateOutline = useCallback(() => {
+      if (activeProjectId === 'home') return;
+      const { frames, width, height, activeFrameIndex, selectedLayerIds, primaryColor, colorMode, palette } = state;
+      
+      const outlineColor = colorMode === 'indexed' 
+          ? (palette.findIndex(c => c.toLowerCase() === primaryColor.toLowerCase()) > -1 ? palette.findIndex(c => c.toLowerCase() === primaryColor.toLowerCase()) : 0)
+          : primaryColor;
+
+      const newFrames = frames.map((f, i) => {
+          if (i !== activeFrameIndex) return f;
+          const newLayerData = { ...f.layerData };
+          selectedLayerIds.forEach(lId => {
+              const pixels = f.layerData[lId] || new Array(width * height).fill(null);
+              const newPixels = [...pixels];
+              for (let y = 0; y < height; y++) {
+                  for (let x = 0; x < width; x++) {
+                      const idx = y * width + x;
+                      if (pixels[idx] === null) {
+                          if ((x > 0 && pixels[y * width + (x - 1)] !== null) ||
+                              (x < width - 1 && pixels[y * width + (x + 1)] !== null) ||
+                              (y > 0 && pixels[(y - 1) * width + x] !== null) ||
+                              (y < height - 1 && pixels[(y + 1) * width + x] !== null)) {
+                              newPixels[idx] = outlineColor;
+                          }
+                      }
+                  }
+              }
+              newLayerData[lId] = newPixels;
+          });
+          return { ...f, layerData: newLayerData };
+      });
+
+      updateState(
+          { ...state, frames: newFrames },
+          { action: 'Generate Outline' }
+      );
+  }, [state, activeProjectId, updateState]);
+
+  const strokeSelection = useCallback(() => {
+      if (activeProjectId === 'home') return;
+      const { frames, width, height, activeFrameIndex, activeLayerId, selection, primaryColor, colorMode, palette } = state;
+      if (!selection || selection.size === 0) return;
+
+      const strokeColor = colorMode === 'indexed' 
+          ? (palette.findIndex(c => c.toLowerCase() === primaryColor.toLowerCase()) > -1 ? palette.findIndex(c => c.toLowerCase() === primaryColor.toLowerCase()) : 0)
+          : primaryColor;
+
+      const newFrames = frames.map((f, i) => {
+          if (i !== activeFrameIndex) return f;
+          const newLayerData = { ...f.layerData };
+          const pixels = f.layerData[activeLayerId] || new Array(width * height).fill(null);
+          const newPixels = [...pixels];
+          
+          selection.forEach(idx => {
+              const { x, y } = getCoords(idx, width);
+              const isEdge = x === 0 || x === width - 1 || y === 0 || y === height - 1 ||
+                           !selection.has(y * width + (x - 1)) || 
+                           !selection.has(y * width + (x + 1)) ||
+                           !selection.has((y - 1) * width + x) ||
+                           !selection.has((y + 1) * width + x);
+              if (isEdge) {
+                  newPixels[idx] = strokeColor;
+              }
+          });
+          newLayerData[activeLayerId] = newPixels;
+          return { ...f, layerData: newLayerData };
+      });
+
+      updateState(
+          { ...state, frames: newFrames },
+          { action: 'Stroke Selection' }
+      );
+  }, [state, activeProjectId, updateState]);
+
   const clearSelection = useCallback(() => {
       if (activeProjectId === 'home') return;
       const { frames, width, height, activeFrameIndex, selectedLayerIds, selection } = state;
@@ -1235,6 +1386,9 @@ export function useProject() {
     flipPixels,
     clearSelection,
     cropCanvas,
+    centerContent,
+    generateOutline,
+    strokeSelection,
     canUndo: activeInstance.historyIndex > 0,
     canRedo: activeInstance.historyIndex < activeInstance.history.length - 1
   };

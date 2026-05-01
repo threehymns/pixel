@@ -13,7 +13,7 @@ import {
   Lock, Unlock, Folder, FolderOpen, Image,
   Maximize, Info, AlertCircle, Clock, Minus,
   Share, Palette, Sparkles, Droplets, Zap, Waves,
-  FlipHorizontal, FlipVertical, Hand
+  FlipHorizontal, FlipVertical, Hand, RefreshCcw, PenTool
 } from 'lucide-react';
 
 export const AngleIcon = ({ size = 24, ...props }: React.SVGProps<SVGSVGElement> & { size?: number }) => (
@@ -45,5 +45,5 @@ export {
   Lock, Unlock, Folder, FolderOpen, Image,
   Maximize, Info, AlertCircle, Clock, Minus,
   Share, Palette, Sparkles, Droplets, Zap, Waves,
-  FlipHorizontal, FlipVertical, Hand
+  FlipHorizontal, FlipVertical, Hand, RefreshCcw, PenTool
 };

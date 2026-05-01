@@ -27,6 +27,9 @@ interface UseAppCommandsProps {
         flipPixels: (axis: 'h' | 'v') => void;
         clearSelection: () => void;
         cropCanvas: () => void;
+        centerContent: () => void;
+        generateOutline: () => void;
+        strokeSelection: () => void;
     };
     fileSystemActions: {
         openFolder: () => void;
@@ -156,6 +159,11 @@ export function useAppCommands({
                 updateState({...state, selection: newSel}, { action: 'Invert Selection' });
             }
         },
+        {
+            id: 'select.stroke', label: 'Stroke Selection', category: 'Select',
+            perform: () => projectActions.strokeSelection(),
+            disabled: !state.selection || state.selection.size === 0
+        },
         { 
             id: 'view.grid', label: 'Toggle Grid', category: 'View', hotkey: 'Shift+G', keys: ['Shift+G'],
             perform: () => updateState({...state, showGrid: !state.showGrid}),
@@ -178,6 +186,14 @@ export function useAppCommands({
         { 
             id: 'layer.new', label: 'New Layer', category: 'Layer', hotkey: 'Shift+N', keys: ['Shift+N'],
             perform: projectActions.addLayer 
+        },
+        { 
+            id: 'layer.centerContent', label: 'Center Content', category: 'Layer',
+            perform: () => projectActions.centerContent()
+        },
+        { 
+            id: 'layer.generateOutline', label: 'Generate Outline', category: 'Layer',
+            perform: () => projectActions.generateOutline()
         },
         { 
             id: 'frame.new', label: 'New Frame', category: 'Sprite', hotkey: 'Alt+N', keys: ['Alt+n'],
@@ -270,6 +286,10 @@ export function useAppCommands({
         { 
           id: 'tool.fill', label: 'Fill Bucket', category: 'Edit', hotkey: 'G', keys: ['g'],
           perform: () => updateState({ ...state, tool: 'bucket' })
+        },
+        {
+          id: 'tool.color_replace', label: 'Color Replace Tool', category: 'Edit',
+          perform: () => updateState({ ...state, tool: 'color-replace' })
         },
         { 
           id: 'tool.picker', label: 'Color Picker', category: 'Edit', hotkey: 'I', keys: ['i'],

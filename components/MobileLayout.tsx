@@ -17,7 +17,7 @@ import {
   Check, Play, Droplets, Zap,
   Grid, Eye, Hand, FlipHorizontal, FlipVertical,
   Settings, Waves, ChevronUp, ChevronDown, Wand2,
-  Sparkles, ArrowRightLeft, Palette as PaletteIcon
+  Sparkles, ArrowRightLeft, Palette as PaletteIcon, RefreshCcw
 } from './Icons';
 import { SELECTION_TOOLS } from '../constants';
 import { CustomSlider } from './ui/slider';
