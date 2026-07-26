@@ -36,22 +36,6 @@ const LayerThumbnail = React.memo<LayerThumbnailProps>(({ pixels, palette, width
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (!pixels) return;
 
-    const imgData = ctx.createImageData(width, height);
-    const data = imgData.data;
-
-    for (let i = 0; i < pixels.length; i++) {
-      const val = pixels[i];
-      const color = typeof val === 'number' ? palette[val] : val;
-      if (color) {
-        const [r, g, b] = hexToRgb(color);
-        const idx = i * 4;
-        data[idx] = r;
-        data[idx + 1] = g;
-        data[idx + 2] = b;
-        data[idx + 3] = 255;
-      }
-    }
-    
     if (!tempCanvasRef.current) {
       tempCanvasRef.current = document.createElement('canvas');
     }
@@ -60,7 +44,40 @@ const LayerThumbnail = React.memo<LayerThumbnailProps>(({ pixels, palette, width
       tempCanvas.width = width;
       tempCanvas.height = height;
     }
-    tempCanvas.getContext('2d')?.putImageData(imgData, 0, 0);
+    const tempCtx = tempCanvas.getContext('2d');
+    if (!tempCtx) return;
+
+    const imgData = tempCtx.createImageData(width, height);
+    const data32 = new Uint32Array(imgData.data.buffer);
+
+    const paletteUint32 = new Uint32Array(palette.length);
+    for (let p = 0; p < palette.length; p++) {
+      if (palette[p]) {
+        const [r, g, b] = hexToRgb(palette[p]);
+        paletteUint32[p] = (255 << 24) | (b << 16) | (g << 8) | r;
+      }
+    }
+    const hexCache = new Map<string, number>();
+
+    for (let i = 0; i < pixels.length; i++) {
+      const val = pixels[i];
+      if (val === null || val === undefined) continue;
+      let packed: number;
+      if (typeof val === 'number') {
+        packed = paletteUint32[val];
+      } else {
+        let cached = hexCache.get(val);
+        if (cached === undefined) {
+          const [r, g, b] = hexToRgb(val);
+          cached = (255 << 24) | (b << 16) | (g << 8) | r;
+          hexCache.set(val, cached);
+        }
+        packed = cached;
+      }
+      if (packed) data32[i] = packed;
+    }
+    
+    tempCtx.putImageData(imgData, 0, 0);
 
     ctx.imageSmoothingEnabled = false;
     
