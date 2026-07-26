@@ -101,7 +101,6 @@ export const Canvas: React.FC<CanvasProps> = ({
 
   const [startPos, setStartPos] = useState<Position | null>(null);
   const [polyPoints, setPolyPoints] = useState<Position[]>([]);
-  const [dashOffset, setDashOffset] = useState(0);
 
   const [isMoving, setIsMoving] = useState(false);
   const [moveStart, setMoveStart] = useState<Position | null>(null);
@@ -139,16 +138,6 @@ export const Canvas: React.FC<CanvasProps> = ({
       }
     }
   }, [state.id, state.width, state.height, state.zoom, containerSize]);
-
-  useEffect(() => {
-    let animId: number;
-    const animate = () => {
-      setDashOffset(prev => (prev - 1) % 8);
-      animId = requestAnimationFrame(animate);
-    };
-    animId = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(animId);
-  }, []);
 
   const getPixelCoords = useCallback((clientX: number, clientY: number) => {
     if (!containerRef.current) return null;
@@ -698,16 +687,22 @@ export const Canvas: React.FC<CanvasProps> = ({
   }, [state.frames, state.activeFrameIndex, state.layers, state.activeLayerId, state.palette, state.width, state.height, state.onionSkin, isMoving, isRotating, isScaling, floatingPixels, moveOffset, rotationAngle, rotationPivot, initialBox, currentBox]);
 
   // UI Rendering Effect (Grid, Selection, Brush)
-  useEffect(() => {
+  const renderUI = useCallback(() => {
     const canvas = uiCanvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    const dpr = window.devicePixelRatio || 1;
+
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.scale(dpr, dpr);
+
     const z = localZoom;
     const px = pan.x;
     const py = pan.y;
+    const dashOffset = (performance.now() / 30) % 8;
 
     // 1. Draw Grid
     if (state.showGrid && z > 4) {
@@ -893,7 +888,44 @@ export const Canvas: React.FC<CanvasProps> = ({
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)'; ctx.lineWidth = 1; ctx.stroke();
         ctx.restore();
     }
-  }, [state, selectionSet, localZoom, pan, cursorPos, dashOffset, startPos, polyPoints, isMoving, isDrawing, moveOffset, floatingPixels, isRotating, rotationAngle, rotationPivot, isScaling, currentBox, containerSize.width, containerSize.height]);
+
+    ctx.restore();
+  }, [containerSize, state, selectionSet, localZoom, pan, cursorPos, startPos, polyPoints, isMoving, isDrawing, moveOffset, floatingPixels, isRotating, rotationAngle, rotationPivot, isScaling, currentBox]);
+
+  const renderUIRef = useRef(renderUI);
+  useLayoutEffect(() => {
+    renderUIRef.current = renderUI;
+  });
+
+  useEffect(() => {
+    renderUI();
+  }, [renderUI]);
+
+  const hasMarchingAnts = Boolean(
+    (selectionSet && selectionSet.size > 0) || 
+    polyPoints.length > 0 || 
+    (isDrawing && startPos && ['rect-select', 'ellipse-select', 'lasso-select'].includes(state.tool))
+  );
+
+  useEffect(() => {
+    if (!hasMarchingAnts) return;
+
+    let animId: number;
+    let lastTime = performance.now();
+
+    const animate = (time: number) => {
+      if (time - lastTime >= 40) {
+        lastTime = time;
+        renderUIRef.current();
+      }
+      animId = requestAnimationFrame(animate);
+    };
+
+    animId = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(animId);
+  }, [hasMarchingAnts]);
+
+  const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
 
   return (
     <div 
@@ -980,8 +1012,9 @@ export const Canvas: React.FC<CanvasProps> = ({
       {/* UI Overlay Layer (Grid, Selection, Handles) */}
       <canvas
         ref={uiCanvasRef}
-        width={containerSize.width}
-        height={containerSize.height}
+        width={Math.floor(containerSize.width * dpr)}
+        height={Math.floor(containerSize.height * dpr)}
+        style={{ width: `${containerSize.width}px`, height: `${containerSize.height}px` }}
         className="absolute inset-0 pointer-events-none"
       />
 
