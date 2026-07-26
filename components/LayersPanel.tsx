@@ -4,6 +4,7 @@ import { Eye, EyeOff, Lock, Unlock, Plus, Copy, Trash2, Check, GripVertical, Set
 import { hexToRgb } from '../utils';
 import { CustomSlider } from './ui/slider';
 import { LayerBlendMode } from '../types';
+import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 
 const BLEND_MODES: LayerBlendMode[] = ['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'color-dodge', 'color-burn', 'hard-light', 'soft-light', 'difference', 'exclusion'];
 
@@ -15,8 +16,16 @@ import {
   ContextMenuTrigger,
 } from "./ui/context-menu";
 
-const LayerThumbnail: React.FC<{ layerId: string, state: ProjectState }> = ({ layerId, state }) => {
+interface LayerThumbnailProps {
+  pixels: (string | number | null)[] | undefined;
+  palette: string[];
+  width: number;
+  height: number;
+}
+
+const LayerThumbnail = React.memo<LayerThumbnailProps>(({ pixels, palette, width, height }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const tempCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -24,19 +33,15 @@ const LayerThumbnail: React.FC<{ layerId: string, state: ProjectState }> = ({ la
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const frame = state.frames[state.activeFrameIndex];
-    if (!frame) return;
-    const pixels = frame.layerData[layerId];
-    
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (!pixels) return;
 
-    const imgData = ctx.createImageData(state.width, state.height);
+    const imgData = ctx.createImageData(width, height);
     const data = imgData.data;
 
     for (let i = 0; i < pixels.length; i++) {
       const val = pixels[i];
-      const color = typeof val === 'number' ? state.palette[val] : val;
+      const color = typeof val === 'number' ? palette[val] : val;
       if (color) {
         const [r, g, b] = hexToRgb(color);
         const idx = i * 4;
@@ -47,29 +52,34 @@ const LayerThumbnail: React.FC<{ layerId: string, state: ProjectState }> = ({ la
       }
     }
     
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = state.width;
-    tempCanvas.height = state.height;
+    if (!tempCanvasRef.current) {
+      tempCanvasRef.current = document.createElement('canvas');
+    }
+    const tempCanvas = tempCanvasRef.current;
+    if (tempCanvas.width !== width || tempCanvas.height !== height) {
+      tempCanvas.width = width;
+      tempCanvas.height = height;
+    }
     tempCanvas.getContext('2d')?.putImageData(imgData, 0, 0);
 
     ctx.imageSmoothingEnabled = false;
     
-    const scale = Math.min(canvas.width / state.width, canvas.height / state.height);
-    const w = state.width * scale;
-    const h = state.height * scale;
+    const scale = Math.min(canvas.width / width, canvas.height / height);
+    const w = width * scale;
+    const h = height * scale;
     const x = (canvas.width - w) / 2;
     const y = (canvas.height - h) / 2;
     
-    ctx.drawImage(tempCanvas, 0, 0, state.width, state.height, x, y, w, h);
+    ctx.drawImage(tempCanvas, 0, 0, width, height, x, y, w, h);
 
-  }, [state.frames, state.activeFrameIndex, state.palette, state.width, state.height, layerId]);
+  }, [pixels, palette, width, height]);
 
   return (
     <div className="w-8 h-8 rounded-md bg-muted/30 border border-border overflow-hidden shrink-0 relative flex items-center justify-center" style={{ backgroundImage: 'conic-gradient(#1a1a1a 90deg, #2a2a2a 90deg 180deg, #1a1a1a 180deg 270deg, #2a2a2a 270deg)', backgroundSize: '8px 8px' }}>
       <canvas ref={canvasRef} width={32} height={32} className="w-full h-full object-contain" />
     </div>
   );
-};
+});
 
 interface LayersPanelProps {
   state: ProjectState;
@@ -197,38 +207,94 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
     dragStateRef.current = null;
   };
 
+  const handleContainerDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (!dragStateRef.current) return;
+    const container = e.currentTarget as HTMLElement;
+    const rect = container.getBoundingClientRect();
+    const scrollTop = container.scrollTop;
+    const relativeY = e.clientY - rect.top + scrollTop - 4; // Subtract 4px padding-top
+
+    const reversedLayers = state.layers.slice().reverse();
+    if (reversedLayers.length === 0) return;
+
+    const preciseIndex = relativeY / 32; // Each layer is h-8 (32px)
+    let visualIndex = Math.floor(preciseIndex);
+    if (visualIndex < 0) visualIndex = 0;
+    if (visualIndex >= reversedLayers.length) visualIndex = reversedLayers.length - 1;
+
+    const targetLayer = reversedLayers[visualIndex];
+    if (targetLayer) {
+      const offset = preciseIndex - visualIndex;
+      const position = offset < 0.5 ? 'before' : 'after';
+      
+      const newState: DragState = { id: dragStateRef.current.id, overId: targetLayer.id, position };
+      setDragState(newState);
+      dragStateRef.current = newState;
+    }
+  };
+
+  const handleContainerDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (dragStateRef.current && dragStateRef.current.overId && dragStateRef.current.id !== dragStateRef.current.overId) {
+        const logicalPosition = dragStateRef.current.position === 'before' ? 'after' : 'before';
+        onReorderLayers(dragStateRef.current.id, dragStateRef.current.overId, logicalPosition);
+    }
+    setDragState(null);
+    dragStateRef.current = null;
+  };
+
   const isMultiLayer = state.selectedLayerIds.length > 1;
 
   return (
     <div className={`flex flex-col bg-muted/20 select-none ${className}`}>
-      {/* Header */}
-      <div className="px-2 py-1.5 flex justify-between items-center border-b border-border shrink-0">
-        <span className="text-[10px] font-semibold text-muted-foreground tracking-wide uppercase">Layers</span>
+      {/* Header Toolbar */}
+      <div className="px-2 py-1 flex justify-end items-center border-b border-border/40 bg-secondary/20 shrink-0">
         <div className="flex items-center gap-0.5">
-            <button 
-                onClick={() => setShowOpacity(!showOpacity)} 
-                className={`p-0.5 transition-colors rounded ${showOpacity ? 'text-primary bg-primary/10' : 'text-muted-foreground hover:text-foreground hover:bg-accent'}`}
-                title="Layer Opacity"
-            >
-                <Settings size={12} />
-            </button>
-            <button 
-                onClick={() => isMultiLayer ? onDeleteSelectedLayers() : onDeleteLayer(state.activeLayerId)} 
-                className="p-0.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors"
-                title="Delete Layer"
-            >
-                <Trash2 size={12} />
-            </button>
-            <button 
-                onClick={() => isMultiLayer ? onDuplicateSelectedLayers() : onDuplicateLayer(state.activeLayerId)} 
-                className="p-0.5 text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors"
-                title="Duplicate Layer"
-            >
-                <Copy size={12} />
-            </button>
-            <button onClick={onAddLayer} className="p-0.5 text-primary hover:bg-primary/10 rounded transition-colors" title="Add Layer">
-              <Plus size={14} />
-            </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button 
+                    onClick={() => setShowOpacity(!showOpacity)} 
+                    className={`p-0.5 transition-colors rounded ${showOpacity ? 'text-primary bg-primary/10' : 'text-muted-foreground hover:text-foreground hover:bg-accent'}`}
+                >
+                    <Settings size={12} />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Layer Opacity</TooltipContent>
+            </Tooltip>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button 
+                    onClick={() => isMultiLayer ? onDeleteSelectedLayers() : onDeleteLayer(state.activeLayerId)} 
+                    className="p-0.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors"
+                >
+                    <Trash2 size={12} />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Delete Layer</TooltipContent>
+            </Tooltip>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button 
+                    onClick={() => isMultiLayer ? onDuplicateSelectedLayers() : onDuplicateLayer(state.activeLayerId)} 
+                    className="p-0.5 text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors"
+                >
+                    <Copy size={12} />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Duplicate Layer</TooltipContent>
+            </Tooltip>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button onClick={onAddLayer} className="p-0.5 text-primary hover:bg-primary/10 rounded transition-colors">
+                  <Plus size={14} />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Add Layer</TooltipContent>
+            </Tooltip>
         </div>
       </div>
 
@@ -264,7 +330,11 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
       {/* List Container */}
       <ContextMenu>
         <ContextMenuTrigger asChild>
-          <div className="flex-1 overflow-y-auto custom-scrollbar p-1 space-y-0">
+          <div 
+            onDragOver={handleContainerDragOver}
+            onDrop={handleContainerDrop}
+            className="flex-1 overflow-y-auto custom-scrollbar p-1 space-y-0"
+          >
             {state.layers.slice().reverse().map((layer) => {
                 const isDragging = dragState?.id === layer.id;
                 const isOver = dragState?.overId === layer.id;
@@ -277,8 +347,8 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                         <div 
                             draggable={!editingId}
                             onDragStart={(e) => handleDragStart(e, layer.id)}
-                            onDragOver={(e) => handleDragOver(e, layer.id)}
-                            onDrop={(e) => handleDrop(e, layer.id)}
+                            onDragOver={(e) => { e.stopPropagation(); handleDragOver(e, layer.id); }}
+                            onDrop={(e) => { e.stopPropagation(); handleDrop(e, layer.id); }}
                             onDragEnd={() => { setDragState(null); dragStateRef.current = null; }}
                             onClick={(e) => handleLayerClick(e, layer.id)}
                             onDoubleClick={() => startEditing(layer)}

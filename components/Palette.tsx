@@ -2,6 +2,7 @@ import React, { useRef, useState, useEffect } from 'react';
 import { Plus, Upload, ChevronDown, Check, Palette as PaletteIcon } from './Icons';
 import { SavedPalette } from '../types';
 import { Popover, PopoverTrigger, PopoverContent, PopoverClose } from './Popover';
+import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 
 interface PaletteProps {
   width: number;
@@ -132,21 +133,29 @@ export const Palette: React.FC<PaletteProps> = ({
             </PopoverContent>
         </Popover>
 
-        <button 
-            onClick={() => onAddColor(primaryColor)}
-            className="p-1 text-muted-foreground hover:text-foreground transition-all"
-            title="Add Primary Color to Palette"
-        >
-            <Plus size={10} />
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button 
+                onClick={() => onAddColor(primaryColor)}
+                className="p-1 text-muted-foreground hover:text-foreground transition-all"
+            >
+                <Plus size={10} />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top">Add Primary Color to Palette</TooltipContent>
+        </Tooltip>
 
-        <button 
-            onClick={() => fileInputRef.current?.click()}
-            className="p-1 text-muted-foreground hover:text-foreground transition-all"
-            title="Import Palette"
-        >
-            <Upload size={10} />
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button 
+                onClick={() => fileInputRef.current?.click()}
+                className="p-1 text-muted-foreground hover:text-foreground transition-all"
+            >
+                <Upload size={10} />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top">Import Palette</TooltipContent>
+        </Tooltip>
         <input 
             type="file" 
             ref={fileInputRef} 
@@ -171,34 +180,42 @@ export const Palette: React.FC<PaletteProps> = ({
                   }
                   
                   return (
-                      <button
-                          key={`${color}-${idx}`}
-                          className={`
-                              aspect-square rounded-[1px] transition-all active:scale-90 relative overflow-hidden group
-                              ${inSelection ? 'ring-2 ring-primary z-20 scale-110 shadow-lg' : (isPrimary || isSecondary) ? 'z-10 ring-1 ring-border ring-inset' : 'hover:z-10 hover:ring-1 hover:ring-border/50'}
-                          `}
-                          style={{ backgroundColor: color }}
-                          onPointerDown={(e) => {
-                              e.preventDefault();
-                              handlePointerDown(idx, e);
-                          }}
-                          onPointerEnter={() => handlePointerEnter(idx)}
-                          onContextMenu={(e) => e.preventDefault()}
-                          title={`${color} (Left-click: Primary, Right-click: Secondary, Drag/Shift-click: Select Range)`}
-                      >
-                          {/* Aseprite-style triangular indicators */}
-                          {isPrimary && (
-                              <div className="absolute top-0 left-0 w-0 h-0 border-t-[8px] border-r-[8px] border-t-primary border-r-transparent drop-shadow-sm"></div>
-                          )}
-                          {isSecondary && (
-                              <div className="absolute bottom-0 right-0 w-0 h-0 border-b-[8px] border-l-[8px] border-b-foreground border-l-transparent drop-shadow-sm"></div>
-                          )}
-                          
-                          {/* Center dot for the active target color to match Aseprite's "current entry" */}
-                          {((target === 'primary' && isPrimary) || (target === 'secondary' && isSecondary)) && (
-                              <div className="absolute inset-0 m-auto w-1 h-1 bg-background rounded-full shadow-sm mix-blend-difference"></div>
-                          )}
-                      </button>
+                      <Tooltip key={`${color}-${idx}`}>
+                        <TooltipTrigger asChild>
+                          <button
+                              className={`
+                                  aspect-square rounded-[1px] transition-all active:scale-90 relative overflow-hidden group
+                                  ${inSelection ? 'ring-2 ring-primary z-20 scale-110 shadow-lg' : (isPrimary || isSecondary) ? 'z-10 ring-1 ring-border ring-inset' : 'hover:z-10 hover:ring-1 hover:ring-border/50'}
+                              `}
+                              style={{ backgroundColor: color }}
+                              onPointerDown={(e) => {
+                                  e.preventDefault();
+                                  handlePointerDown(idx, e);
+                              }}
+                              onPointerEnter={() => handlePointerEnter(idx)}
+                              onContextMenu={(e) => e.preventDefault()}
+                          >
+                              {/* Aseprite-style triangular indicators */}
+                              {isPrimary && (
+                                  <div className="absolute top-0 left-0 w-0 h-0 border-t-[8px] border-r-[8px] border-t-primary border-r-transparent drop-shadow-sm"></div>
+                              )}
+                              {isSecondary && (
+                                  <div className="absolute bottom-0 right-0 w-0 h-0 border-b-[8px] border-l-[8px] border-b-foreground border-l-transparent drop-shadow-sm"></div>
+                              )}
+                              
+                              {/* Center dot for the active target color to match Aseprite's "current entry" */}
+                              {((target === 'primary' && isPrimary) || (target === 'secondary' && isSecondary)) && (
+                                  <div className="absolute inset-0 m-auto w-1 h-1 bg-background rounded-full shadow-sm mix-blend-difference"></div>
+                              )}
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="normal-case tracking-normal font-normal">
+                          <div className="flex flex-col items-center gap-0.5 px-0.5">
+                            <span className="font-mono text-xs font-bold text-foreground tracking-wider">{color.toUpperCase()}</span>
+                            <span className="text-[9px] text-muted-foreground whitespace-nowrap">L-Click: Primary • R-Click: Secondary</span>
+                          </div>
+                        </TooltipContent>
+                      </Tooltip>
                   );
               })}
           </div>

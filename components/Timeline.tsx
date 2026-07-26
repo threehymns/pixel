@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { ProjectState } from '../types';
 import { Eye, EyeOff, Lock, Unlock, Plus, Copy, Trash2, GripVertical, FilePlus, Sparkles } from './Icons';
+import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -12,7 +13,7 @@ import {
 
 interface TimelineProps {
   state: ProjectState;
-  onSelectFrames: (indices: number[], activeIndex: number) => void;
+  onSelectFrames: (indices: number[], activeIndex: number, layerId?: string) => void;
   onAddFrame: () => void;
   onDuplicateFrame: () => void;
   onDeleteFrame: () => void;
@@ -54,7 +55,7 @@ export const Timeline: React.FC<TimelineProps> = ({
 }) => {
   const [dragState, setDragState] = useState<DragState | null>(null);
 
-  const handleFrameClick = (e: React.MouseEvent, index: number) => {
+  const handleFrameClick = (e: React.MouseEvent, index: number, layerId?: string) => {
       let newSelection = [...state.selectedFrameIndices];
 
       if (e.shiftKey) {
@@ -77,7 +78,7 @@ export const Timeline: React.FC<TimelineProps> = ({
           newSelection = [index];
       }
 
-      onSelectFrames(newSelection, index);
+      onSelectFrames(newSelection, index, layerId);
   };
 
   const handleLayerDragStart = (e: React.DragEvent, id: string) => {
@@ -155,33 +156,139 @@ export const Timeline: React.FC<TimelineProps> = ({
     setDragState(null);
   };
 
+  const handleLayerContainerDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (dragState?.type !== 'layer') return;
+    const container = e.currentTarget as HTMLElement;
+    const rect = container.getBoundingClientRect();
+    const scrollTop = container.scrollTop;
+    const relativeY = e.clientY - rect.top + scrollTop - 32; // -32px line-height pt-8 offset
+    
+    const reversedLayers = state.layers.slice().reverse();
+    if (reversedLayers.length === 0) return;
+
+    const preciseIndex = relativeY / 32; // Each layer is 32px
+    let visualIndex = Math.floor(preciseIndex);
+    if (visualIndex < 0) visualIndex = 0;
+    if (visualIndex >= reversedLayers.length) visualIndex = reversedLayers.length - 1;
+
+    const targetLayer = reversedLayers[visualIndex];
+    if (targetLayer) {
+      const offset = preciseIndex - visualIndex;
+      const position = offset < 0.5 ? 'before' : 'after';
+      if (dragState.overId !== targetLayer.id || dragState.position !== position) {
+        setDragState({ ...dragState, overId: targetLayer.id, position });
+      }
+    }
+  };
+
+  const handleLayerContainerDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (dragState?.type === 'layer' && dragState.overId && dragState.id !== dragState.overId) {
+        onReorderLayers(dragState.id, dragState.overId, dragState.position);
+    }
+    setDragState(null);
+  };
+
+  const handleFrameContainerDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (dragState?.type !== 'frame') return;
+    const container = e.currentTarget as HTMLElement;
+    const rect = container.getBoundingClientRect();
+    const scrollLeft = container.scrollLeft;
+    // Each frame header is min-w-[40px] w-10 (40px)
+    const relativeX = e.clientX - rect.left + scrollLeft;
+    
+    if (state.frames.length === 0) return;
+
+    const preciseIndex = relativeX / 40;
+    let targetIndex = Math.floor(preciseIndex);
+    if (targetIndex < 0) targetIndex = 0;
+    if (targetIndex >= state.frames.length) targetIndex = state.frames.length - 1;
+
+    const offset = preciseIndex - targetIndex;
+    const position = offset < 0.5 ? 'before' : 'after';
+
+    if (dragState.overId !== targetIndex.toString() || dragState.position !== position) {
+      setDragState({ ...dragState, overId: targetIndex.toString(), position });
+    }
+  };
+
+  const handleFrameContainerDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (dragState?.type === 'frame') {
+       const fromIndex = parseInt(dragState.id);
+       const targetIndex = dragState.overId ? parseInt(dragState.overId) : (state.frames.length - 1);
+       if (fromIndex !== targetIndex) {
+           let insertIndex = targetIndex;
+           if (dragState.position === 'after') insertIndex = targetIndex + 1;
+           if (fromIndex < insertIndex) insertIndex--;
+           onReorderFrames(fromIndex, insertIndex);
+       }
+    }
+    setDragState(null);
+  };
+
   const isMultiFrame = state.selectedFrameIndices.length > 1;
   const canTween = state.selectedFrameIndices.length >= 3;
 
   return (
     <div className="h-full bg-card border-t border-border/30 flex flex-col text-sm select-none">
       {/* Timeline Controls */}
-      <div className="h-8 bg-card/50 border-b border-border/30 flex items-center px-3 gap-1 shrink-0">
-         <span className="font-bold text-gray-500 mr-2 text-[10px] uppercase tracking-wider hidden sm:block">Timeline</span>
-         <button onClick={onAddFrame} className="p-1 hover:text-white text-gray-400" title="New Frame"><Plus size={14} /></button>
-         <button onClick={() => isMultiFrame ? onDuplicateSelectedFrames() : onDuplicateFrame()} className={`p-1 hover:text-white ${isMultiFrame ? 'text-primary' : 'text-gray-400'}`} title="Duplicate Frame"><Copy size={14} /></button>
-         <button onClick={() => isMultiFrame ? onDeleteSelectedFrames() : onDeleteFrame()} className={`p-1 hover:text-red-400 ${isMultiFrame ? 'text-red-400 font-bold' : 'text-gray-500'}`} title="Delete Frame"><Trash2 size={14} /></button>
+      <div className="h-7 bg-secondary/20 border-b border-border/40 flex items-center px-2 gap-1 shrink-0">
+         <Tooltip>
+           <TooltipTrigger asChild>
+             <button onClick={onAddFrame} className="p-1 hover:text-white text-gray-400"><Plus size={14} /></button>
+           </TooltipTrigger>
+           <TooltipContent side="top">New Frame</TooltipContent>
+         </Tooltip>
+
+         <Tooltip>
+           <TooltipTrigger asChild>
+             <button onClick={() => isMultiFrame ? onDuplicateSelectedFrames() : onDuplicateFrame()} className={`p-1 hover:text-white ${isMultiFrame ? 'text-primary' : 'text-gray-400'}`}><Copy size={14} /></button>
+           </TooltipTrigger>
+           <TooltipContent side="top">Duplicate Frame</TooltipContent>
+         </Tooltip>
+
+         <Tooltip>
+           <TooltipTrigger asChild>
+             <button onClick={() => isMultiFrame ? onDeleteSelectedFrames() : onDeleteFrame()} className={`p-1 hover:text-red-400 ${isMultiFrame ? 'text-red-400 font-bold' : 'text-gray-500'}`}><Trash2 size={14} /></button>
+           </TooltipTrigger>
+           <TooltipContent side="top">Delete Frame</TooltipContent>
+         </Tooltip>
+
          <div className="h-3 w-[1px] bg-border mx-1"></div>
-         <button 
-           onClick={onTweenFrames} 
-           disabled={!canTween}
-           className={`p-1 transition-all ${canTween ? 'text-primary hover:text-primary-foreground hover:bg-primary rounded' : 'text-gray-600 opacity-40 cursor-not-allowed'}`} 
-           title="Interpolate (Tween) Between Selection"
-         >
-           <Sparkles size={14} />
-         </button>
+
+         <Tooltip>
+           <TooltipTrigger asChild>
+             <button 
+               onClick={onTweenFrames} 
+               disabled={!canTween}
+               className={`p-1 transition-all ${canTween ? 'text-primary hover:text-primary-foreground hover:bg-primary rounded' : 'text-gray-600 opacity-40 cursor-not-allowed'}`} 
+             >
+               <Sparkles size={14} />
+             </button>
+           </TooltipTrigger>
+           <TooltipContent side="top">Interpolate (Tween) Between Selection</TooltipContent>
+         </Tooltip>
+
          <div className="h-3 w-[1px] bg-border mx-1"></div>
-         <button onClick={onAddLayer} className="p-1 hover:text-white text-gray-400" title="New Layer"><FilePlus size={14} /></button>
+
+         <Tooltip>
+           <TooltipTrigger asChild>
+             <button onClick={onAddLayer} className="p-1 hover:text-white text-gray-400"><FilePlus size={14} /></button>
+           </TooltipTrigger>
+           <TooltipContent side="top">New Layer</TooltipContent>
+         </Tooltip>
       </div>
 
       <div className="flex flex-1 overflow-hidden">
         {/* Compact Layers Column (Left) */}
-        <div className="w-40 pt-8 bg-muted border-r border-border/30 flex flex-col overflow-y-auto overflow-x-hidden">
+        <div 
+          onDragOver={handleLayerContainerDragOver}
+          onDrop={handleLayerContainerDrop}
+          className="w-40 pt-8 bg-muted border-r border-border/30 flex flex-col overflow-y-auto overflow-x-hidden"
+        >
           {state.layers.slice().reverse().map((layer) => {
              const isDragging = dragState?.type === 'layer' && dragState.id === layer.id;
              const isOver = dragState?.type === 'layer' && dragState.overId === layer.id;
@@ -193,8 +300,8 @@ export const Timeline: React.FC<TimelineProps> = ({
                   key={layer.id}
                   draggable
                   onDragStart={(e) => handleLayerDragStart(e, layer.id)}
-                  onDragOver={(e) => handleLayerDragOver(e, layer.id)}
-                  onDrop={(e) => handleLayerDrop(e, layer.id)}
+                  onDragOver={(e) => { e.stopPropagation(); handleLayerDragOver(e, layer.id); }}
+                  onDrop={(e) => { e.stopPropagation(); handleLayerDrop(e, layer.id); }}
                   onDragEnd={() => setDragState(null)}
                   className={`h-8 flex items-center px-1.5 gap-1 border-b border-border/20 cursor-pointer group relative
                     ${isActive ? 'bg-secondary/40 border-primary/20' : isSelected ? 'bg-secondary/20' : 'text-gray-500 hover:bg-secondary/10'}
@@ -221,7 +328,11 @@ export const Timeline: React.FC<TimelineProps> = ({
         {/* Frames Grid (Right) */}
         <ContextMenu>
           <ContextMenuTrigger asChild>
-            <div className="flex-1 overflow-x-auto bg-[#171717] relative custom-scrollbar">
+            <div 
+              onDragOver={handleFrameContainerDragOver}
+              onDrop={handleFrameContainerDrop}
+              className="flex-1 overflow-x-auto bg-[#171717] relative custom-scrollbar"
+            >
                <div className="flex flex-col min-w-max relative">
                  {/* Insert Buttons Overlay */}
                  <div className="absolute top-0 left-0 w-full h-8 pointer-events-none z-30">
@@ -236,13 +347,17 @@ export const Timeline: React.FC<TimelineProps> = ({
                           style={{ left: i * 40 }}
                         >
                            <div className={`w-[2px] h-full bg-primary transition-opacity ${isOver ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`} />
-                           <button 
-                             onClick={() => onInsertFrame(i)}
-                             className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 bg-primary text-white rounded-full opacity-0 group-hover:opacity-100 flex items-center justify-center shadow-lg hover:scale-125 transition-all"
-                             title="Insert Frame"
-                           >
-                             <Plus size={10} />
-                           </button>
+                           <Tooltip>
+                             <TooltipTrigger asChild>
+                               <button 
+                                 onClick={() => onInsertFrame(i)}
+                                 className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 bg-primary text-white rounded-full opacity-0 group-hover:opacity-100 flex items-center justify-center shadow-lg hover:scale-125 transition-all"
+                               >
+                                 <Plus size={10} />
+                               </button>
+                             </TooltipTrigger>
+                             <TooltipContent side="top">Insert Frame</TooltipContent>
+                           </Tooltip>
                         </div>
                       );
                     })}
@@ -262,8 +377,8 @@ export const Timeline: React.FC<TimelineProps> = ({
                             <div 
                                 draggable
                                 onDragStart={(e) => handleFrameDragStart(e, idx)}
-                                onDragOver={(e) => handleFrameDragOver(e, idx)}
-                                onDrop={(e) => handleFrameDrop(e, idx)}
+                                onDragOver={(e) => { e.stopPropagation(); handleFrameDragOver(e, idx); }}
+                                onDrop={(e) => { e.stopPropagation(); handleFrameDrop(e, idx); }}
                                 onDragEnd={() => setDragState(null)}
                                 onClick={(e) => handleFrameClick(e, idx)}
                                 className={`min-w-[40px] w-10 border-r border-border/30 flex items-center justify-center text-[10px] cursor-pointer hover:bg-secondary/30 relative
@@ -302,8 +417,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                             <div 
                               key={`${layer.id}-${frame.id}`}
                               onClick={(e) => {
-                                if (e.shiftKey || e.ctrlKey || e.metaKey) handleFrameClick(e, frameIdx);
-                                else { onSelectFrames([frameIdx], frameIdx); onSelectLayer(layer.id); }
+                                 handleFrameClick(e, frameIdx, layer.id);
                               }}
                               className={`min-w-[40px] w-10 border-r border-border/20 flex items-center justify-center cursor-pointer relative transition-colors
                                  ${isActive ? 'bg-primary/10' : (isFrameSelected || isLayerSelected) ? 'bg-secondary/10' : 'hover:bg-white/[0.02]'}

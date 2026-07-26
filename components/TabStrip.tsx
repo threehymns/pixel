@@ -1,6 +1,7 @@
 import React, { useRef, useEffect } from 'react';
 import { ProjectInstance } from '../types';
 import { Plus, X, Home } from 'lucide-react';
+import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 
 interface TabStripProps {
     projects: ProjectInstance[];
@@ -31,18 +32,22 @@ export const TabStrip: React.FC<TabStripProps> = ({
 
     return (
         <div className="flex bg-muted/30 h-8 border-b border-border px-2 gap-1 select-none overflow-hidden shrink-0 items-end">
-            <button
-                onClick={() => onSelectProject('home')}
-                className={`
-                    flex items-center justify-center w-10 h-7 rounded-t-md transition-colors
-                    ${activeProjectId === 'home' 
-                        ? 'bg-card text-primary shadow-[0_-1px_2px_rgba(0,0,0,0.05)]' 
-                        : 'bg-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground'}
-                `}
-                title="Home"
-            >
-                <Home size={14} />
-            </button>
+            <Tooltip>
+                <TooltipTrigger asChild>
+                    <button
+                        onClick={() => onSelectProject('home')}
+                        className={`
+                            flex items-center justify-center w-10 h-7 rounded-t-md transition-colors
+                            ${activeProjectId === 'home' 
+                                ? 'bg-card text-primary shadow-[0_-1px_2px_rgba(0,0,0,0.05)]' 
+                                : 'bg-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground'}
+                        `}
+                    >
+                        <Home size={14} />
+                    </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Home</TooltipContent>
+            </Tooltip>
             
             <div className="w-[1px] h-4 bg-border/50 my-auto mx-1"></div>
             
@@ -100,13 +105,17 @@ export const TabStrip: React.FC<TabStripProps> = ({
                 })}
             </div>
             <div className="flex items-center h-full pb-0.5">
-                <button
-                    onClick={onNewProject}
-                    className="w-6 h-6 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors"
-                    title="New Project"
-                >
-                    <Plus size={14} />
-                </button>
+                <Tooltip>
+                    <TooltipTrigger asChild>
+                        <button
+                            onClick={onNewProject}
+                            className="w-6 h-6 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors"
+                        >
+                            <Plus size={14} />
+                        </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">New Project</TooltipContent>
+                </Tooltip>
             </div>
         </div>
     );

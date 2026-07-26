@@ -143,7 +143,8 @@ export type ToolType =
   | 'poly-lasso-select' 
   | 'magic-wand'
   | 'blur'
-  | 'sharpen';
+  | 'sharpen'
+  | 'color-replace';
 
 export type SelectionMode = 'replace' | 'add' | 'subtract' | 'intersect';
 

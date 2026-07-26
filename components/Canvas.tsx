@@ -39,6 +39,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   const artCanvasRef = useRef<HTMLCanvasElement>(null);
   const uiCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const layerCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const cursorRef = useRef<HTMLDivElement>(null);
   const mousePosRef = useRef<{x: number, y: number}>({ x: -100, y: -100 });
   const touchTimeoutRef = useRef<number | null>(null);
@@ -108,17 +109,21 @@ export const Canvas: React.FC<CanvasProps> = ({
       startCenter: { x: 0, y: 0 }
   });
   
+  const lastCenteredRef = useRef<string | null>(null);
+  
   useLayoutEffect(() => {
-    if (containerRef.current) {
-        const { clientWidth, clientHeight } = containerRef.current;
-        const contentW = state.width * localZoom;
-        const contentH = state.height * localZoom;
+    if (state.id) {
+      if (lastCenteredRef.current !== state.id && containerSize.width > 0 && containerSize.height > 0) {
+        const contentW = state.width * state.zoom;
+        const contentH = state.height * state.zoom;
         setPan({
-            x: (clientWidth - contentW) / 2,
-            y: (clientHeight - contentH) / 2
+          x: (containerSize.width - contentW) / 2,
+          y: (containerSize.height - contentH) / 2
         });
+        lastCenteredRef.current = state.id;
+      }
     }
-  }, [state.id]);
+  }, [state.id, state.width, state.height, state.zoom, containerSize]);
 
   useEffect(() => {
     let animId: number;
@@ -551,6 +556,14 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
     const offCtx = offscreen.getContext('2d');
     if (!offCtx) return;
+
+    if (!layerCanvasRef.current) layerCanvasRef.current = document.createElement('canvas');
+    const layerCanvas = layerCanvasRef.current;
+    if (layerCanvas.width !== state.width || layerCanvas.height !== state.height) {
+        layerCanvas.width = state.width; layerCanvas.height = state.height;
+    }
+    const layerCtx = layerCanvas.getContext('2d');
+    if (!layerCtx) return;
     
     const imgData = offCtx.createImageData(state.width, state.height);
     const data = imgData.data;
@@ -602,12 +615,11 @@ export const Canvas: React.FC<CanvasProps> = ({
          }
       }
       
-      // Create temporary canvas to composite layer
-      const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = state.width; tempCanvas.height = state.height;
-      tempCanvas.getContext('2d')?.putImageData(layerImgData, 0, 0);
+      // Reuse cached offscreen canvas to composite layer
+      layerCtx.clearRect(0, 0, state.width, state.height);
+      layerCtx.putImageData(layerImgData, 0, 0);
       offCtx.globalCompositeOperation = layer.blendMode === 'normal' ? 'source-over' : layer.blendMode;
-      offCtx.drawImage(tempCanvas, 0, 0);
+      offCtx.drawImage(layerCanvas, 0, 0);
       offCtx.globalCompositeOperation = 'source-over';
     });
 
@@ -648,10 +660,9 @@ export const Canvas: React.FC<CanvasProps> = ({
                 floatData[pIdx] = r; floatData[pIdx+1] = g; floatData[pIdx+2] = b; floatData[pIdx+3] = 255;
             }
         }
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = state.width; tempCanvas.height = state.height;
-        tempCanvas.getContext('2d')?.putImageData(floatImgData, 0, 0);
-        offCtx.drawImage(tempCanvas, 0, 0);
+        layerCtx.clearRect(0, 0, state.width, state.height);
+        layerCtx.putImageData(floatImgData, 0, 0);
+        offCtx.drawImage(layerCanvas, 0, 0);
     }
 
     // Final Transfer to Art Canvas

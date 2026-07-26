@@ -4,6 +4,7 @@ import { ProjectState } from '../types';
 import { getCoords } from '../utils';
 import { Play, Pause, X } from 'lucide-react';
 import { CustomSlider } from './ui/slider';
+import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -186,18 +187,28 @@ export const Preview: React.FC<PreviewProps> = ({ state, onClose, isFloating = t
   const innerContent = (
     <div className="flex flex-col w-full h-full">
       <div 
-        className="bg-secondary px-2 py-1.5 flex justify-between items-center border-b border-border select-none"
+        className="bg-secondary/20 px-2 py-1 flex justify-between items-center border-b border-border/40 select-none"
         onPointerDown={handlePointerDown}
       >
-        <span className="text-[10px] font-semibold text-muted-foreground tracking-wide uppercase">Preview</span>
+        <span className="text-[10px] font-semibold text-muted-foreground tracking-wide uppercase">{isFloating ? "Preview" : ""}</span>
         <div className="flex gap-1 no-drag">
-          <button onClick={() => setIsPlaying(!isPlaying)} className="p-0.5 text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors" title={isPlaying ? "Pause Animation" : "Play Animation"}>
-            {isPlaying ? <Pause size={12} /> : <Play size={12} />}
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button onClick={() => setIsPlaying(!isPlaying)} className="p-0.5 text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors">
+                {isPlaying ? <Pause size={12} /> : <Play size={12} />}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">{isPlaying ? "Pause Animation" : "Play Animation"}</TooltipContent>
+          </Tooltip>
           {isFloating && onClose && (
-            <button onClick={onClose} className="p-0.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors" title="Close Preview">
-              <X size={12} />
-            </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button onClick={onClose} className="p-0.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors">
+                  <X size={12} />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Close Preview</TooltipContent>
+            </Tooltip>
           )}
         </div>
       </div>

@@ -18,6 +18,7 @@ import { useAppCommands } from './hooks/useAppCommands';
 import { useKeyboard } from './hooks/useKeyboard';
 import { useFileSystem } from './hooks/useFileSystem';
 import { useMobile } from './hooks/useMobile';
+import { useLayout } from './hooks/useLayout';
 import { getCoords } from './utils';
 
 export default function App() {
@@ -34,6 +35,7 @@ export default function App() {
 
   const project = useProject();
   const fileSystem = useFileSystem();
+  const layout = useLayout();
   const { state, updateState } = project;
 
   const canvasTools = useCanvasTools(state, (newState, config) => {
@@ -90,10 +92,12 @@ export default function App() {
       },
       fileSystemActions: fileSystem,
       uiActions: {
-        toggleFileTree: () => {}, 
-        togglePalette: () => {}, 
-        toggleTimeline: () => {}, 
-        toggleRightPanel: () => {}, 
+        toggleFileTree: () => layout.togglePaneVisibility('file-tree'), 
+        togglePalette: () => layout.togglePaneVisibility('palette'), 
+        toggleTimeline: () => layout.togglePaneVisibility('timeline'), 
+        toggleRightPanel: () => {
+          layout.togglePaneVisibility('layers');
+        }, 
       },
       openCmdPalette: () => setIsCmdPaletteOpen(true),
       onOpenProject: handleOpenFile
@@ -139,7 +143,8 @@ export default function App() {
       dragStartPos,
       setMousePos,
       setDragStartPos,
-      selectionSize
+      selectionSize,
+      layout
   };
 
   return (

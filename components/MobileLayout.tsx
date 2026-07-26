@@ -8,7 +8,9 @@ import { LayersPanel } from './LayersPanel';
 import { Timeline } from './Timeline';
 import { Preview } from './Preview';
 import { ColorPicker } from './ColorPicker';
+import { Home } from './Home';
 import { Popover, PopoverTrigger, PopoverContent } from './Popover';
+import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 import { 
   Menu, Undo, Redo, Share, Plus,
   Pencil, Eraser, PaintBucket, Pipette, MousePointer2,
@@ -92,9 +94,12 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
     if (isMoveTool) return state.rotationAlgorithm === 'rotsprite' ? 'RotSprite' : 'Nearest';
     return '';
   };
+  
+  const { activeProjectId } = project;
+  const isHome = activeProjectId === 'home';
 
   return (
-    <div className="flex flex-col h-screen bg-background relative overflow-hidden touch-none">
+    <div className={`flex flex-col h-screen bg-background relative overflow-hidden ${isHome ? '' : 'touch-none'}`}>
       <input 
           type="file" 
           ref={fileInputRef} 
@@ -103,8 +108,12 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
           onChange={handleFileChange} 
       />
 
-      {/* Top Bar: Minimal Status & Global Actions */}
-      <div className="absolute top-0 left-0 right-0 h-16 flex items-center justify-between px-2 z-20 pointer-events-none safe-top">
+      {isHome ? (
+        <Home onCreateProject={project.createProject} onImportProject={() => fileInputRef.current?.click()} />
+      ) : (
+        <>
+          {/* Top Bar: Minimal Status & Global Actions */}
+          <div className="absolute top-0 left-0 right-0 h-16 flex items-center justify-between px-2 z-20 pointer-events-none safe-top">
         <div className="pointer-events-auto flex items-center gap-2">
            <button 
             onClick={() => setActivePanel('menu')} 
@@ -356,20 +365,24 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                         </PopoverContent>
                     </Popover>
 
-                    <button 
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            const p = state.primaryColor;
-                            updateState({...state, primaryColor: state.secondaryColor, secondaryColor: p});
-                            if (state.inkType === 'shading') {
-                                updateState({...state, primaryColor: state.secondaryColor, secondaryColor: p, shades: [...state.shades].reverse()});
-                            }
-                        }}
-                        className="absolute -bottom-2 -right-2 w-6 h-6 bg-card rounded-full border border-border/20 flex items-center justify-center text-muted-foreground hover:text-foreground shadow-sm z-20 active:scale-90 transition-transform"
-                        title="Swap Colors (X)"
-                    >
-                        <ArrowRightLeft size={10} className="rotate-45" />
-                    </button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button 
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                const p = state.primaryColor;
+                                updateState({...state, primaryColor: state.secondaryColor, secondaryColor: p});
+                                if (state.inkType === 'shading') {
+                                    updateState({...state, primaryColor: state.secondaryColor, secondaryColor: p, shades: [...state.shades].reverse()});
+                                }
+                            }}
+                            className="absolute -bottom-2 -right-2 w-6 h-6 bg-card rounded-full border border-border/20 flex items-center justify-center text-muted-foreground hover:text-foreground shadow-sm z-20 active:scale-90 transition-transform"
+                        >
+                            <ArrowRightLeft size={10} className="rotate-45" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Swap Colors (X)</TooltipContent>
+                    </Tooltip>
                 </div>
 
                 <div className="w-[1px] h-8 bg-border/60 mx-1 shrink-0"></div>
@@ -478,7 +491,18 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                           <div className="h-[400px]">
                               <Timeline 
                                 state={state} 
-                                onSelectFrames={(indices, active) => updateState({...state, selectedFrameIndices: indices, activeFrameIndex: active})}
+                                onSelectFrames={(indices, active, layerId) => {
+                                  const nextState = {
+                                    ...state,
+                                    selectedFrameIndices: indices,
+                                    activeFrameIndex: active
+                                  };
+                                  if (layerId) {
+                                    nextState.activeLayerId = layerId;
+                                    nextState.selectedLayerIds = [layerId];
+                                  }
+                                  updateState(nextState);
+                                }}
                                 onAddFrame={project.addFrame} 
                                 onDuplicateFrame={project.duplicateFrame} 
                                 onDeleteFrame={project.deleteFrame} 
@@ -552,6 +576,8 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
           </Drawer.Content>
         </Drawer.Portal>
       </Drawer.Root>
+        </>
+      )}
     </div>
   );
 };
