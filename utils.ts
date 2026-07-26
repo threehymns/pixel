@@ -15,7 +15,7 @@ export const getCoords = (index: number, width: number): Position => {
 export const getSelectionBoundingBox = (selection: Set<number>, width: number) => {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   selection.forEach(idx => {
-    const { x, y } = getCoords(idx, width);
+    const { x, y } = getCoords(Number(idx), width);
     minX = Math.min(minX, x);
     minY = Math.min(minY, y);
     maxX = Math.max(maxX, x);

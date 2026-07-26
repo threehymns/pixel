@@ -114,9 +114,11 @@ export default function App() {
   }, [state.tool]);
 
   const selectionSize = useMemo(() => {
-    if (!state.selection || state.selection.size === 0) return null;
+    if (!state.selection) return null;
+    const selSet = state.selection instanceof Set ? state.selection : new Set<number>(Array.from(state.selection as any));
+    if (selSet.size === 0) return null;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    state.selection.forEach(idx => {
+    selSet.forEach(idx => {
       const { x, y } = getCoords(idx, state.width);
       minX = Math.min(minX, x);
       minY = Math.min(minY, y);

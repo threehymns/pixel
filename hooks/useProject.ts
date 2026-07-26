@@ -257,6 +257,20 @@ export function useProject() {
   ) => {
     if (activeProjectId === 'home') return;
 
+    let cleanSelection: Set<number> | null = null;
+    if (newState.selection) {
+      const arr = newState.selection instanceof Set 
+        ? Array.from(newState.selection) 
+        : (Array.isArray(newState.selection) ? newState.selection : []);
+      const numSet = new Set<number>();
+      for (let i = 0; i < arr.length; i++) {
+        const n = Number(arr[i]);
+        if (!isNaN(n)) numSet.add(n);
+      }
+      cleanSelection = numSet.size > 0 ? numSet : null;
+    }
+    const sanitizedState = { ...newState, selection: cleanSelection };
+
     setProjects(prev => prev.map(p => {
       if (p.data.id !== activeProjectId) return p;
 
@@ -266,7 +280,7 @@ export function useProject() {
       if (historyConfig) {
         newHistory = p.history.slice(0, p.historyIndex + 1);
         newHistory.push({
-            state: newState,
+            state: sanitizedState,
             action: historyConfig.action,
             tool: historyConfig.tool,
             timestamp: Date.now()
@@ -276,7 +290,7 @@ export function useProject() {
       }
 
       return {
-        data: newState,
+        data: sanitizedState,
         history: newHistory,
         historyIndex: newIndex,
         lastSavedHistoryIndex: p.lastSavedHistoryIndex
