@@ -335,7 +335,9 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
             onDrop={handleContainerDrop}
             className="flex-1 overflow-y-auto custom-scrollbar p-1 space-y-0"
           >
-            {state.layers.slice().reverse().map((layer) => {
+            {(() => {
+              const activeFrame = state.frames[state.activeFrameIndex];
+              return state.layers.slice().reverse().map((layer) => {
                 const isDragging = dragState?.id === layer.id;
                 const isOver = dragState?.overId === layer.id;
                 const isActive = state.activeLayerId === layer.id;
@@ -375,7 +377,12 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                             </button>
 
                             {/* Thumbnail */}
-                            <LayerThumbnail layerId={layer.id} state={state} />
+                            <LayerThumbnail 
+                                pixels={activeFrame?.layerData[layer.id]} 
+                                palette={state.palette} 
+                                width={state.width} 
+                                height={state.height} 
+                            />
 
                             <div className="flex-1 min-w-0 flex flex-col justify-center">
                                 {editingId === layer.id ? (
@@ -418,7 +425,8 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                       </ContextMenuContent>
                     </ContextMenu>
                 );
-            })}
+            });
+          })()}
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
