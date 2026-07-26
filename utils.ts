@@ -212,7 +212,7 @@ export const pixelPerfectFilter = (points: Position[]): Position[] => {
   return out;
 };
 
-// Flood Fill Algorithm (BFS)
+// Flood Fill Algorithm (BFS) - Optimized to O(N) using Int32Array queue & Uint8Array visited lookup
 export const floodFill = (
   pixels: PixelGrid,
   startX: number,
@@ -237,25 +237,50 @@ export const floodFill = (
     return newPixels;
   }
 
-  const queue: number[] = [startIndex];
-  const visited = new Set<number>();
+  // Bolt Optimization: Replace O(N) Array.prototype.shift() with an indexed Int32Array queue
+  // and Set lookups with a Uint8Array visited buffer to eliminate garbage collection & O(N^2) shift overhead.
+  const totalPixels = width * height;
+  const queue = new Int32Array(totalPixels);
+  let head = 0;
+  let tail = 0;
+  queue[tail++] = startIndex;
 
-  while (queue.length > 0) {
-    const idx = queue.shift()!;
-    if (visited.has(idx)) continue;
-    visited.add(idx);
+  const visited = new Uint8Array(totalPixels);
+  visited[startIndex] = 1;
 
-    const { x, y } = getCoords(idx, width);
-    
-    if (x < 0 || x >= width || y < 0 || y >= height) continue;
+  while (head < tail) {
+    const idx = queue[head++];
+    const x = idx % width;
 
-    if (newPixels[idx] === targetValue) {
-      newPixels[idx] = fillValue;
+    newPixels[idx] = fillValue;
 
-      if (x + 1 < width) queue.push(getIndex(x + 1, y, width));
-      if (x - 1 >= 0) queue.push(getIndex(x - 1, y, width));
-      if (y + 1 < height) queue.push(getIndex(x, y + 1, width));
-      if (y - 1 >= 0) queue.push(getIndex(x, y - 1, width));
+    if (x + 1 < width) {
+      const nIdx = idx + 1;
+      if (!visited[nIdx] && newPixels[nIdx] === targetValue) {
+        visited[nIdx] = 1;
+        queue[tail++] = nIdx;
+      }
+    }
+    if (x - 1 >= 0) {
+      const nIdx = idx - 1;
+      if (!visited[nIdx] && newPixels[nIdx] === targetValue) {
+        visited[nIdx] = 1;
+        queue[tail++] = nIdx;
+      }
+    }
+    if (idx + width < totalPixels) {
+      const nIdx = idx + width;
+      if (!visited[nIdx] && newPixels[nIdx] === targetValue) {
+        visited[nIdx] = 1;
+        queue[tail++] = nIdx;
+      }
+    }
+    if (idx - width >= 0) {
+      const nIdx = idx - width;
+      if (!visited[nIdx] && newPixels[nIdx] === targetValue) {
+        visited[nIdx] = 1;
+        queue[tail++] = nIdx;
+      }
     }
   }
 
@@ -415,35 +440,55 @@ export const getWandSelection = (
   const targetValue = pixels[startIndex];
 
   if (contiguous) {
-    const queue: number[] = [startIndex];
-    const visited = new Set<number>();
-    visited.add(startIndex);
+    // Bolt Optimization: Replace O(N) Array.prototype.shift() with an indexed Int32Array queue
+    // and Set lookups with a Uint8Array visited buffer to eliminate garbage collection & O(N^2) shift overhead.
+    const totalPixels = width * height;
+    const queue = new Int32Array(totalPixels);
+    let head = 0;
+    let tail = 0;
+    queue[tail++] = startIndex;
 
-    while (queue.length > 0) {
-      const idx = queue.shift()!;
+    const visited = new Uint8Array(totalPixels);
+    visited[startIndex] = 1;
+
+    while (head < tail) {
+      const idx = queue[head++];
       selection.add(idx);
 
-      const { x, y } = getCoords(idx, width);
-      const neighbors = [
-        { nx: x + 1, ny: y },
-        { nx: x - 1, ny: y },
-        { nx: x, ny: y + 1 },
-        { nx: x, ny: y - 1 }
-      ];
+      const x = idx % width;
 
-      for (const {nx, ny} of neighbors) {
-        if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-           const nIdx = getIndex(nx, ny, width);
-           if (!visited.has(nIdx) && pixels[nIdx] === targetValue) {
-             visited.add(nIdx);
-             queue.push(nIdx);
-           }
+      if (x + 1 < width) {
+        const nIdx = idx + 1;
+        if (!visited[nIdx] && pixels[nIdx] === targetValue) {
+          visited[nIdx] = 1;
+          queue[tail++] = nIdx;
+        }
+      }
+      if (x - 1 >= 0) {
+        const nIdx = idx - 1;
+        if (!visited[nIdx] && pixels[nIdx] === targetValue) {
+          visited[nIdx] = 1;
+          queue[tail++] = nIdx;
+        }
+      }
+      if (idx + width < totalPixels) {
+        const nIdx = idx + width;
+        if (!visited[nIdx] && pixels[nIdx] === targetValue) {
+          visited[nIdx] = 1;
+          queue[tail++] = nIdx;
+        }
+      }
+      if (idx - width >= 0) {
+        const nIdx = idx - width;
+        if (!visited[nIdx] && pixels[nIdx] === targetValue) {
+          visited[nIdx] = 1;
+          queue[tail++] = nIdx;
         }
       }
     }
   } else {
-    for(let i=0; i<pixels.length; i++) {
-      if(pixels[i] === targetValue) selection.add(i);
+    for (let i = 0; i < pixels.length; i++) {
+      if (pixels[i] === targetValue) selection.add(i);
     }
   }
   return selection;

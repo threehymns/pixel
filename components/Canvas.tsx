@@ -764,7 +764,8 @@ export const Canvas: React.FC<CanvasProps> = ({
           
           selectionSet.forEach(rawIdx => {
              const idx = Number(rawIdx);
-             const { x, y } = getCoords(idx, state.width);
+             const x = idx % state.width;
+             const y = (idx / state.width) | 0;
              const dx = x + ox; const dy = y + oy;
              if (y===0 || !selectionSet.has(idx - state.width)) { ctx.moveTo(dx*z, dy*z); ctx.lineTo((dx+1)*z, dy*z); }
              if (y===state.height-1 || !selectionSet.has(idx + state.width)) { ctx.moveTo(dx*z, (dy+1)*z); ctx.lineTo((dx + 1)*z, (dy+1)*z); }
