@@ -166,9 +166,11 @@ export function useCanvasTools(
         [0, -1, 0]
       ];
 
-      const errorBufferR = new Float32Array(width * height).fill(0);
-      const errorBufferG = new Float32Array(width * height).fill(0);
-      const errorBufferB = new Float32Array(width * height).fill(0);
+      // Bolt Optimization: Lazily allocate error buffers only when dithered blur/sharpen is active
+      // to avoid allocating megabytes of Float32Arrays on every mouse move event during drawing.
+      let errorBufferR: Float32Array | null = null;
+      let errorBufferG: Float32Array | null = null;
+      let errorBufferB: Float32Array | null = null;
 
       pointsToDraw.forEach((pt, pointIdxInStroke) => {
         const variants = [{ x: pt.x, y: pt.y }];
@@ -238,6 +240,11 @@ export function useCanvasTools(
                   } else if (tool === 'eraser') {
                       layerPixels[idx] = null;
                   } else if ((tool === 'blur' || tool === 'sharpen') && colorMode === 'indexed' && ditheringEnabled) {
+                      if (!errorBufferR || !errorBufferG || !errorBufferB) {
+                          errorBufferR = new Float32Array(width * height);
+                          errorBufferG = new Float32Array(width * height);
+                          errorBufferB = new Float32Array(width * height);
+                      }
                       const kernel = tool === 'blur' ? BLUR_KERNEL : SHARPEN_KERNEL;
                       
                       let r_conv = 0, g_conv = 0, b_conv = 0, weight = 0;
