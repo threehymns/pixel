@@ -584,22 +584,44 @@ export const Canvas: React.FC<CanvasProps> = ({
     const imgData = offCtx.createImageData(state.width, state.height);
     const data = imgData.data;
     
-      // 1. Draw Onion Skin to offscreen
+    // 1. Draw Onion Skin to offscreen
     if (state.onionSkin && state.activeFrameIndex > 0) {
       const prevFrame = state.frames[state.activeFrameIndex - 1];
-      data.fill(0);
+      const imgData = offCtx.createImageData(state.width, state.height);
+      const data32 = new Uint32Array(imgData.data.buffer);
+      const paletteUint32 = new Uint32Array(state.palette.length);
+      const hexCache = new Map<string, number>();
+
       state.layers.forEach(layer => {
         if (!layer.visible || layer.opacity <= 0) return;
         const pixels = prevFrame.layerData[layer.id];
         if (!pixels) return;
+        const alpha = Math.round((layer.opacity / 100) * 80);
+        if (alpha <= 0) return;
+
+        for (let p = 0; p < state.palette.length; p++) {
+          if (state.palette[p]) {
+            const [r, g, b] = hexToRgb(state.palette[p]);
+            paletteUint32[p] = (alpha << 24) | (b << 16) | (g << 8) | r;
+          }
+        }
+
         for (let i = 0; i < pixels.length; i++) {
             const val = pixels[i];
-            const color = typeof val === 'number' ? state.palette[val] : val;
-            if (color) {
-                const [r, g, b] = hexToRgb(color);
-                const idx = i * 4;
-                data[idx] = r; data[idx+1] = g; data[idx+2] = b; data[idx+3] = (layer.opacity / 100) * 80; // Semi-transparent
+            if (val === null || val === undefined) continue;
+            let packed: number;
+            if (typeof val === 'number') {
+              packed = paletteUint32[val];
+            } else {
+              let cached = hexCache.get(val);
+              if (cached === undefined) {
+                const [r, g, b] = hexToRgb(val);
+                cached = (alpha << 24) | (b << 16) | (g << 8) | r;
+                hexCache.set(val, cached);
+              }
+              packed = cached;
             }
+            if (packed) data32[i] = packed;
         }
       });
       offCtx.putImageData(imgData, 0, 0);
@@ -609,6 +631,9 @@ export const Canvas: React.FC<CanvasProps> = ({
 
     // 2. Draw Layers to offscreen
     const currentFrame = state.frames[state.activeFrameIndex];
+    const paletteUint32 = new Uint32Array(state.palette.length);
+    const hexCache = new Map<string, number>();
+
     state.layers.forEach((layer) => {
       if (!layer.visible || layer.opacity <= 0) return;
       const layerPixels = currentFrame.layerData[layer.id];
@@ -618,17 +643,34 @@ export const Canvas: React.FC<CanvasProps> = ({
       const shouldSkip = (isMoving || isRotating || isScaling) && isTargetLayer && state.selection;
       
       const layerImgData = offCtx.createImageData(state.width, state.height);
-      const layerData = layerImgData.data;
-      
+      const layerData32 = new Uint32Array(layerImgData.data.buffer);
+      const alpha = Math.round(layer.opacity * 2.55);
+      if (alpha <= 0) return;
+
+      for (let p = 0; p < state.palette.length; p++) {
+        if (state.palette[p]) {
+          const [r, g, b] = hexToRgb(state.palette[p]);
+          paletteUint32[p] = (alpha << 24) | (b << 16) | (g << 8) | r;
+        }
+      }
+
       for (let i = 0; i < layerPixels.length; i++) {
          if (shouldSkip && state.selection!.has(i)) continue;
          const val = layerPixels[i];
-         const color = typeof val === 'number' ? state.palette[val] : val;
-         if (color) {
-             const [r, g, b] = hexToRgb(color);
-             const idx = i * 4;
-             layerData[idx] = r; layerData[idx+1] = g; layerData[idx+2] = b; layerData[idx+3] = Math.round(layer.opacity * 2.55); 
+         if (val === null || val === undefined) continue;
+         let packed: number;
+         if (typeof val === 'number') {
+           packed = paletteUint32[val];
+         } else {
+           let cached = hexCache.get(val);
+           if (cached === undefined) {
+             const [r, g, b] = hexToRgb(val);
+             cached = (alpha << 24) | (b << 16) | (g << 8) | r;
+             hexCache.set(val, cached);
+           }
+           packed = cached;
          }
+         if (packed) layerData32[i] = packed;
       }
       
       // Reuse cached offscreen canvas to composite layer
@@ -666,15 +708,32 @@ export const Canvas: React.FC<CanvasProps> = ({
         }
 
         const floatImgData = offCtx.createImageData(state.width, state.height);
-        const floatData = floatImgData.data;
+        const floatData32 = new Uint32Array(floatImgData.data.buffer);
+        const floatHexCache = new Map<string, number>();
+        const floatPaletteUint32 = new Uint32Array(state.palette.length);
+        for (let p = 0; p < state.palette.length; p++) {
+          if (state.palette[p]) {
+            const [r, g, b] = hexToRgb(state.palette[p]);
+            floatPaletteUint32[p] = (255 << 24) | (b << 16) | (g << 8) | r;
+          }
+        }
+
         for (let i = 0; i < transformedGrid.length; i++) {
             const val = transformedGrid[i];
-            const color = typeof val === 'number' ? state.palette[val] : val;
-            if (color) {
-                const [r, g, b] = hexToRgb(color);
-                const pIdx = i * 4;
-                floatData[pIdx] = r; floatData[pIdx+1] = g; floatData[pIdx+2] = b; floatData[pIdx+3] = 255;
+            if (val === null || val === undefined) continue;
+            let packed: number;
+            if (typeof val === 'number') {
+              packed = floatPaletteUint32[val];
+            } else {
+              let cached = floatHexCache.get(val);
+              if (cached === undefined) {
+                const [r, g, b] = hexToRgb(val);
+                cached = (255 << 24) | (b << 16) | (g << 8) | r;
+                floatHexCache.set(val, cached);
+              }
+              packed = cached;
             }
+            if (packed) floatData32[i] = packed;
         }
         layerCtx.clearRect(0, 0, state.width, state.height);
         layerCtx.putImageData(floatImgData, 0, 0);

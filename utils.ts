@@ -330,22 +330,56 @@ export const renderFrameToCanvas = (state: ProjectState, frameIndex: number): HT
     const frame = state.frames[frameIndex];
     if (!frame) return canvas;
 
+    const layerCanvas = document.createElement('canvas');
+    layerCanvas.width = state.width;
+    layerCanvas.height = state.height;
+    const layerCtx = layerCanvas.getContext('2d');
+    if (!layerCtx) return canvas;
+
+    const paletteUint32 = new Uint32Array(state.palette.length);
+    const hexCache = new Map<string, number>();
+
     state.layers.forEach(l => {
         if (!l.visible || l.opacity <= 0) return;
         const px = frame.layerData[l.id];
         if (!px) return;
-        
-        ctx.globalAlpha = l.opacity / 100;
-        px.forEach((val, i) => {
-            if (val !== null) {
-                const color = typeof val === 'number' ? state.palette[val] : val;
-                if (color) {
-                    ctx.fillStyle = color;
-                    ctx.fillRect(i % state.width, Math.floor(i / state.width), 1, 1);
-                }
+
+        const alpha = Math.round(l.opacity * 2.55);
+        if (alpha <= 0) return;
+
+        const layerImgData = layerCtx.createImageData(state.width, state.height);
+        const data32 = new Uint32Array(layerImgData.data.buffer);
+
+        for (let p = 0; p < state.palette.length; p++) {
+            if (state.palette[p]) {
+                const [r, g, b] = hexToRgb(state.palette[p]);
+                paletteUint32[p] = (alpha << 24) | (b << 16) | (g << 8) | r;
             }
-        });
-        ctx.globalAlpha = 1.0;
+        }
+
+        for (let i = 0; i < px.length; i++) {
+            const val = px[i];
+            if (val === null || val === undefined) continue;
+
+            let packed: number;
+            if (typeof val === 'number') {
+                packed = paletteUint32[val];
+            } else {
+                let cached = hexCache.get(val);
+                if (cached === undefined) {
+                    const [r, g, b] = hexToRgb(val);
+                    cached = (alpha << 24) | (b << 16) | (g << 8) | r;
+                    hexCache.set(val, cached);
+                }
+                packed = cached;
+            }
+            if (packed) data32[i] = packed;
+        }
+
+        layerCtx.putImageData(layerImgData, 0, 0);
+        ctx.globalCompositeOperation = l.blendMode === 'normal' ? 'source-over' : l.blendMode;
+        ctx.drawImage(layerCanvas, 0, 0);
+        ctx.globalCompositeOperation = 'source-over';
     });
 
     return canvas;
@@ -609,14 +643,21 @@ export const fileToProjectState = async (file: File): Promise<ProjectState> => {
         ctx.drawImage(img, 0, 0);
         const imageData = ctx.getImageData(0, 0, width, height).data;
         const pixels: PixelGrid = new Array(width * height).fill(null);
+        const colorCache: Record<number, string> = {};
 
         for (let i = 0; i < width * height; i++) {
-          const r = imageData[i * 4];
-          const g = imageData[i * 4 + 1];
-          const b = imageData[i * 4 + 2];
           const a = imageData[i * 4 + 3];
           if (a > 128) { 
-            pixels[i] = rgbToHex(r, g, b);
+            const r = imageData[i * 4];
+            const g = imageData[i * 4 + 1];
+            const b = imageData[i * 4 + 2];
+            const key = (r << 16) | (g << 8) | b;
+            let hex = colorCache[key];
+            if (!hex) {
+              hex = rgbToHex(r, g, b);
+              colorCache[key] = hex;
+            }
+            pixels[i] = hex;
           }
         }
 

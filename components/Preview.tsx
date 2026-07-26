@@ -1,7 +1,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { ProjectState } from '../types';
-import { getCoords } from '../utils';
+import { renderFrameToCanvas } from '../utils';
 import { Play, Pause, X } from 'lucide-react';
 import { CustomSlider } from './ui/slider';
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
@@ -161,26 +161,10 @@ export const Preview: React.FC<PreviewProps> = ({ state, onClose, isFloating = t
     
     // Draw content
     const frameIndex = isPlaying ? previewFrame : state.activeFrameIndex;
-    const frame = state.frames[frameIndex];
-
-    if (!frame) return;
-
-    state.layers.forEach(layer => {
-      if (!layer.visible) return;
-      const pixels = frame.layerData[layer.id];
-      if (!pixels) return;
-
-      pixels.forEach((val, i) => {
-        if (val !== null) {
-          const color = typeof val === 'number' ? state.palette[val] : val;
-          if (color) {
-            const { x, y } = getCoords(i, state.width);
-            ctx.fillStyle = color;
-            ctx.fillRect(x * scale, y * scale, scale, scale);
-          }
-        }
-      });
-    });
+    if (state.frames[frameIndex]) {
+      const frameCanvas = renderFrameToCanvas(state, frameIndex);
+      ctx.drawImage(frameCanvas, 0, 0, canvas.width, canvas.height);
+    }
 
   }, [state, previewFrame, isPlaying]);
 
