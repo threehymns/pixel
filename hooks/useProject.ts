@@ -310,25 +310,30 @@ export function useProject() {
   const saveProjectAs = useCallback(async () => {
     if (activeProjectId === 'home') return;
 
-    // @ts-ignore
-    if (typeof window.showSaveFilePicker !== 'function') {
-        const jsonString = JSON.stringify(state, (key, value) => {
-            if (key === 'selection' && value instanceof Set) return Array.from(value);
-            if (key === 'selection' && value === null) return null;
-            if (key === 'fileHandle') return undefined;
-            return value;
-        }, 2);
-        
-        const blob = new Blob([jsonString], { type: 'application/json' });
-        const href = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = href;
-        link.download = `${state.title.replace(/\s+/g, '_')}.json`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(href);
-        return;
+    const isInIframe = window.self !== window.top;
+
+    const performFallbackDownload = () => {
+      const jsonString = JSON.stringify(state, (key, value) => {
+        if (key === 'selection' && value instanceof Set) return Array.from(value);
+        if (key === 'selection' && value === null) return null;
+        if (key === 'fileHandle') return undefined;
+        return value;
+      }, 2);
+      
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const href = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = href;
+      link.download = `${(state.title || 'pixel-art').replace(/\s+/g, '_')}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(href);
+    };
+
+    if (isInIframe || typeof (window as any).showSaveFilePicker !== 'function') {
+      performFallbackDownload();
+      return;
     }
 
     try {
@@ -363,7 +368,6 @@ export function useProject() {
              updateState(newState, { action: 'Save As PNG' });
              markSaved();
              addToRecents(newState);
-             alert(`Exported to ${handle.name}`);
         } else {
              const jsonString = JSON.stringify(state, (key, value) => {
                      if (key === 'selection' && value instanceof Set) return Array.from(value);
@@ -379,14 +383,14 @@ export function useProject() {
              updateState(newState, { action: 'Save As' });
              markSaved();
              addToRecents(newState);
-             alert(`Saved project to ${handle.name}`);
         }
         
     } catch (e) {
-         if ((e as Error).name !== 'AbortError') {
-            console.error("Save As failed", e);
-            alert("Failed to save.");
-        }
+         if ((e as Error).name === 'AbortError') {
+             return;
+         }
+         console.warn("showSaveFilePicker failed or restricted, falling back to standard download", e);
+         performFallbackDownload();
     }
   }, [state, activeProjectId, updateState, addToRecents, markSaved]);
 
