@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Drawer } from 'vaul';
 import { ProjectState, ToolType, Command, Position } from '../types';
 import { Canvas } from './Canvas';
@@ -56,6 +56,80 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
 }) => {
   const [activePanel, setActivePanel] = useState<'palette' | 'layers' | 'timeline' | 'menu' | 'preview' | 'settings' | null>(null);
   const [isSettingsExpanded, setIsSettingsExpanded] = useState(false);
+
+  // Gesture handling for tool settings modal (swipe up on trigger to open, swipe down on modal to close)
+  const triggerTouchStart = useRef<{ x: number; y: number } | null>(null);
+  const modalTouchStart = useRef<{ x: number; y: number } | null>(null);
+
+  const handleTriggerTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 1) {
+      triggerTouchStart.current = {
+        x: e.touches[0].clientX,
+        y: e.touches[0].clientY,
+      };
+    }
+  };
+
+  const handleTriggerTouchMove = (e: React.TouchEvent) => {
+    if (!triggerTouchStart.current || e.touches.length !== 1) return;
+    const currentY = e.touches[0].clientY;
+    const currentX = e.touches[0].clientX;
+    const deltaY = triggerTouchStart.current.y - currentY; // positive = swipe up
+    const deltaX = Math.abs(currentX - triggerTouchStart.current.x);
+
+    if (deltaY > 15 && deltaY > deltaX) {
+      setIsSettingsExpanded(true);
+      triggerTouchStart.current = null;
+    }
+  };
+
+  const handleTriggerTouchEnd = (e: React.TouchEvent) => {
+    if (!triggerTouchStart.current) return;
+    const endY = e.changedTouches[0].clientY;
+    const endX = e.changedTouches[0].clientX;
+    const deltaY = triggerTouchStart.current.y - endY;
+    const deltaX = Math.abs(endX - triggerTouchStart.current.x);
+
+    if (deltaY > 12 && deltaY > deltaX) {
+      setIsSettingsExpanded(true);
+    }
+    triggerTouchStart.current = null;
+  };
+
+  const handleModalTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 1) {
+      modalTouchStart.current = {
+        x: e.touches[0].clientX,
+        y: e.touches[0].clientY,
+      };
+    }
+  };
+
+  const handleModalTouchMove = (e: React.TouchEvent) => {
+    if (!modalTouchStart.current || e.touches.length !== 1) return;
+    const currentY = e.touches[0].clientY;
+    const currentX = e.touches[0].clientX;
+    const deltaY = currentY - modalTouchStart.current.y; // positive = swipe down
+    const deltaX = Math.abs(currentX - modalTouchStart.current.x);
+
+    if (deltaY > 20 && deltaY > deltaX) {
+      setIsSettingsExpanded(false);
+      modalTouchStart.current = null;
+    }
+  };
+
+  const handleModalTouchEnd = (e: React.TouchEvent) => {
+    if (!modalTouchStart.current) return;
+    const endY = e.changedTouches[0].clientY;
+    const endX = e.changedTouches[0].clientX;
+    const deltaY = endY - modalTouchStart.current.y;
+    const deltaX = Math.abs(endX - modalTouchStart.current.x);
+
+    if (deltaY > 15 && deltaY > deltaX) {
+      setIsSettingsExpanded(false);
+    }
+    modalTouchStart.current = null;
+  };
 
   const tools: { id: ToolType, icon: React.ReactNode, label: string }[] = [
     { id: 'pencil', icon: <Pencil size={22} />, label: 'Pencil' },
@@ -193,7 +267,13 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
             
             {/* Expanded Tool Settings Area */}
             {(isSettingsExpanded && hasAnySettings) && (
-                <div className="w-full max-w-sm bg-card/95 backdrop-blur-xl border border-border/30 rounded-2xl shadow-2xl p-4 flex flex-col gap-4 animate-in slide-in-from-bottom-4 zoom-in-95 duration-200">
+                <div 
+                    onTouchStart={handleModalTouchStart}
+                    onTouchMove={handleModalTouchMove}
+                    onTouchEnd={handleModalTouchEnd}
+                    className="w-full max-w-sm bg-card/95 backdrop-blur-xl border border-border/30 rounded-2xl shadow-2xl p-4 flex flex-col gap-4 animate-in slide-in-from-bottom-4 zoom-in-95 duration-200 select-none touch-pan-y"
+                >
+                    <div className="w-10 h-1 bg-muted-foreground/30 rounded-full mx-auto -mt-1 -mb-1 cursor-grab" />
                     <div className="flex items-center justify-between">
                         <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Tool Settings</span>
                         <button onClick={() => setIsSettingsExpanded(false)} className="p-1 text-muted-foreground hover:text-foreground"><ChevronDown size={18}/></button>
@@ -317,7 +397,10 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
             {!isSettingsExpanded && hasAnySettings && (
                 <button 
                     onClick={() => setIsSettingsExpanded(true)}
-                    className="flex items-center gap-3 px-4 py-2 bg-card/90 backdrop-blur-xl border border-border/30 rounded-full shadow-lg text-xs font-bold text-foreground active:scale-95 transition-all animate-in slide-in-from-bottom-2"
+                    onTouchStart={handleTriggerTouchStart}
+                    onTouchMove={handleTriggerTouchMove}
+                    onTouchEnd={handleTriggerTouchEnd}
+                    className="flex items-center gap-3 px-4 py-2 bg-card/90 backdrop-blur-xl border border-border/30 rounded-full shadow-lg text-xs font-bold text-foreground active:scale-95 transition-all animate-in slide-in-from-bottom-2 select-none touch-pan-y"
                 >
                     <Settings size={14} className="text-primary" />
                     <span>{getSettingsSummary()}</span>
