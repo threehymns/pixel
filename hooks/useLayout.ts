@@ -255,35 +255,66 @@ export function useLayout() {
   };
 
   const handleDragOver = (e: React.DragEvent, slotId: string) => {
+    if (!draggedPane) return;
     e.preventDefault();
     if (dragOverSlot !== slotId) setDragOverSlot(slotId);
   };
 
   const handleDragOverBody = (slotId: string, groupId: string, position: DragZonePosition) => {
+    if (!draggedPane) return;
     if (dragOverSlot !== slotId) setDragOverSlot(slotId);
-    setDragOverZone({ slotId, groupId, position });
-    setDragOverIndex(null);
+    
+    if (
+      !dragOverZone ||
+      dragOverZone.slotId !== slotId ||
+      dragOverZone.groupId !== groupId ||
+      dragOverZone.position !== position
+    ) {
+      setDragOverZone({ slotId, groupId, position });
+    }
+    
+    if (dragOverIndex !== null) {
+      setDragOverIndex(null);
+    }
   };
 
   const handleDragOverTabBar = (e: React.DragEvent, slotId: string, groupId: string) => {
+    if (!draggedPane) return;
     e.preventDefault();
     if (dragOverSlot !== slotId) setDragOverSlot(slotId);
-    setDragOverZone({ slotId, groupId, position: 'tab-bar' });
+
+    if (
+      !dragOverZone ||
+      dragOverZone.slotId !== slotId ||
+      dragOverZone.groupId !== groupId ||
+      dragOverZone.position !== 'tab-bar'
+    ) {
+      setDragOverZone({ slotId, groupId, position: 'tab-bar' });
+    }
 
     const slot = slots[slotId as 'left' | 'right' | 'bottom'];
     const group = slot?.groups.find(g => g.id === groupId);
     const count = group?.panes.length || 0;
 
-    if (!dragOverIndex || dragOverIndex.slotId !== slotId || dragOverIndex.groupId !== groupId) {
+    if (!dragOverIndex || dragOverIndex.slotId !== slotId || dragOverIndex.groupId !== groupId || dragOverIndex.index !== count) {
       setDragOverIndex({ slotId, groupId, index: count });
     }
   };
 
   const handleDragOverTab = (e: React.DragEvent, paneId: string, slotId: string, groupId: string, index: number) => {
+    if (!draggedPane) return;
     e.preventDefault();
     e.stopPropagation();
     if (dragOverSlot !== slotId) setDragOverSlot(slotId);
-    setDragOverZone({ slotId, groupId, position: 'tab-bar' });
+
+    if (
+      !dragOverZone ||
+      dragOverZone.slotId !== slotId ||
+      dragOverZone.groupId !== groupId ||
+      dragOverZone.position !== 'tab-bar'
+    ) {
+      setDragOverZone({ slotId, groupId, position: 'tab-bar' });
+    }
 
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const midX = rect.left + rect.width / 2;
@@ -296,6 +327,12 @@ export function useLayout() {
 
   const handleDragEnd = () => {
     setDraggedPane(null);
+    setDragOverSlot(null);
+    setDragOverIndex(null);
+    setDragOverZone(null);
+  };
+
+  const clearDragOverState = () => {
     setDragOverSlot(null);
     setDragOverIndex(null);
     setDragOverZone(null);
@@ -593,7 +630,6 @@ export function useLayout() {
       const targetSlot = updated[slotId];
       const isSplitDrop = dragOverZone?.slotId === slotId && (
         dragOverZone.position === 'body-bottom' ||
-        dragOverZone.position === 'body-top' ||
         dragOverZone.position === 'body-left' ||
         dragOverZone.position === 'body-right'
       );
@@ -608,9 +644,18 @@ export function useLayout() {
           panes: [paneId],
           activePaneId: paneId
         };
+
+        const targetIdx = targetGroupId ? targetSlot.groups.findIndex(g => g.id === targetGroupId) : 0;
+        const insertIdx = (dragOverZone?.position === 'body-left') 
+          ? (targetIdx !== -1 ? targetIdx : 0)
+          : (targetIdx !== -1 ? targetIdx + 1 : targetSlot.groups.length);
+
+        const newGroups = [...targetSlot.groups];
+        newGroups.splice(insertIdx, 0, newGroup);
+
         updated[slotId] = {
           ...targetSlot,
-          groups: [...targetSlot.groups, newGroup],
+          groups: newGroups,
           splitDirection: splitDir,
           visible: true
         };
@@ -679,6 +724,7 @@ export function useLayout() {
     handleDragOverTabBar,
     handleDragOverTab,
     handleDragEnd,
+    clearDragOverState,
     handleDrop,
     unsplitSlot,
     splitGroup,

@@ -195,6 +195,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   };
 
   const handleDragStart = (e: React.DragEvent, id: string) => {
+    e.stopPropagation();
     e.dataTransfer.setData('type', 'layer-panel');
     e.dataTransfer.setData('id', id);
     const newState: DragState = { id, overId: null, position: 'after' };
@@ -203,20 +204,22 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   };
 
   const handleDragOver = (e: React.DragEvent, id: string) => {
+    if (!dragStateRef.current) return;
     e.preventDefault();
-    if (dragStateRef.current) {
-      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      const newState = getDropTarget(id, e.clientY, rect);
-      if (newState && (dragStateRef.current.overId !== newState.overId || dragStateRef.current.position !== newState.position)) {
-        setDragState(newState);
-        dragStateRef.current = newState;
-      }
+    e.stopPropagation();
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const newState = getDropTarget(id, e.clientY, rect);
+    if (newState && (dragStateRef.current.overId !== newState.overId || dragStateRef.current.position !== newState.position)) {
+      setDragState(newState);
+      dragStateRef.current = newState;
     }
   };
 
   const handleDrop = (e: React.DragEvent, targetId: string) => {
+    if (!dragStateRef.current) return;
     e.preventDefault();
-    if (dragStateRef.current && dragStateRef.current.overId && dragStateRef.current.id !== dragStateRef.current.overId) {
+    e.stopPropagation();
+    if (dragStateRef.current.overId && dragStateRef.current.id !== dragStateRef.current.overId) {
         const logicalPosition = dragStateRef.current.position === 'before' ? 'after' : 'before';
         onReorderLayers(dragStateRef.current.id, dragStateRef.current.overId, logicalPosition);
     }
@@ -225,8 +228,9 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   };
 
   const handleContainerDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
     if (!dragStateRef.current) return;
+    e.preventDefault();
+    e.stopPropagation();
     const container = e.currentTarget as HTMLElement;
     const rect = container.getBoundingClientRect();
     const scrollTop = container.scrollTop;
@@ -252,8 +256,10 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   };
 
   const handleContainerDrop = (e: React.DragEvent) => {
+    if (!dragStateRef.current) return;
     e.preventDefault();
-    if (dragStateRef.current && dragStateRef.current.overId && dragStateRef.current.id !== dragStateRef.current.overId) {
+    e.stopPropagation();
+    if (dragStateRef.current.overId && dragStateRef.current.id !== dragStateRef.current.overId) {
         const logicalPosition = dragStateRef.current.position === 'before' ? 'after' : 'before';
         onReorderLayers(dragStateRef.current.id, dragStateRef.current.overId, logicalPosition);
     }

@@ -82,14 +82,16 @@ export const Timeline: React.FC<TimelineProps> = ({
   };
 
   const handleLayerDragStart = (e: React.DragEvent, id: string) => {
+    e.stopPropagation();
     e.dataTransfer.setData('type', 'layer');
     e.dataTransfer.setData('id', id);
     setDragState({ type: 'layer', id, overId: null, position: 'after' });
   };
 
   const handleLayerDragOver = (e: React.DragEvent, id: string) => {
-    e.preventDefault(); 
     if (dragState?.type !== 'layer') return;
+    e.preventDefault();
+    e.stopPropagation();
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const midY = rect.top + rect.height / 2;
     const position = e.clientY < midY ? 'before' : 'after';
@@ -99,22 +101,26 @@ export const Timeline: React.FC<TimelineProps> = ({
   };
 
   const handleLayerDrop = (e: React.DragEvent, targetId: string) => {
+    if (dragState?.type !== 'layer') return;
     e.preventDefault();
-    if (dragState?.type === 'layer' && dragState.id !== targetId) {
+    e.stopPropagation();
+    if (dragState.id !== targetId) {
         onReorderLayers(dragState.id, targetId, dragState.position);
     }
     setDragState(null);
   };
 
   const handleFrameDragStart = (e: React.DragEvent, index: number) => {
+    e.stopPropagation();
     e.dataTransfer.setData('type', 'frame');
     e.dataTransfer.setData('index', index.toString());
     setDragState({ type: 'frame', id: index.toString(), overId: null, position: 'after' });
   };
 
   const handleFrameDragOver = (e: React.DragEvent, index: number) => {
-    e.preventDefault();
     if (dragState?.type !== 'frame') return;
+    e.preventDefault();
+    e.stopPropagation();
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const midX = rect.left + rect.width / 2;
     const position = e.clientX < midX ? 'before' : 'after';
@@ -124,41 +130,43 @@ export const Timeline: React.FC<TimelineProps> = ({
   };
 
   const handleFrameDrop = (e: React.DragEvent, targetIndex: number) => {
+    if (dragState?.type !== 'frame') return;
     e.preventDefault();
-    if (dragState?.type === 'frame') {
-       const fromIndex = parseInt(dragState.id);
-       if (fromIndex !== targetIndex) {
-           let insertIndex = targetIndex;
-           if (dragState.position === 'after') insertIndex = targetIndex + 1;
-           if (fromIndex < insertIndex) insertIndex--;
-           onReorderFrames(fromIndex, insertIndex);
-       }
+    e.stopPropagation();
+    const fromIndex = parseInt(dragState.id);
+    if (fromIndex !== targetIndex) {
+        let insertIndex = targetIndex;
+        if (dragState.position === 'after') insertIndex = targetIndex + 1;
+        if (fromIndex < insertIndex) insertIndex--;
+        onReorderFrames(fromIndex, insertIndex);
     }
     setDragState(null);
   };
 
   const handleInsertButtonDragOver = (e: React.DragEvent, index: number) => {
-    e.preventDefault();
     if (dragState?.type !== 'frame') return;
+    e.preventDefault();
+    e.stopPropagation();
     if (dragState.overId !== `insert-${index}`) {
       setDragState({ ...dragState, overId: `insert-${index}`, position: 'before' });
     }
   };
 
   const handleInsertButtonDrop = (e: React.DragEvent, index: number) => {
+    if (dragState?.type !== 'frame') return;
     e.preventDefault();
-    if (dragState?.type === 'frame') {
-       const fromIndex = parseInt(dragState.id);
-       let insertIndex = index;
-       if (fromIndex < insertIndex) insertIndex--;
-       onReorderFrames(fromIndex, insertIndex);
-    }
+    e.stopPropagation();
+    const fromIndex = parseInt(dragState.id);
+    let insertIndex = index;
+    if (fromIndex < insertIndex) insertIndex--;
+    onReorderFrames(fromIndex, insertIndex);
     setDragState(null);
   };
 
   const handleLayerContainerDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
     if (dragState?.type !== 'layer') return;
+    e.preventDefault();
+    e.stopPropagation();
     const container = e.currentTarget as HTMLElement;
     const rect = container.getBoundingClientRect();
     const scrollTop = container.scrollTop;
@@ -183,16 +191,19 @@ export const Timeline: React.FC<TimelineProps> = ({
   };
 
   const handleLayerContainerDrop = (e: React.DragEvent) => {
+    if (dragState?.type !== 'layer') return;
     e.preventDefault();
-    if (dragState?.type === 'layer' && dragState.overId && dragState.id !== dragState.overId) {
+    e.stopPropagation();
+    if (dragState.overId && dragState.id !== dragState.overId) {
         onReorderLayers(dragState.id, dragState.overId, dragState.position);
     }
     setDragState(null);
   };
 
   const handleFrameContainerDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
     if (dragState?.type !== 'frame') return;
+    e.preventDefault();
+    e.stopPropagation();
     const container = e.currentTarget as HTMLElement;
     const rect = container.getBoundingClientRect();
     const scrollLeft = container.scrollLeft;
@@ -215,16 +226,16 @@ export const Timeline: React.FC<TimelineProps> = ({
   };
 
   const handleFrameContainerDrop = (e: React.DragEvent) => {
+    if (dragState?.type !== 'frame') return;
     e.preventDefault();
-    if (dragState?.type === 'frame') {
-       const fromIndex = parseInt(dragState.id);
-       const targetIndex = dragState.overId ? parseInt(dragState.overId) : (state.frames.length - 1);
-       if (fromIndex !== targetIndex) {
-           let insertIndex = targetIndex;
-           if (dragState.position === 'after') insertIndex = targetIndex + 1;
-           if (fromIndex < insertIndex) insertIndex--;
-           onReorderFrames(fromIndex, insertIndex);
-       }
+    e.stopPropagation();
+    const fromIndex = parseInt(dragState.id);
+    const targetIndex = dragState.overId ? parseInt(dragState.overId) : (state.frames.length - 1);
+    if (fromIndex !== targetIndex) {
+        let insertIndex = targetIndex;
+        if (dragState.position === 'after') insertIndex = targetIndex + 1;
+        if (fromIndex < insertIndex) insertIndex--;
+        onReorderFrames(fromIndex, insertIndex);
     }
     setDragState(null);
   };

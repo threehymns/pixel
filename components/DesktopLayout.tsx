@@ -30,6 +30,7 @@ import { PlaySquare, Move } from 'lucide-react';
 import { CustomSlider } from './ui/slider';
 import { CustomCheckbox } from './ui/checkbox';
 import { SELECTION_TOOLS } from '../constants';
+import { DragZonePosition } from '../hooks/useLayout';
 
 interface DesktopLayoutProps {
   state: ProjectState;
@@ -187,6 +188,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
     handleDragOverTabBar,
     handleDragOverTab,
     handleDragEnd,
+    clearDragOverState,
     handleDrop,
     unsplitSlot,
     splitGroup,
@@ -372,19 +374,29 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
           onDragOver={(e) => {
             e.preventDefault();
             e.stopPropagation();
+            if (!draggedPane) return;
+
             const rect = e.currentTarget.getBoundingClientRect();
             const relX = e.clientX - rect.left;
             const relY = e.clientY - rect.top;
 
-            let pos: any = 'body-top';
-            if (relY > rect.height * 0.7) {
+            let pos: DragZonePosition = 'body-top';
+            if (relY > rect.height * 0.75) {
               pos = 'body-bottom';
-            } else if (relX > rect.width * 0.7) {
+            } else if (relX > rect.width * 0.75) {
               pos = 'body-right';
-            } else if (relX < rect.width * 0.3) {
+            } else if (relX < rect.width * 0.25) {
               pos = 'body-left';
+            } else {
+              pos = 'body-top';
             }
             handleDragOverBody(slotId, group.id, pos);
+          }}
+          onDragLeave={(e) => {
+            if (!draggedPane) return;
+            if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+              clearDragOverState();
+            }
           }}
           onDrop={(e) => {
             e.preventDefault();
@@ -507,38 +519,38 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
 
             {/* Visual Drop Overlays */}
             {isBodyTopHover && (
-              <div className="absolute inset-0 bg-primary/10 border-2 border-dashed border-primary/70 z-30 pointer-events-none flex flex-col items-center justify-center gap-1.5 backdrop-blur-[1px] animate-in fade-in-50 duration-100">
-                <div className="p-2 rounded-full bg-primary/20 text-primary shadow-sm">
+              <div className="absolute inset-0 bg-primary/10 border-2 border-dashed border-primary/70 z-30 pointer-events-none select-none flex flex-col items-center justify-center gap-1.5 backdrop-blur-[1px] animate-in fade-in-50 duration-100">
+                <div className="p-2 rounded-full bg-primary/20 text-primary shadow-sm pointer-events-none">
                   <FolderOpen size={18} />
                 </div>
-                <span className="text-xs font-semibold text-primary tracking-wide">Drop to add as Tab</span>
+                <span className="text-xs font-semibold text-primary tracking-wide pointer-events-none">Drop to add as Tab</span>
               </div>
             )}
 
             {isBodyBottomHover && (
-              <div className="absolute inset-x-0 bottom-0 h-1/2 bg-primary/15 border-2 border-dashed border-primary z-30 pointer-events-none flex flex-col items-center justify-center gap-1.5 backdrop-blur-[1px] animate-in fade-in-50 duration-100 rounded-b-md">
-                <div className="p-2 rounded-full bg-primary text-primary-foreground shadow-md">
+              <div className="absolute inset-x-0 bottom-0 h-1/2 bg-primary/15 border-2 border-dashed border-primary z-30 pointer-events-none select-none flex flex-col items-center justify-center gap-1.5 backdrop-blur-[1px] animate-in fade-in-50 duration-100 rounded-b-md">
+                <div className="p-2 rounded-full bg-primary text-primary-foreground shadow-md pointer-events-none">
                   <FlipVertical size={18} />
                 </div>
-                <span className="text-xs font-bold text-primary tracking-wide">Drop to Split Below</span>
+                <span className="text-xs font-bold text-primary tracking-wide pointer-events-none">Drop to Split Below</span>
               </div>
             )}
 
             {isBodyRightHover && (
-              <div className="absolute inset-y-0 right-0 w-1/2 bg-primary/15 border-2 border-dashed border-primary z-30 pointer-events-none flex flex-col items-center justify-center gap-1.5 backdrop-blur-[1px] animate-in fade-in-50 duration-100 rounded-r-md">
-                <div className="p-2 rounded-full bg-primary text-primary-foreground shadow-md">
-                  <FlipVertical size={18} className="rotate-90" />
+              <div className="absolute inset-y-0 right-0 w-1/2 bg-primary/15 border-2 border-dashed border-primary z-30 pointer-events-none select-none flex flex-col items-center justify-center gap-1.5 backdrop-blur-[1px] animate-in fade-in-50 duration-100 rounded-r-md">
+                <div className="p-2 rounded-full bg-primary text-primary-foreground shadow-md pointer-events-none">
+                  <FlipVertical size={18} className="rotate-90 pointer-events-none" />
                 </div>
-                <span className="text-xs font-bold text-primary tracking-wide">Drop to Split Right</span>
+                <span className="text-xs font-bold text-primary tracking-wide pointer-events-none">Drop to Split Right</span>
               </div>
             )}
 
             {isBodyLeftHover && (
-              <div className="absolute inset-y-0 left-0 w-1/2 bg-primary/15 border-2 border-dashed border-primary z-30 pointer-events-none flex flex-col items-center justify-center gap-1.5 backdrop-blur-[1px] animate-in fade-in-50 duration-100 rounded-l-md">
-                <div className="p-2 rounded-full bg-primary text-primary-foreground shadow-md">
-                  <FlipVertical size={18} className="-rotate-90" />
+              <div className="absolute inset-y-0 left-0 w-1/2 bg-primary/15 border-2 border-dashed border-primary z-30 pointer-events-none select-none flex flex-col items-center justify-center gap-1.5 backdrop-blur-[1px] animate-in fade-in-50 duration-100 rounded-l-md">
+                <div className="p-2 rounded-full bg-primary text-primary-foreground shadow-md pointer-events-none">
+                  <FlipVertical size={18} className="-rotate-90 pointer-events-none" />
                 </div>
-                <span className="text-xs font-bold text-primary tracking-wide">Drop to Split Left</span>
+                <span className="text-xs font-bold text-primary tracking-wide pointer-events-none">Drop to Split Left</span>
               </div>
             )}
           </div>
@@ -667,10 +679,11 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                                   <div 
                                     key={idx} 
                                     draggable
-                                    onDragStart={(e) => { e.dataTransfer.setData('text/plain', idx.toString()); }}
-                                    onDragOver={(e) => { e.preventDefault(); }}
+                                    onDragStart={(e) => { e.stopPropagation(); e.dataTransfer.setData('text/plain', idx.toString()); }}
+                                    onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
                                     onDrop={(e) => {
                                         e.preventDefault();
+                                        e.stopPropagation();
                                         const fromIdx = parseInt(e.dataTransfer.getData('text/plain'));
                                         if (!isNaN(fromIdx) && fromIdx !== idx) {
                                             const newShades = [...state.shades];
@@ -832,7 +845,12 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
 
             <div 
               className="flex-1 min-h-0 relative"
-              onDragOver={(e) => e.preventDefault()}
+              onDragOver={(e) => {
+                e.preventDefault();
+                if (draggedPane && (dragOverSlot !== null || dragOverZone !== null)) {
+                  clearDragOverState();
+                }
+              }}
               onDrop={(e) => {
                 e.preventDefault();
                 if (!draggedPane) return;
