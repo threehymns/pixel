@@ -539,9 +539,9 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                                     <Check size={20} className="text-muted-foreground/60" />
                                     <span className="text-xs font-medium">Save Pixel</span>
                                 </button>
-                                <button onClick={() => { project.downloadImage(); closePanel(); }} className="flex items-center gap-3 p-3 rounded-xl bg-primary text-primary-foreground shadow-sm active:opacity-90 text-left">
+                                <button onClick={() => { if (project.openExportDialog) { project.openExportDialog('gif'); } else { project.downloadImage(); } closePanel(); }} className="flex items-center gap-3 p-3 rounded-xl bg-primary text-primary-foreground shadow-sm active:opacity-90 text-left">
                                     <Share size={20} />
-                                    <span className="text-xs font-medium">Export PNG</span>
+                                    <span className="text-xs font-medium">Export PNG / GIF</span>
                                 </button>
                              </div>
                              

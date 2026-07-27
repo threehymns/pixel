@@ -839,7 +839,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                   <ToolButton active={isPreviewDocked || showPreview} onClick={() => togglePaneVisibility('preview')} icon={<PlaySquare size={16} />} label="Toggle Preview" />
                   <ToolButton active={state.showGrid} onClick={() => updateState({...state, showGrid: !state.showGrid})} icon={<Grid size={16} />} label="Toggle Grid" />
                   <ToolButton active={state.onionSkin} onClick={() => updateState({...state, onionSkin: !state.onionSkin})} icon={<Eye size={16} />} label="Onion Skin" />
-                  <ToolButton active={false} onClick={project.downloadImage} icon={<Download size={16} />} label="Export Frame" />
+                  <ToolButton active={false} onClick={() => project.openExportDialog ? project.openExportDialog('gif') : project.downloadImage()} icon={<Download size={16} />} label="Export PNG / GIF..." />
               </div>
             </div>
 

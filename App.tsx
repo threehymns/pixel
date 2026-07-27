@@ -6,6 +6,7 @@ import { TooltipProvider } from './components/ui/tooltip';
 import { NewProjectDialog } from './components/NewProjectDialog';
 import { CanvasResizeDialog } from './components/CanvasResizeDialog';
 import { ReferenceImageDialog } from './components/ReferenceImageDialog';
+import { ExportDialog, ExportFormat } from './components/ExportDialog';
 
 // Layouts
 import { DesktopLayout } from './components/DesktopLayout';
@@ -26,7 +27,15 @@ export default function App() {
   const [isNewProjectDialogOpen, setIsNewProjectDialogOpen] = useState(false);
   const [isResizeCanvasDialogOpen, setIsResizeCanvasDialogOpen] = useState(false);
   const [isReferenceImageDialogOpen, setIsReferenceImageDialogOpen] = useState(false);
+  const [exportDialog, setExportDialog] = useState<{ isOpen: boolean; initialFormat: ExportFormat }>({
+    isOpen: false,
+    initialFormat: 'gif'
+  });
   const [mousePos, setMousePos] = useState<Position | null>(null);
+
+  const openExportDialog = (format: ExportFormat = 'gif') => {
+    setExportDialog({ isOpen: true, initialFormat: format });
+  };
   const [dragStartPos, setDragStartPos] = useState<Position | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ text: string, type: 'info' | 'error' | 'success' }>({ text: '', type: 'info' });
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -88,7 +97,11 @@ export default function App() {
         },
         createProject: () => setIsNewProjectDialogOpen(true),
         openResizeDialog: () => setIsResizeCanvasDialogOpen(true),
-        openReferenceImageDialog: () => setIsReferenceImageDialogOpen(true)
+        openReferenceImageDialog: () => setIsReferenceImageDialogOpen(true),
+        openExportDialog,
+        downloadImage: () => openExportDialog('png'),
+        downloadSpriteSheet: () => openExportDialog('spritesheet'),
+        downloadGif: () => openExportDialog('gif')
       },
       fileSystemActions: fileSystem,
       uiActions: {
@@ -134,7 +147,11 @@ export default function App() {
       commands,
       project: {
         ...project,
-        createProject: () => setIsNewProjectDialogOpen(true)
+        createProject: () => setIsNewProjectDialogOpen(true),
+        openExportDialog,
+        downloadImage: () => openExportDialog('png'),
+        downloadSpriteSheet: () => openExportDialog('spritesheet'),
+        downloadGif: () => openExportDialog('gif')
       },
       canvasTools,
       fileSystem,
@@ -177,6 +194,13 @@ export default function App() {
             onClose={() => setIsReferenceImageDialogOpen(false)}
             referenceImage={state.referenceImage}
             onUpdate={project.setReferenceImage}
+        />
+
+        <ExportDialog
+          isOpen={exportDialog.isOpen}
+          onClose={() => setExportDialog(prev => ({ ...prev, isOpen: false }))}
+          state={state}
+          initialFormat={exportDialog.initialFormat}
         />
 
         {isMobile ? (

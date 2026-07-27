@@ -16,6 +16,8 @@ interface UseAppCommandsProps {
         tweenFrames: () => void;
         downloadImage: () => void;
         downloadSpriteSheet: () => void;
+        downloadGif?: () => void;
+        openExportDialog?: (format?: any) => void;
         saveProject: () => void;
         saveProjectAs: () => void;
         createProject: () => void;
@@ -87,6 +89,10 @@ export function useAppCommands({
         { 
             id: 'file.export', label: 'Export Frame (PNG)', category: 'File', hotkey: 'Shift+E', 
             perform: projectActions.downloadImage 
+        },
+        { 
+            id: 'file.exportGif', label: 'Export Animated GIF...', category: 'File', hotkey: 'Ctrl+E', keys: ['Control+e', 'Meta+e'],
+            perform: () => projectActions.downloadGif ? projectActions.downloadGif() : projectActions.downloadImage()
         },
         { 
             id: 'file.exportSpritesheet', label: 'Export Sprite Sheet...', category: 'File', 
