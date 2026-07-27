@@ -73,15 +73,15 @@ export const TabStrip: React.FC<TabStripProps> = ({
                             className={`
                                 group flex items-center min-w-[120px] max-w-[200px] h-7 px-3 gap-2 rounded-t-md cursor-pointer text-xs transition-colors
                                 ${isActive 
-                                    ? 'bg-card text-foreground shadow-[0_-1px_2px_rgba(0,0,0,0.05)]' 
-                                    : 'bg-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground'}
+                                    ? 'bg-card text-foreground font-semibold shadow-[0_-1px_2px_rgba(0,0,0,0.05)] border-t-2 border-t-primary' 
+                                    : 'bg-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground font-medium'}
                             `}
                         >
-                            <span className="flex-1 truncate font-medium">{p.data.title}</span>
+                            <span className="flex-1 truncate">{p.data.title}</span>
                             
                             <div className="ml-1 w-4 h-4 flex items-center justify-center relative">
                                 {isDirty && (
-                                    <div className={`w-1.5 h-1.5 rounded-full group-hover:opacity-0 transition-opacity ${isActive ? 'bg-primary' : 'bg-muted-foreground'}`} />
+                                    <div className={`w-2 h-2 rounded-full group-hover:opacity-0 transition-opacity ${isActive ? 'bg-amber-400' : 'bg-amber-400/80'}`} />
                                 )}
                                 <button
                                     onClick={(e) => {

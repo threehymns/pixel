@@ -73,7 +73,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
           <span className="shrink-0 text-primary">
             <Info size={12} />
           </span>
-          <span className="uppercase text-[9px] tracking-wider opacity-60">
+          <span className="uppercase text-[9px] tracking-wider text-muted-foreground font-bold">
             {isShading ? 'Shading ' : ''}{tool.replace('-select', '').replace('filled-', 'Filled ')}:
           </span>
         </div>
@@ -82,13 +82,13 @@ export const StatusBar: React.FC<StatusBarProps> = ({
           {isSelection ? (
             <>
               <span className="flex gap-1 items-center shrink-0">
-                <kbd className="bg-background px-1 rounded-sm text-[9px] border border-border text-foreground font-sans">Shift</kbd> Add
+                <kbd className="bg-secondary/80 px-1 rounded-sm text-[9px] border border-border text-foreground font-sans font-semibold">Shift</kbd> Add
               </span>
               <span className="flex gap-1 items-center shrink-0">
-                <kbd className="bg-background px-1 rounded-sm text-[9px] border border-border text-foreground font-sans">Alt+Shift</kbd> Sub
+                <kbd className="bg-secondary/80 px-1 rounded-sm text-[9px] border border-border text-foreground font-sans font-semibold">Alt+Shift</kbd> Sub
               </span>
               <span className="flex gap-1 items-center shrink-0">
-                <kbd className="bg-background px-1 rounded-sm text-[9px] border border-border text-foreground font-sans">Ctrl+Shift</kbd> Inter
+                <kbd className="bg-secondary/80 px-1 rounded-sm text-[9px] border border-border text-foreground font-sans font-semibold">Ctrl+Shift</kbd> Inter
               </span>
             </>
           ) : (
@@ -226,23 +226,23 @@ export const StatusBar: React.FC<StatusBarProps> = ({
           <div className="w-[1px] h-3 bg-border mx-2" />
 
           <div className="flex items-center gap-1 w-20">
-            <MousePointer2 size={10} className="opacity-50" />
-            <span className="font-mono">
+            <MousePointer2 size={10} className="text-muted-foreground" />
+            <span className="font-mono text-foreground font-medium">
               {mousePos ? `${mousePos.x}, ${mousePos.y}` : '--, --'}
             </span>
           </div>
 
           <div className="w-[1px] h-3 bg-border mx-2" />
           <div className="flex items-center gap-1">
-            <Maximize size={10} className="opacity-50" />
-            <span>{state.width}x{state.height}</span>
+            <Maximize size={10} className="text-muted-foreground" />
+            <span className="font-medium text-foreground">{state.width}x{state.height}</span>
           </div>
 
           {selectionSize && (
             <>
               <div className="w-[1px] h-3 bg-border mx-2" />
               <div className="flex items-center gap-1 text-primary font-medium">
-                <span className="opacity-70 font-mono tracking-tighter text-[9px]">SEL:</span>
+                <span className="text-muted-foreground font-mono tracking-tighter text-[9px]">SEL:</span>
                 <span>{selectionSize.w}x{selectionSize.h}</span>
               </div>
             </>
@@ -250,20 +250,20 @@ export const StatusBar: React.FC<StatusBarProps> = ({
 
           <div className="w-[1px] h-3 bg-border mx-2" />
           <div className="flex items-center gap-1">
-            <Clock size={10} className="opacity-50" />
-            <span>Frame {state.activeFrameIndex + 1}/{state.frames.length}</span>
+            <Clock size={10} className="text-muted-foreground" />
+            <span className="font-medium text-foreground">Frame {state.activeFrameIndex + 1}/{state.frames.length}</span>
           </div>
 
           <div className="w-[1px] h-3 bg-border mx-2" />
           <div className="flex items-center gap-1 w-12 justify-end">
-            <ZoomIn size={10} className="opacity-50" />
-            <span>{Math.round(state.zoom * 100)}%</span>
+            <ZoomIn size={10} className="text-muted-foreground" />
+            <span className="font-medium text-foreground">{Math.round(state.zoom * 100)}%</span>
           </div>
           
           <div className="w-[1px] h-3 bg-border mx-2" />
           <div className="flex items-center gap-1 max-w-[100px] truncate">
-            <Layers size={10} className="opacity-50" />
-            <span className="truncate">{state.layers.find(l => l.id === state.activeLayerId)?.name}</span>
+            <Layers size={10} className="text-muted-foreground" />
+            <span className="truncate font-medium text-foreground">{state.layers.find(l => l.id === state.activeLayerId)?.name}</span>
           </div>
         </div>
       )}

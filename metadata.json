@@ -1,5 +1,6 @@
 {
   "name": "PixelForge Studio",
   "description": "A professional-grade pixel art editor with support for layers, animation frames, onion skinning, and indexed palettes.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -171,7 +171,7 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
                   ${isActive 
                     ? 'bg-primary/10 shadow-sm' 
                     : isFuture 
-                      ? 'bg-transparent opacity-40 hover:opacity-75 hover:bg-accent/30' 
+                      ? 'bg-transparent opacity-65 hover:opacity-95 hover:bg-accent/30' 
                       : 'bg-transparent hover:bg-accent/50'
                   }
                 `}
@@ -184,7 +184,7 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
 
                 {/* Main Label text */}
                 <div className="flex-1 min-w-0">
-                  <div className={`truncate text-[10px] ${isActive ? 'text-foreground font-medium' : 'text-muted-foreground group-hover:text-foreground transition-colors'}`}>
+                  <div className={`truncate text-[10px] ${isActive ? 'text-foreground font-bold' : 'text-foreground/80 group-hover:text-foreground transition-colors'}`}>
                     {entry.action}
                   </div>
                 </div>

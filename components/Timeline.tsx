@@ -249,21 +249,21 @@ export const Timeline: React.FC<TimelineProps> = ({
       <div className="h-7 bg-secondary/20 border-b border-border/40 flex items-center px-2 gap-1 shrink-0">
          <Tooltip>
            <TooltipTrigger asChild>
-             <button onClick={onAddFrame} className="p-1 hover:text-white text-gray-400"><Plus size={14} /></button>
+             <button onClick={onAddFrame} className="p-1 text-muted-foreground hover:text-foreground transition-colors"><Plus size={14} /></button>
            </TooltipTrigger>
            <TooltipContent side="top">New Frame</TooltipContent>
          </Tooltip>
 
          <Tooltip>
            <TooltipTrigger asChild>
-             <button onClick={() => isMultiFrame ? onDuplicateSelectedFrames() : onDuplicateFrame()} className={`p-1 hover:text-white ${isMultiFrame ? 'text-primary' : 'text-gray-400'}`}><Copy size={14} /></button>
+             <button onClick={() => isMultiFrame ? onDuplicateSelectedFrames() : onDuplicateFrame()} className={`p-1 hover:text-foreground transition-colors ${isMultiFrame ? 'text-primary font-bold' : 'text-muted-foreground'}`}><Copy size={14} /></button>
            </TooltipTrigger>
            <TooltipContent side="top">Duplicate Frame</TooltipContent>
          </Tooltip>
 
          <Tooltip>
            <TooltipTrigger asChild>
-             <button onClick={() => isMultiFrame ? onDeleteSelectedFrames() : onDeleteFrame()} className={`p-1 hover:text-red-400 ${isMultiFrame ? 'text-red-400 font-bold' : 'text-gray-500'}`}><Trash2 size={14} /></button>
+             <button onClick={() => isMultiFrame ? onDeleteSelectedFrames() : onDeleteFrame()} className={`p-1 hover:text-destructive transition-colors ${isMultiFrame ? 'text-destructive font-bold' : 'text-muted-foreground'}`}><Trash2 size={14} /></button>
            </TooltipTrigger>
            <TooltipContent side="top">Delete Frame</TooltipContent>
          </Tooltip>
@@ -275,7 +275,7 @@ export const Timeline: React.FC<TimelineProps> = ({
              <button 
                onClick={onTweenFrames} 
                disabled={!canTween}
-               className={`p-1 transition-all ${canTween ? 'text-primary hover:text-primary-foreground hover:bg-primary rounded' : 'text-gray-600 opacity-40 cursor-not-allowed'}`} 
+               className={`p-1 transition-all ${canTween ? 'text-primary hover:text-primary-foreground hover:bg-primary rounded' : 'text-muted-foreground/40 cursor-not-allowed'}`} 
              >
                <Sparkles size={14} />
              </button>
@@ -287,7 +287,7 @@ export const Timeline: React.FC<TimelineProps> = ({
 
          <Tooltip>
            <TooltipTrigger asChild>
-             <button onClick={onAddLayer} className="p-1 hover:text-white text-gray-400"><FilePlus size={14} /></button>
+             <button onClick={onAddLayer} className="p-1 text-muted-foreground hover:text-foreground transition-colors"><FilePlus size={14} /></button>
            </TooltipTrigger>
            <TooltipContent side="top">New Layer</TooltipContent>
          </Tooltip>
@@ -315,7 +315,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                   onDrop={(e) => { e.stopPropagation(); handleLayerDrop(e, layer.id); }}
                   onDragEnd={() => setDragState(null)}
                   className={`h-8 flex items-center px-1.5 gap-1 border-b border-border/20 cursor-pointer group relative
-                    ${isActive ? 'bg-secondary/40 border-primary/20' : isSelected ? 'bg-secondary/20' : 'text-gray-500 hover:bg-secondary/10'}
+                    ${isActive ? 'bg-secondary/60 border-primary/40' : isSelected ? 'bg-secondary/30' : 'text-muted-foreground hover:bg-secondary/20 hover:text-foreground'}
                     ${isDragging ? 'opacity-30' : ''}
                   `}
                   onClick={() => onSelectLayer(layer.id)}
@@ -323,14 +323,14 @@ export const Timeline: React.FC<TimelineProps> = ({
                   {isOver && dragState.position === 'before' && <div className="absolute top-0 left-0 w-full h-[1px] bg-primary z-50 pointer-events-none" />}
                   {isOver && dragState.position === 'after' && <div className="absolute bottom-0 left-0 w-full h-[1px] bg-primary z-50 pointer-events-none" />}
 
-                  <div className="cursor-grab text-gray-700 hover:text-gray-500 shrink-0"><GripVertical size={12} /></div>
-                  <button onClick={(e) => { e.stopPropagation(); onToggleLayerVisibility(layer.id); }} className={`p-1 shrink-0 ${!layer.visible ? 'text-gray-800' : isActive ? 'text-primary' : 'text-gray-500'}`}>
+                  <div className="cursor-grab text-muted-foreground/60 hover:text-foreground shrink-0"><GripVertical size={12} /></div>
+                  <button onClick={(e) => { e.stopPropagation(); onToggleLayerVisibility(layer.id); }} className={`p-1 shrink-0 ${!layer.visible ? 'text-muted-foreground/30' : isActive ? 'text-primary font-bold' : 'text-muted-foreground hover:text-foreground'}`}>
                     {layer.visible ? <Eye size={13} /> : <EyeOff size={13} />}
                   </button>
-                  <button onClick={(e) => { e.stopPropagation(); onToggleLayerLock(layer.id); }} className={`p-1 shrink-0 ${!layer.locked ? 'text-gray-800' : 'text-primary/50'}`}>
+                  <button onClick={(e) => { e.stopPropagation(); onToggleLayerLock(layer.id); }} className={`p-1 shrink-0 ${!layer.locked ? 'text-muted-foreground/30' : 'text-primary/70'}`}>
                     {layer.locked ? <Lock size={11} /> : <Unlock size={11} />}
                   </button>
-                  <span className={`truncate flex-1 text-[11px] ${isActive ? 'text-gray-100 font-medium' : 'text-gray-400'}`}>{layer.name}</span>
+                  <span className={`truncate flex-1 text-[11px] ${isActive ? 'text-foreground font-bold' : 'text-foreground/80'}`}>{layer.name}</span>
                 </div>
             );
           })}
@@ -393,7 +393,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                                 onDragEnd={() => setDragState(null)}
                                 onClick={(e) => handleFrameClick(e, idx)}
                                 className={`min-w-[40px] w-10 border-r border-border/30 flex items-center justify-center text-[10px] cursor-pointer hover:bg-secondary/30 relative
-                                ${isActive ? 'bg-secondary/40 text-primary font-bold shadow-[inset_0_-2px_0_var(--primary)]' : isSelected ? 'bg-secondary/40 text-foreground' : 'text-gray-600'}
+                                ${isActive ? 'bg-secondary/60 text-primary font-extrabold shadow-[inset_0_-2px_0_var(--primary)]' : isSelected ? 'bg-secondary/40 text-foreground font-bold' : 'text-foreground/80 hover:text-foreground font-semibold'}
                                 ${isDragging ? 'opacity-30' : ''}
                                 `}
                             >
@@ -435,7 +435,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                               `}
                             >
                               {hasContent && (
-                                <div className={`w-2.5 h-2.5 rounded-full transition-transform ${isActive ? 'bg-primary scale-110 shadow-[0_0_8px_rgba(var(--primary),0.5)]' : isFrameSelected || isLayerSelected ? 'bg-gray-400' : 'bg-gray-700'}`}></div>
+                                <div className={`w-2.5 h-2.5 rounded-full transition-transform ${isActive ? 'bg-primary scale-110 shadow-[0_0_8px_rgba(var(--primary),0.5)]' : isFrameSelected || isLayerSelected ? 'bg-foreground/80' : 'bg-muted-foreground/60'}`}></div>
                               )}
                             </div>
                           );

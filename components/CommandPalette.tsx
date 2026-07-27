@@ -66,7 +66,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose,
              onChange={e => setQuery(e.target.value)}
              onKeyDown={handleKeyDown}
            />
-           <div className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground border border-border">ESC</div>
+           <div className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-foreground font-semibold border border-border">ESC</div>
         </div>
         
         <div className="max-h-[300px] overflow-y-auto py-1 custom-scrollbar">
@@ -77,7 +77,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose,
                <button
                  key={cmd.id}
                  className={`w-full text-left px-3 py-2 flex items-center justify-between text-sm ${
-                   idx === selectedIndex ? 'bg-primary text-primary-foreground' : 'text-foreground hover:bg-accent'
+                   idx === selectedIndex ? 'bg-primary text-primary-foreground font-medium' : 'text-foreground hover:bg-accent'
                  }`}
                  onClick={() => {
                    cmd.perform();
@@ -86,11 +86,11 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose,
                  onMouseEnter={() => setSelectedIndex(idx)}
                >
                  <div className="flex items-center gap-2">
-                    {idx === selectedIndex && <CmdIcon size={12} className="opacity-50" />}
+                    {idx === selectedIndex && <CmdIcon size={12} className="opacity-80" />}
                     <span>{cmd.label}</span>
-                    <span className={`text-[10px] opacity-50 ml-2 border px-1 rounded-sm ${idx===selectedIndex ? 'border-primary-foreground' : 'border-border'}`}>{cmd.category}</span>
+                    <span className={`text-[10px] ml-2 border px-1 rounded-sm ${idx===selectedIndex ? 'border-primary-foreground/50 text-primary-foreground/90' : 'border-border text-muted-foreground font-medium'}`}>{cmd.category}</span>
                  </div>
-                 {cmd.hotkey && <span className="text-xs opacity-60 font-mono">{cmd.hotkey}</span>}
+                 {cmd.hotkey && <span className={`text-xs font-mono ${idx === selectedIndex ? 'text-primary-foreground/90 font-bold' : 'text-foreground/80 font-semibold'}`}>{cmd.hotkey}</span>}
                </button>
              ))
            )}

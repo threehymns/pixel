@@ -91,8 +91,8 @@ const TreeNode: React.FC<TreeNodeProps> = ({ handle, depth, onFileOpen }) => {
       )}
       {handle.kind === 'file' && <span className="w-2.5" />} {/* Spacer for no chevron */}
       
-      <Icon size={14} className={handle.kind === 'directory' ? 'text-blue-400' : 'text-gray-400'} />
-      <span className="truncate">{handle.name}</span>
+      <Icon size={14} className={handle.kind === 'directory' ? 'text-blue-400' : 'text-muted-foreground'} />
+      <span className="truncate text-foreground/90">{handle.name}</span>
     </div>
   );
 
@@ -132,7 +132,7 @@ export const FileTree: React.FC<FileTreeProps> = ({ rootHandle, onFileOpen, onOp
         className="flex flex-col bg-card border-r border-background h-full w-full relative"
     >
         <div className="h-8 bg-secondary border-b border-background flex items-center justify-between px-2 flex-shrink-0">
-            <span className="text-xs font-bold text-gray-300">Files</span>
+            <span className="text-xs font-bold text-foreground">Files</span>
             {!rootHandle && (
                 <button 
                   onClick={onOpenFolder}

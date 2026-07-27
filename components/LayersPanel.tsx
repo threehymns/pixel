@@ -394,7 +394,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                             {/* Vis Toggle */}
                             <button 
                                 onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { visible: !layer.visible }); }}
-                                className={`p-0.5 rounded transition-colors ${!layer.visible ? 'text-muted-foreground/50 hover:text-muted-foreground hover:bg-accent' : isActive ? 'text-primary hover:bg-primary/20' : 'text-muted-foreground hover:text-foreground hover:bg-accent'}`}
+                                className={`p-0.5 rounded transition-colors ${!layer.visible ? 'text-muted-foreground/40 hover:text-muted-foreground hover:bg-accent' : isActive ? 'text-primary hover:bg-primary/20' : 'text-muted-foreground hover:text-foreground hover:bg-accent'}`}
                             >
                                 {layer.visible ? <Eye size={12} /> : <EyeOff size={12} />}
                             </button>
@@ -416,11 +416,11 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                                         onChange={(e) => setEditName(e.target.value)}
                                         onBlur={saveEditing}
                                         onKeyDown={(e) => { if (e.key === 'Enter') saveEditing(); if (e.key === 'Escape') setEditingId(null); }}
-                                        className="w-full bg-background text-foreground px-1 py-0 text-[10px] rounded outline-none border border-primary focus:ring-0"
+                                        className="w-full bg-background text-foreground px-1 py-0 text-[10px] rounded outline-none border border-primary focus:ring-0 font-medium"
                                         onClick={(e) => e.stopPropagation()}
                                     />
                                 ) : (
-                                    <div className={`truncate text-[10px] ${isActive ? 'text-foreground font-medium' : 'text-muted-foreground group-hover:text-foreground transition-colors'}`}>
+                                    <div className={`truncate text-[10px] ${isActive ? 'text-foreground font-bold' : 'text-foreground/80 group-hover:text-foreground transition-colors'}`}>
                                         {layer.name}
                                     </div>
                                 )}
@@ -429,13 +429,13 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                             {/* Lock Toggle */}
                             <button 
                                 onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { locked: !layer.locked }); }}
-                                className={`p-0.5 rounded transition-colors ${!layer.locked ? 'text-muted-foreground/30 hover:text-muted-foreground hover:bg-accent opacity-0 group-hover:opacity-100' : 'text-primary/80 hover:bg-primary/20 opacity-100'}`}
+                                className={`p-0.5 rounded transition-colors ${!layer.locked ? 'text-muted-foreground/60 hover:text-foreground hover:bg-accent opacity-0 group-hover:opacity-100' : 'text-primary hover:bg-primary/20 opacity-100'}`}
                             >
                                 {layer.locked ? <Lock size={10} /> : <Unlock size={10} />}
                             </button>
 
                             {/* Dragger */}
-                            <div className="cursor-grab text-muted-foreground/30 hover:text-muted-foreground p-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <div className="cursor-grab text-muted-foreground/60 hover:text-foreground p-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                                 <GripVertical size={10} />
                             </div>
                         </div>
