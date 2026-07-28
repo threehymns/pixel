@@ -178,7 +178,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
           type="file" 
           ref={fileInputRef} 
           className="hidden" 
-          accept=".json,.png,.jpg,.jpeg,.gif" 
+          accept=".aseprite,.ase,.png,.jpg,.jpeg,.gif,.json,.pxa" 
           onChange={handleFileChange} 
       />
 

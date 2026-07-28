@@ -8,11 +8,13 @@
         "@base-ui/react": "^1.2.0",
         "@radix-ui/react-context-menu": "^2.2.16",
         "@types/omggif": "^1.0.5",
+        "@types/pako": "^2.0.4",
         "allotment": "1.20.2",
         "clsx": "^2.1.1",
         "lucide-react": "0.460.0",
         "motion": "^12.38.0",
         "omggif": "^1.0.10",
+        "pako": "^3.0.1",
         "react": "19.0.0",
         "react-dom": "19.0.0",
         "tailwind-merge": "^3.5.0",
@@ -198,6 +200,8 @@
 
     "@types/omggif": ["@types/omggif@1.0.5", "", {}, "sha512-gDQJflz1rOgEcUXkMAl80bDGN46f5mp8GbcM5dyvq+zsFV6YRBRtmNxlJJ5mjY77T7BRkRFzdIBVmK90QYhCxA=="],
 
+    "@types/pako": ["@types/pako@2.0.4", "", {}, "sha512-VWDCbrLeVXJM9fihYodcLiIv0ku+AlOa/TQ1SvYOaBuyrSKgEcro95LJyIsJ4vSo6BXIxOKxiJAat04CmST9Fw=="],
+
     "@vitejs/plugin-react": ["@vitejs/plugin-react@5.1.4", "", { "dependencies": { "@babel/core": "^7.29.0", "@babel/plugin-transform-react-jsx-self": "^7.27.1", "@babel/plugin-transform-react-jsx-source": "^7.27.1", "@rolldown/pluginutils": "1.0.0-rc.3", "@types/babel__core": "^7.20.5", "react-refresh": "^0.18.0" }, "peerDependencies": { "vite": "^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0" } }, ""],
 
     "allotment": ["allotment@1.20.2", "", { "dependencies": { "classnames": "^2.3.0", "eventemitter3": "^5.0.0", "lodash.clamp": "^4.0.0", "lodash.debounce": "^4.0.0", "lodash.isequal": "^4.5.0", "use-resize-observer": "^9.0.0" }, "peerDependencies": { "react": "^17.0.0 || ^18.0.0", "react-dom": "^17.0.0 || ^18.0.0" } }, ""],
@@ -299,6 +303,8 @@
     "node-releases": ["node-releases@2.0.36", "", {}, ""],
 
     "omggif": ["omggif@1.0.10", "", {}, "sha512-LMJTtvgc/nugXj0Vcrrs68Mn2D1r0zf630VNtqtpI1FEO7e+O9FP4gqs9AcnBaSEeoHIPm28u6qgPR0oyEpGSw=="],
+
+    "pako": ["pako@3.0.1", "", {}, "sha512-GupotUUI0mlhugKjUs4bjOwLt3nrehy9Ys2dxC0GtgVef5cnKggkDMmf2bq2poCCuVXopWPmqsc9VDT2iJUy+w=="],
 
     "picocolors": ["picocolors@1.1.1", "", {}, ""],
 

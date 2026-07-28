@@ -59,7 +59,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({ handle, depth, onFileOpen }) => {
       setIsExpanded(!isExpanded);
     } else {
       const fileHandle = handle as FileSystemFileHandle;
-      if (fileHandle.name.match(/\.(json|png|jpg|jpeg|gif|ase|gpl)$/i)) {
+      if (fileHandle.name.match(/\.(aseprite|ase|json|pxa|png|jpg|jpeg|gif|gpl)$/i)) {
           try {
              const file = await fileHandle.getFile();
              onFileOpen(file, fileHandle);

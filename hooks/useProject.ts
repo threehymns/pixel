@@ -3,6 +3,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { ProjectState, Frame, Layer, SavedPalette, PixelGrid, HistoryEntry, ToolType, RecentProject, FileSystemFileHandle, ProjectInstance, ColorMode, PixelValue } from '../types';
 import { INITIAL_STATE, DEFAULT_PALETTE, GAMEBOY_PALETTE, ENDESGA_64_PALETTE } from '../constants';
 import { parseASE, parseGPL, extractColorsFromPNG, fileToProjectState, renderFrameToCanvas, renderSpriteSheet, getCoords, getIndex, hexToRgb, rgbToHex, findNearestPaletteIndex, getSelectionBoundingBox } from '../utils';
+import { encodeAseprite } from '../utils/aseprite';
 
 // UI fields that should not be affected by Undo/Redo
 const UI_FIELDS: (keyof ProjectState)[] = [
@@ -313,18 +314,15 @@ export function useProject() {
     const isInIframe = window.self !== window.top;
 
     const performFallbackDownload = () => {
-      const jsonString = JSON.stringify(state, (key, value) => {
-        if (key === 'selection' && value instanceof Set) return Array.from(value);
-        if (key === 'selection' && value === null) return null;
-        if (key === 'fileHandle') return undefined;
-        return value;
-      }, 2);
-      
-      const blob = new Blob([jsonString], { type: 'application/json' });
+      const aseBytes = encodeAseprite(state);
+      const blob = new Blob([aseBytes.buffer], { type: 'image/x-aseprite' });
       const href = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = href;
-      link.download = `${(state.title || 'pixel-art').replace(/\s+/g, '_')}.json`;
+      const titleName = (state.title || 'pixel-art').replace(/\s+/g, '_');
+      link.download = titleName.toLowerCase().endsWith('.aseprite') || titleName.toLowerCase().endsWith('.ase')
+        ? titleName
+        : `${titleName}.aseprite`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -338,11 +336,11 @@ export function useProject() {
 
     try {
         const options = {
-            suggestedName: state.title,
+            suggestedName: state.title ? (state.title.endsWith('.aseprite') ? state.title : `${state.title}.aseprite`) : 'pixel-art.aseprite',
             types: [
                 {
-                    description: 'PixelForge Project (*.json)',
-                    accept: { 'application/json': ['.json'] }
+                    description: 'Aseprite File (*.aseprite, *.ase)',
+                    accept: { 'image/x-aseprite': ['.aseprite', '.ase'] }
                 },
                 {
                     description: 'PNG Image (*.png)',
@@ -369,14 +367,9 @@ export function useProject() {
              markSaved();
              addToRecents(newState);
         } else {
-             const jsonString = JSON.stringify(state, (key, value) => {
-                     if (key === 'selection' && value instanceof Set) return Array.from(value);
-                     if (key === 'selection' && value === null) return null;
-                     if (key === 'fileHandle') return undefined; 
-                     return value;
-             }, 2);
+             const aseBytes = encodeAseprite(state);
              const writable = await handle.createWritable();
-             await writable.write(jsonString);
+             await writable.write(aseBytes.buffer);
              await writable.close();
 
              const newState = { ...state, title: handle.name, fileHandle: handle };
@@ -419,15 +412,10 @@ export function useProject() {
            return;
         }
         
-        if (name.endsWith('.json')) {
-            const jsonString = JSON.stringify(state, (key, value) => {
-                if (key === 'selection' && value instanceof Set) return Array.from(value);
-                if (key === 'selection' && value === null) return null;
-                if (key === 'fileHandle') return undefined; 
-                return value;
-            }, 2);
+        if (name.endsWith('.aseprite') || name.endsWith('.ase') || name.endsWith('.json')) {
+            const aseBytes = encodeAseprite(state);
             const writable = await state.fileHandle.createWritable();
-            await writable.write(jsonString);
+            await writable.write(aseBytes.buffer);
             await writable.close();
             markSaved();
             alert(`Saved ${state.fileHandle.name}`);

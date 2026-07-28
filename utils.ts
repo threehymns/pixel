@@ -618,10 +618,19 @@ export const parseASE = async (buffer: ArrayBuffer): Promise<string[]> => {
   return colors;
 };
 
+import { parseAseprite } from './utils/aseprite';
+
 // --- Project & Palette Utilities ---
 
 export const fileToProjectState = async (file: File): Promise<ProjectState> => {
-  if (file.name.toLowerCase().endsWith('.json')) {
+  const fileNameLower = file.name.toLowerCase();
+
+  if (fileNameLower.endsWith('.aseprite') || fileNameLower.endsWith('.ase')) {
+    const buffer = await file.arrayBuffer();
+    return parseAseprite(buffer, file.name);
+  }
+
+  if (fileNameLower.endsWith('.json') || fileNameLower.endsWith('.pxa')) {
     const text = await file.text();
     const state = JSON.parse(text);
     if (state.selection && Array.isArray(state.selection)) {
