@@ -1,8 +1,8 @@
 
 import { useState, useCallback, useEffect } from 'react';
-import { ProjectState, Frame, Layer, SavedPalette, PixelGrid, HistoryEntry, ToolType, RecentProject, FileSystemFileHandle, ProjectInstance, ColorMode, PixelValue } from '../types';
+import { ProjectState, Frame, Layer, FrameTag, SavedPalette, PixelGrid, HistoryEntry, ToolType, RecentProject, FileSystemFileHandle, ProjectInstance, ColorMode, PixelValue, Slice } from '../types';
 import { INITIAL_STATE, DEFAULT_PALETTE, GAMEBOY_PALETTE, ENDESGA_64_PALETTE } from '../constants';
-import { parseASE, parseGPL, extractColorsFromPNG, fileToProjectState, renderFrameToCanvas, renderSpriteSheet, getCoords, getIndex, hexToRgb, rgbToHex, findNearestPaletteIndex, getSelectionBoundingBox } from '../utils';
+import { parseASE, parseGPL, extractColorsFromPNG, fileToProjectState, renderFrameToCanvas, renderSpriteSheet, getCoords, getIndex, hexToRgb, rgbToHex, findNearestPaletteIndex, getSelectionBoundingBox, getLayerParentMap, isDescendant, getGroupChildren } from '../utils';
 import { encodeAseprite } from '../utils/aseprite';
 
 // UI fields that should not be affected by Undo/Redo
@@ -813,13 +813,73 @@ export function useProject() {
     if (activeProjectId === 'home') return;
     const newId = `layer-${Date.now()}`;
     let n = 1; while (state.layers.some(l => l.name === `Layer ${n}`)) n++;
-    const newLayer: Layer = { id: newId, name: `Layer ${n}`, visible: true, locked: false, opacity: 100, blendMode: 'normal' };
+    const activeL = state.layers.find(l => l.id === state.activeLayerId);
+    
+    let childLevel = 0;
+    let parentId: string | null = null;
+    let insertIndex = -1;
+
+    const activeIdx = activeL ? state.layers.findIndex(l => l.id === activeL.id) : -1;
+
+    if (activeL) {
+      if (activeL.type === 'group') {
+        childLevel = (activeL.childLevel ?? 0) + 1;
+        parentId = activeL.id;
+        insertIndex = activeIdx;
+      } else {
+        childLevel = activeL.childLevel ?? 0;
+        parentId = activeL.parentId ?? null;
+        insertIndex = activeIdx + 1;
+      }
+    }
+
+    const newLayer: Layer = { id: newId, name: `Layer ${n}`, visible: true, locked: false, opacity: 100, blendMode: 'normal', childLevel, parentId };
+    const newFrames = state.frames.map(f => ({ ...f, layerData: { ...f.layerData, [newId]: new Array(state.width * state.height).fill(null) } }));
+    const newLayers = [...state.layers];
+    if (insertIndex >= 0 && insertIndex <= newLayers.length) {
+      newLayers.splice(insertIndex, 0, newLayer);
+    } else {
+      newLayers.push(newLayer);
+    }
+
+    if (activeL && activeL.type === 'group') {
+      const gIdx = newLayers.findIndex(l => l.id === activeL.id);
+      if (gIdx !== -1) {
+        newLayers[gIdx] = { ...newLayers[gIdx], collapsed: false };
+      }
+    }
+
+    updateState(
+        { ...state, layers: newLayers, frames: newFrames, activeLayerId: newId, selectedLayerIds: [newId] }, 
+        { action: 'Add Layer' }
+    );
+  }, [state, updateState, activeProjectId]);
+
+  const addGroupLayer = useCallback(() => {
+    if (activeProjectId === 'home') return;
+    const newId = `group-${Date.now()}`;
+    let n = 1; while (state.layers.some(l => l.name === `Group ${n}`)) n++;
+    const activeL = state.layers.find(l => l.id === state.activeLayerId);
+    const parentId = activeL ? (activeL.parentId ?? null) : null;
+    const childLevel = activeL ? (activeL.parentId ? (activeL.childLevel ?? 1) - 1 : 0) : 0;
+    const newLayer: Layer = { 
+      id: newId, 
+      name: `Group ${n}`, 
+      visible: true, 
+      locked: false, 
+      opacity: 100, 
+      blendMode: 'normal',
+      type: 'group',
+      childLevel,
+      parentId,
+      collapsed: false
+    };
     const newFrames = state.frames.map(f => ({ ...f, layerData: { ...f.layerData, [newId]: new Array(state.width * state.height).fill(null) } }));
     const newLayers = [...state.layers]; const idx = state.layers.findIndex(l => l.id === state.activeLayerId);
     if(idx!==-1) newLayers.splice(idx+1, 0, newLayer); else newLayers.push(newLayer);
     updateState(
         { ...state, layers: newLayers, frames: newFrames, activeLayerId: newId, selectedLayerIds: [newId] }, 
-        { action: 'Add Layer' }
+        { action: 'Add Group' }
     );
   }, [state, updateState, activeProjectId]);
 
@@ -933,19 +993,278 @@ export function useProject() {
       );
   }, [state, updateState, activeProjectId]);
 
-  const reorderLayers = useCallback((dId: string, tId: string, pos: 'before'|'after') => {
+  const groupSelectedLayers = useCallback(() => {
     if (activeProjectId === 'home') return;
-    const oI = state.layers.findIndex(l => l.id === dId);
-    const tI = state.layers.findIndex(l => l.id === tId);
-    if(oI===-1||tI===-1||oI===tI)return;
-    const nl = [...state.layers]; const [m] = nl.splice(oI, 1);
-    const adjTI = nl.findIndex(l => l.id === tId);
-    if(pos==='before') nl.splice(adjTI, 0, m); else nl.splice(adjTI+1, 0, m);
+    const selectedIds = state.selectedLayerIds.length > 0 ? state.selectedLayerIds : [state.activeLayerId];
+    if (selectedIds.length === 0) return;
+
+    const selectedLayers = state.layers.filter(l => selectedIds.includes(l.id));
+    if (selectedLayers.length === 0) return;
+
+    const indices = selectedLayers.map(l => state.layers.findIndex(layer => layer.id === l.id));
+    const highestIndex = Math.max(...indices);
+    const highestLayer = state.layers[highestIndex];
+
+    const groupId = `group-${Date.now()}`;
+    let n = 1; while (state.layers.some(l => l.name === `Group ${n}`)) n++;
+
+    const parentId = highestLayer.parentId ?? null;
+    const childLevel = highestLayer.childLevel ?? 0;
+
+    const groupLayer: Layer = {
+      id: groupId,
+      name: `Group ${n}`,
+      type: 'group',
+      visible: true,
+      locked: false,
+      opacity: 100,
+      blendMode: 'normal',
+      collapsed: false,
+      parentId,
+      childLevel
+    };
+
+    const nonSelectedLayers = state.layers.filter(l => !selectedIds.includes(l.id));
+    let insertIndex = 0;
+    const targetAfter = state.layers.slice(highestIndex + 1).find(l => !selectedIds.includes(l.id));
+    if (targetAfter) {
+      insertIndex = nonSelectedLayers.findIndex(l => l.id === targetAfter.id);
+    } else {
+      insertIndex = nonSelectedLayers.length;
+    }
+
+    const updatedChildren = selectedLayers.map(l => ({
+      ...l,
+      parentId: groupId,
+      childLevel: childLevel + 1
+    }));
+
+    const newLayers = [
+      ...nonSelectedLayers.slice(0, insertIndex),
+      ...updatedChildren,
+      groupLayer,
+      ...nonSelectedLayers.slice(insertIndex)
+    ];
+
+    const newFrames = state.frames.map(f => ({
+      ...f,
+      layerData: {
+        ...f.layerData,
+        [groupId]: new Array(state.width * state.height).fill(null)
+      }
+    }));
+
     updateState(
-        {...state, layers: nl}, 
-        { action: 'Reorder Layers' }
+      { ...state, layers: newLayers, frames: newFrames, activeLayerId: groupId, selectedLayerIds: [groupId] },
+      { action: `Grouped ${selectedLayers.length} Layer(s)` }
     );
-  }, [state, updateState, activeProjectId]);
+  }, [state, activeProjectId, updateState]);
+
+  const ungroupSelectedLayers = useCallback(() => {
+    if (activeProjectId === 'home') return;
+    const selectedIds = state.selectedLayerIds.length > 0 ? state.selectedLayerIds : [state.activeLayerId];
+    const groupLayersToUngroup = state.layers.filter(l => l.type === 'group' && selectedIds.includes(l.id));
+
+    if (groupLayersToUngroup.length === 0) return;
+
+    let newLayers = [...state.layers];
+    const groupIdsToRemove = groupLayersToUngroup.map(g => g.id);
+
+    groupLayersToUngroup.forEach(group => {
+      newLayers = newLayers.map(l => {
+        if (l.parentId === group.id) {
+          return {
+            ...l,
+            parentId: group.parentId ?? null,
+            childLevel: Math.max(0, (l.childLevel ?? 1) - 1)
+          };
+        }
+        return l;
+      });
+    });
+
+    newLayers = newLayers.filter(l => !groupIdsToRemove.includes(l.id));
+
+    const newFrames = state.frames.map(f => {
+      const newLayerData = { ...f.layerData };
+      groupIdsToRemove.forEach(gid => delete newLayerData[gid]);
+      return { ...f, layerData: newLayerData };
+    });
+
+    const activeLayerId = newLayers.length > 0 ? newLayers[0].id : '';
+
+    updateState(
+      { ...state, layers: newLayers, frames: newFrames, activeLayerId, selectedLayerIds: [activeLayerId] },
+      { action: `Ungrouped ${groupIdsToRemove.length} Group(s)` }
+    );
+  }, [state, activeProjectId, updateState]);
+
+  const addLayerToGroup = useCallback((groupId: string) => {
+    if (activeProjectId === 'home') return;
+    const group = state.layers.find(l => l.id === groupId);
+    if (!group) return;
+
+    const newId = `layer-${Date.now()}`;
+    let n = 1; while (state.layers.some(l => l.name === `Layer ${n}`)) n++;
+
+    const newLayer: Layer = {
+      id: newId,
+      name: `Layer ${n}`,
+      visible: true,
+      locked: false,
+      opacity: 100,
+      blendMode: 'normal',
+      childLevel: (group.childLevel ?? 0) + 1,
+      parentId: group.id
+    };
+
+    const groupIndex = state.layers.findIndex(l => l.id === groupId);
+    const newLayers = [...state.layers];
+    newLayers[groupIndex] = { ...newLayers[groupIndex], collapsed: false };
+    newLayers.splice(groupIndex, 0, newLayer);
+
+    const newFrames = state.frames.map(f => ({
+      ...f,
+      layerData: {
+        ...f.layerData,
+        [newId]: new Array(state.width * state.height).fill(null)
+      }
+    }));
+
+    updateState(
+      { ...state, layers: newLayers, frames: newFrames, activeLayerId: newId, selectedLayerIds: [newId] },
+      { action: `Added Layer to ${group.name}` }
+    );
+  }, [state, activeProjectId, updateState]);
+
+  const toggleCollapseAllGroups = useCallback((forceCollapse?: boolean) => {
+    if (activeProjectId === 'home') return;
+    const groupLayers = state.layers.filter(l => l.type === 'group');
+    if (groupLayers.length === 0) return;
+
+    const shouldCollapse = forceCollapse !== undefined 
+      ? forceCollapse 
+      : groupLayers.some(g => !g.collapsed);
+
+    const newLayers = state.layers.map(l => l.type === 'group' ? { ...l, collapsed: shouldCollapse } : l);
+
+    updateState(
+      { ...state, layers: newLayers },
+      { action: shouldCollapse ? 'Collapsed All Groups' : 'Expanded All Groups' }
+    );
+  }, [state, activeProjectId, updateState]);
+
+  const reorderLayers = useCallback((dId: string, tId: string, pos: 'before' | 'after' | 'inside' | 'outside' | 'root-bottom') => {
+    if (activeProjectId === 'home') return;
+
+    const draggedLayer = state.layers.find(l => l.id === dId);
+    if (!draggedLayer) return;
+
+    // Collect all descendant layers of dId to move them together as a group
+    const childLayers = getGroupChildren(dId, state.layers);
+    const memberIds = new Set([dId, ...childLayers.map(l => l.id)]);
+
+    const movedLayers = state.layers.filter(l => memberIds.has(l.id));
+    const remainingLayers = state.layers.filter(l => !memberIds.has(l.id));
+
+    const oldChildLevel = draggedLayer.childLevel ?? 0;
+    let newChildLevel = 0;
+    let newParentId: string | null = null;
+    let insertIndex = 0;
+
+    if (tId === 'root-bottom' || pos === 'root-bottom') {
+      newParentId = null;
+      newChildLevel = 0;
+      insertIndex = 0; // index 0 in array = bottom of UI list (bottommost layer)
+    } else {
+      if (dId === tId || isDescendant(tId, dId, state.layers)) return;
+
+      const targetLayer = state.layers.find(l => l.id === tId);
+      if (!targetLayer) return;
+
+      const targetIndexInRemaining = remainingLayers.findIndex(l => l.id === tId);
+      if (targetIndexInRemaining === -1) return;
+
+      if (pos === 'inside') {
+        if (targetLayer.type === 'group') {
+          newParentId = targetLayer.id;
+          newChildLevel = (targetLayer.childLevel ?? 0) + 1;
+          insertIndex = targetIndexInRemaining;
+        } else {
+          newParentId = targetLayer.parentId ?? null;
+          newChildLevel = targetLayer.childLevel ?? 0;
+          insertIndex = targetIndexInRemaining;
+        }
+      } else if (pos === 'outside') {
+        // Place outside the target layer's parent group
+        const parentOfTarget = state.layers.find(l => l.id === targetLayer.parentId);
+        newParentId = parentOfTarget ? (parentOfTarget.parentId ?? null) : null;
+        newChildLevel = parentOfTarget ? (parentOfTarget.childLevel ?? 0) : 0;
+        insertIndex = targetIndexInRemaining;
+      } else if (pos === 'before') {
+        // 'before' in UI order = ABOVE targetLayer in UI list = HIGHER array index
+        newParentId = targetLayer.parentId ?? null;
+        newChildLevel = targetLayer.childLevel ?? 0;
+        insertIndex = targetIndexInRemaining + 1;
+      } else { // pos === 'after'
+        // 'after' in UI order = BELOW targetLayer in UI list
+        if (targetLayer.type === 'group') {
+          // Place below the group AND all its descendants at the group's parent level
+          newParentId = targetLayer.parentId ?? null;
+          newChildLevel = targetLayer.childLevel ?? 0;
+
+          const targetDescendantIds = new Set([targetLayer.id, ...getGroupChildren(targetLayer.id, remainingLayers).map(l => l.id)]);
+          let minDescendantIdx = targetIndexInRemaining;
+          remainingLayers.forEach((l, idx) => {
+            if (targetDescendantIds.has(l.id) && idx < minDescendantIdx) {
+              minDescendantIdx = idx;
+            }
+          });
+          insertIndex = minDescendantIdx;
+        } else {
+          newParentId = targetLayer.parentId ?? null;
+          newChildLevel = targetLayer.childLevel ?? 0;
+          insertIndex = targetIndexInRemaining;
+        }
+      }
+    }
+
+    const deltaLevel = newChildLevel - oldChildLevel;
+
+    // Update childLevel and parentId for the root dragged layer and its descendants
+    const updatedMovedLayers = movedLayers.map(l => {
+      if (l.id === dId) {
+        return {
+          ...l,
+          parentId: newParentId,
+          childLevel: newChildLevel
+        };
+      } else {
+        return {
+          ...l,
+          childLevel: Math.max(0, (l.childLevel ?? 0) + deltaLevel)
+        };
+      }
+    });
+
+    const newLayers = [
+      ...remainingLayers.slice(0, insertIndex),
+      ...updatedMovedLayers,
+      ...remainingLayers.slice(insertIndex)
+    ];
+
+    if (pos === 'inside' && tId !== 'root-bottom') {
+      const gIdx = newLayers.findIndex(l => l.id === tId);
+      if (gIdx !== -1 && newLayers[gIdx].type === 'group') {
+        newLayers[gIdx] = { ...newLayers[gIdx], collapsed: false };
+      }
+    }
+
+    updateState(
+      { ...state, layers: newLayers },
+      { action: `Reordered ${draggedLayer.name}` }
+    );
+  }, [state, activeProjectId, updateState]);
 
   const reorderFrames = useCallback((from: number, to: number) => {
     if (activeProjectId === 'home') return;
@@ -1346,6 +1665,65 @@ export function useProject() {
      link.click();
   }, [state, activeProjectId]);
 
+  const setFrameDuration = useCallback((frameIndex: number, duration: number) => {
+    if (activeProjectId === 'home') return;
+    const newFrames = state.frames.map((f, i) => i === frameIndex ? { ...f, duration } : f);
+    updateState({ ...state, frames: newFrames }, { action: `Set Frame Duration (${duration}ms)` });
+  }, [state, activeProjectId, updateState]);
+
+  const addTag = useCallback((name: string, from: number, to: number, color?: string) => {
+    if (activeProjectId === 'home') return;
+    const newTag: FrameTag = {
+      id: `tag-${Date.now()}`,
+      name,
+      from,
+      to,
+      color: color || '#3b82f6',
+      direction: 'forward'
+    };
+    const newTags = [...(state.tags || []), newTag];
+    updateState({ ...state, tags: newTags }, { action: `Add Tag: ${name}` });
+  }, [state, activeProjectId, updateState]);
+
+  const saveTag = useCallback((tag: FrameTag) => {
+    if (activeProjectId === 'home') return;
+    const existingTags = state.tags || [];
+    const exists = existingTags.some(t => t.id === tag.id);
+    const newTags = exists
+      ? existingTags.map(t => t.id === tag.id ? tag : t)
+      : [...existingTags, tag];
+    updateState({ ...state, tags: newTags }, { action: `Save Tag: ${tag.name}` });
+  }, [state, activeProjectId, updateState]);
+
+  const deleteTag = useCallback((tagId: string) => {
+    if (activeProjectId === 'home') return;
+    const newTags = (state.tags || []).filter(t => t.id !== tagId);
+    updateState({ ...state, tags: newTags }, { action: 'Delete Tag' });
+  }, [state, activeProjectId, updateState]);
+
+  const updateSpriteProperties = useCallback((props: {
+    title?: string;
+    pixelRatio?: { width: number; height: number };
+    transparentIndex?: number;
+    colorMode?: ColorMode;
+    grid?: { x: number; y: number; width: number; height: number };
+  }) => {
+    if (activeProjectId === 'home') return;
+    updateState({
+      ...state,
+      title: props.title ?? state.title,
+      pixelRatio: props.pixelRatio ?? state.pixelRatio,
+      transparentIndex: props.transparentIndex ?? state.transparentIndex,
+      colorMode: props.colorMode ?? state.colorMode,
+      grid: props.grid ?? state.grid,
+    }, { action: 'Update Sprite Properties' });
+  }, [state, activeProjectId, updateState]);
+
+  const updateSlices = useCallback((slices: Slice[]) => {
+    if (activeProjectId === 'home') return;
+    updateState({ ...state, slices }, { action: 'Update Slices' });
+  }, [state, activeProjectId, updateState]);
+
   return {
     state,
     projects,
@@ -1374,7 +1752,18 @@ export function useProject() {
     deleteSelectedFrames,
     insertFrame,
     tweenFrames,
+    setFrameDuration,
+    addTag,
+    saveTag,
+    deleteTag,
+    updateSpriteProperties,
+    updateSlices,
     addLayer,
+    addGroupLayer,
+    groupSelectedLayers,
+    ungroupSelectedLayers,
+    addLayerToGroup,
+    toggleCollapseAllGroups,
     deleteLayer,
     deleteSelectedLayers,
     duplicateLayer,

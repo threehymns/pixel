@@ -319,6 +319,163 @@ export const hexToRgb = (hex: string): [number, number, number] => {
   return rgb;
 };
 
+export function getLayerParentMap(layers: Layer[]): Map<string, Layer> {
+  const parentMap = new Map<string, Layer>();
+
+  // First pass: explicit parentId
+  for (const layer of layers) {
+    if (layer.parentId && layer.parentId !== layer.id) {
+      const explicitParent = layers.find(l => l.id === layer.parentId);
+      if (explicitParent) {
+        parentMap.set(layer.id, explicitParent);
+      }
+    }
+  }
+
+  // Second pass: implicit hierarchy based on UI order for legacy layers without explicit parentId field
+  const uiOrder = layers.slice().reverse();
+  const groupStack: { layer: Layer; level: number }[] = [];
+
+  for (const layer of uiOrder) {
+    if (layer.parentId !== undefined) {
+      if (layer.type === 'group') {
+        const level = layer.childLevel ?? 0;
+        while (groupStack.length > 0 && groupStack[groupStack.length - 1].level >= level) {
+          groupStack.pop();
+        }
+        groupStack.push({ layer, level });
+      }
+      continue;
+    }
+
+    if (parentMap.has(layer.id)) continue;
+
+    const level = layer.childLevel ?? 0;
+    while (groupStack.length > 0 && groupStack[groupStack.length - 1].level >= level) {
+      groupStack.pop();
+    }
+    if (groupStack.length > 0 && level > groupStack[groupStack.length - 1].level) {
+      const parent = groupStack[groupStack.length - 1].layer;
+      if (parent.id !== layer.id) {
+        parentMap.set(layer.id, parent);
+      }
+    }
+    if (layer.type === 'group') {
+      groupStack.push({ layer, level });
+    }
+  }
+
+  // Third pass: Cycle detection and breaking
+  for (const layer of layers) {
+    const visited = new Set<string>();
+    let curr: Layer | undefined = layer;
+    while (curr) {
+      if (visited.has(curr.id)) {
+        parentMap.delete(curr.id);
+        break;
+      }
+      visited.add(curr.id);
+      curr = parentMap.get(curr.id);
+    }
+  }
+
+  return parentMap;
+}
+
+export function isDescendant(layerId: string, possibleAncestorId: string, layers: Layer[]): boolean {
+  if (!layerId || !possibleAncestorId || layerId === possibleAncestorId) return false;
+  const parentMap = getLayerParentMap(layers);
+  let current: Layer | undefined = layers.find(l => l.id === layerId);
+  const visited = new Set<string>();
+
+  while (current) {
+    if (visited.has(current.id)) break;
+    visited.add(current.id);
+    const parent = parentMap.get(current.id) || (current.parentId ? layers.find(l => l.id === current?.parentId) : undefined);
+    if (parent) {
+      if (parent.id === possibleAncestorId) return true;
+      current = parent;
+    } else {
+      break;
+    }
+  }
+
+  return false;
+}
+
+export function getGroupChildren(groupId: string, layers: Layer[]): Layer[] {
+  const children: Layer[] = [];
+  const parentMap = getLayerParentMap(layers);
+
+  for (const layer of layers) {
+    if (layer.id === groupId) continue;
+    let curr: Layer | undefined = layer;
+    const visited = new Set<string>();
+    while (curr) {
+      if (visited.has(curr.id)) break;
+      visited.add(curr.id);
+      const parent = parentMap.get(curr.id) || (curr.parentId ? layers.find(l => l.id === curr?.parentId) : undefined);
+      if (parent?.id === groupId) {
+        children.push(layer);
+        break;
+      }
+      curr = parent;
+    }
+  }
+
+  return children;
+}
+
+export function getGroupChildCount(groupId: string, layers: Layer[]): number {
+  return getGroupChildren(groupId, layers).filter(l => l.type !== 'group').length;
+}
+
+export function isLayerVisible(layer: Layer, layers: Layer[], parentMap?: Map<string, Layer>): boolean {
+  if (!layer.visible) return false;
+
+  const map = parentMap || getLayerParentMap(layers);
+  let current: Layer | undefined = layer;
+  const visited = new Set<string>();
+
+  while (current) {
+    if (visited.has(current.id)) break;
+    visited.add(current.id);
+    const parent = map.get(current.id) || (current.parentId ? layers.find(l => l.id === current?.parentId) : undefined);
+    if (parent) {
+      if (!parent.visible) return false;
+      current = parent;
+    } else {
+      break;
+    }
+  }
+
+  return true;
+}
+
+export function getEffectiveLayerOpacity(layer: Layer, layers: Layer[], parentMap?: Map<string, Layer>): number {
+  if (!layer.visible) return 0;
+
+  const map = parentMap || getLayerParentMap(layers);
+  let current: Layer | undefined = layer;
+  let opacityMult = (layer.opacity ?? 100) / 100;
+  const visited = new Set<string>();
+
+  while (current) {
+    if (visited.has(current.id)) break;
+    visited.add(current.id);
+    const parent = map.get(current.id) || (current.parentId ? layers.find(l => l.id === current?.parentId) : undefined);
+    if (parent) {
+      if (!parent.visible) return 0;
+      opacityMult *= (parent.opacity ?? 100) / 100;
+      current = parent;
+    } else {
+      break;
+    }
+  }
+
+  return Math.round(opacityMult * 100);
+}
+
 export const renderFrameToCanvas = (state: ProjectState, frameIndex: number): HTMLCanvasElement => {
     const canvas = document.createElement('canvas');
     canvas.width = state.width;
@@ -344,12 +501,16 @@ export const renderFrameToCanvas = (state: ProjectState, frameIndex: number): HT
     const layerImgData = layerCtx.createImageData(state.width, state.height);
     const data32 = new Uint32Array(layerImgData.data.buffer);
 
+    const parentMap = getLayerParentMap(state.layers);
+
     state.layers.forEach(l => {
-        if (!l.visible || l.opacity <= 0) return;
+        if (l.type === 'group') return;
+        if (!isLayerVisible(l, state.layers, parentMap)) return;
         const px = frame.layerData[l.id];
         if (!px) return;
 
-        const alpha = Math.round(l.opacity * 2.55);
+        const effectiveOpacity = getEffectiveLayerOpacity(l, state.layers, parentMap);
+        const alpha = Math.round((effectiveOpacity / 100) * 255);
         if (alpha <= 0) return;
 
         data32.fill(0);
@@ -381,7 +542,10 @@ export const renderFrameToCanvas = (state: ProjectState, frameIndex: number): HT
         }
 
         layerCtx.putImageData(layerImgData, 0, 0);
-        ctx.globalCompositeOperation = l.blendMode === 'normal' ? 'source-over' : l.blendMode;
+        const compositeOp: GlobalCompositeOperation = l.blendMode === 'normal' 
+          ? 'source-over' 
+          : (l.blendMode === 'addition' ? 'lighter' : (l.blendMode === 'subtract' || l.blendMode === 'divide' ? 'source-over' : l.blendMode as GlobalCompositeOperation));
+        ctx.globalCompositeOperation = compositeOp;
         ctx.drawImage(layerCanvas, 0, 0);
         ctx.globalCompositeOperation = 'source-over';
     });

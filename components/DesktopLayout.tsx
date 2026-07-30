@@ -49,6 +49,10 @@ interface DesktopLayoutProps {
   onScalePixels: (selection: Set<number>, srcBox: any, destBox: any) => void;
   selectionSize: any;
   layout: any;
+  activeTagPopover?: any;
+  onCloseTagPopover?: () => void;
+  layerPropertiesState?: { isOpen: boolean; layer: any };
+  onCloseLayerProperties?: () => void;
 }
 
 const FloatingWindow: React.FC<{
@@ -166,7 +170,11 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
   setDragStartPos,
   onScalePixels,
   selectionSize,
-  layout
+  layout,
+  activeTagPopover,
+  onCloseTagPopover,
+  layerPropertiesState,
+  onCloseLayerProperties
 }) => {
   const [showPreview, setShowPreview] = useState(true);
   const [lastSelectionTool, setLastSelectionTool] = useState<ToolType>('rect-select');
@@ -258,11 +266,19 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
               onSelectLayers={(ids, active) => updateState({...state, selectedLayerIds: ids, activeLayerId: active})}
               onUpdateLayer={project.updateLayer} 
               onAddLayer={project.addLayer} 
+              onAddGroupLayer={project.addGroupLayer}
+              onGroupSelectedLayers={project.groupSelectedLayers}
+              onUngroupSelectedLayers={project.ungroupSelectedLayers}
+              onAddLayerToGroup={project.addLayerToGroup}
+              onToggleCollapseAllGroups={project.toggleCollapseAllGroups}
               onDuplicateLayer={project.duplicateLayer}
               onDeleteLayer={project.deleteLayer} 
               onDuplicateSelectedLayers={project.duplicateSelectedLayers}
               onDeleteSelectedLayers={project.deleteSelectedLayers} 
               onReorderLayers={project.reorderLayers}
+              onOpenLayerProperties={project.openLayerPropertiesDialog}
+              layerPropertiesState={layerPropertiesState}
+              onCloseLayerProperties={onCloseLayerProperties}
               className="flex-1 w-full h-full"
           />
         );
@@ -298,8 +314,17 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
             onDeleteSelectedFrames={project.deleteSelectedFrames}
             onInsertFrame={project.insertFrame}
             onTweenFrames={project.tweenFrames} 
+            onSetFrameDuration={project.setFrameDuration}
+            onAddTag={project.addTag}
+            onSaveTag={project.saveTag}
+            onDeleteTag={project.deleteTag}
+            onOpenTagProperties={project.openTagPropertiesDialog}
+            activeTagPopover={activeTagPopover}
+            onCloseTagPopover={onCloseTagPopover}
             onSelectLayer={(id) => updateState({...state, activeLayerId: id, selectedLayerIds: [id]})}
             onAddLayer={project.addLayer} 
+            onAddGroupLayer={project.addGroupLayer}
+            onUpdateLayer={project.updateLayer}
             onToggleLayerVisibility={(id) => updateState({...state, layers: state.layers.map(l => l.id===id?{...l, visible:!l.visible}:l)})}
             onToggleLayerLock={(id) => updateState({...state, layers: state.layers.map(l => l.id===id?{...l, locked:!l.locked}:l)})}
             onReorderLayers={project.reorderLayers} 

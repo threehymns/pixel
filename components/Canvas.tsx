@@ -4,7 +4,8 @@ import { ProjectState, Position, Modifiers, PixelGrid, PixelValue } from '../typ
 import { 
   getIndex, getCoords,
   getRectSelection, getEllipseSelection, getPolygonSelection, getWandSelection,
-  hexToRgb, getSelectionBoundingBox, rotateSelectionPixels, scaleSelectionPixels
+  hexToRgb, getSelectionBoundingBox, rotateSelectionPixels, scaleSelectionPixels,
+  getLayerParentMap, isLayerVisible, getEffectiveLayerOpacity
 } from '../utils';
 
 const CURSOR_SVG = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M10 2H14V8H10V2ZM10 16H14V22H10V16ZM2 10H8V14H2V10ZM16 10H22V14H16V10ZM10 10H14V14H10V10Z" fill="white"/></svg>`;
@@ -633,11 +634,14 @@ export const Canvas: React.FC<CanvasProps> = ({
       const paletteUint32 = new Uint32Array(state.palette.length);
       const hexCache = new Map<string, number>();
 
+      const parentMap = getLayerParentMap(state.layers);
       state.layers.forEach(layer => {
-        if (!layer.visible || layer.opacity <= 0) return;
+        if (layer.type === 'group') return;
+        if (!isLayerVisible(layer, state.layers, parentMap)) return;
         const pixels = prevFrame.layerData[layer.id];
         if (!pixels) return;
-        const alpha = Math.round((layer.opacity / 100) * 80);
+        const effOpacity = getEffectiveLayerOpacity(layer, state.layers, parentMap);
+        const alpha = Math.round((effOpacity / 100) * 80);
         if (alpha <= 0) return;
 
         for (let p = 0; p < state.palette.length; p++) {
@@ -674,9 +678,11 @@ export const Canvas: React.FC<CanvasProps> = ({
     const currentFrame = state.frames[state.activeFrameIndex];
     const paletteUint32 = new Uint32Array(state.palette.length);
     const hexCache = new Map<string, number>();
+    const parentMap = getLayerParentMap(state.layers);
 
     state.layers.forEach((layer) => {
-      if (!layer.visible || layer.opacity <= 0) return;
+      if (layer.type === 'group') return;
+      if (!isLayerVisible(layer, state.layers, parentMap)) return;
       const layerPixels = currentFrame.layerData[layer.id];
       if (!layerPixels) return;
       
@@ -685,7 +691,8 @@ export const Canvas: React.FC<CanvasProps> = ({
       
       const layerImgData = getReusedImageData(layerImageDataRef);
       const layerData32 = new Uint32Array(layerImgData.data.buffer);
-      const alpha = Math.round(layer.opacity * 2.55);
+      const effOpacity = getEffectiveLayerOpacity(layer, state.layers, parentMap);
+      const alpha = Math.round((effOpacity / 100) * 255);
       if (alpha <= 0) return;
 
       for (let p = 0; p < state.palette.length; p++) {

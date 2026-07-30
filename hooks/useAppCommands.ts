@@ -1,6 +1,6 @@
 
 import { useMemo, useRef } from 'react';
-import { Command, ProjectState, ToolType, ColorMode } from '../types';
+import { Command, ProjectState, ToolType, ColorMode, FrameTag, Layer } from '../types';
 
 interface UseAppCommandsProps {
     state: ProjectState;
@@ -11,6 +11,10 @@ interface UseAppCommandsProps {
         canUndo: boolean;
         canRedo: boolean;
         addLayer: () => void;
+        addGroupLayer?: () => void;
+        groupSelectedLayers?: () => void;
+        ungroupSelectedLayers?: () => void;
+        toggleCollapseAllGroups?: () => void;
         addFrame: () => void;
         duplicateFrame: () => void;
         tweenFrames: () => void;
@@ -26,6 +30,10 @@ interface UseAppCommandsProps {
         setColorMode: (mode: ColorMode) => void;
         openResizeDialog: () => void;
         openReferenceImageDialog: () => void;
+        openSpritePropertiesDialog?: () => void;
+        openSlicesDialog?: () => void;
+        openTagPropertiesDialog?: (tag?: FrameTag) => void;
+        openLayerPropertiesDialog?: (layer?: Layer) => void;
         flipPixels: (axis: 'h' | 'v') => void;
         clearSelection: () => void;
         cropCanvas: () => void;
@@ -194,6 +202,22 @@ export function useAppCommands({
             perform: projectActions.addLayer 
         },
         { 
+            id: 'layer.newGroup', label: 'New Layer Group', category: 'Layer',
+            perform: () => projectActions.addGroupLayer && projectActions.addGroupLayer() 
+        },
+        { 
+            id: 'layer.groupSelected', label: 'Group Selected Layers', category: 'Layer', hotkey: 'Ctrl+G', keys: ['Control+g', 'Meta+g'],
+            perform: () => projectActions.groupSelectedLayers && projectActions.groupSelectedLayers() 
+        },
+        { 
+            id: 'layer.ungroupSelected', label: 'Ungroup Layers', category: 'Layer', hotkey: 'Ctrl+Shift+G', keys: ['Control+Shift+G', 'Meta+Shift+G'],
+            perform: () => projectActions.ungroupSelectedLayers && projectActions.ungroupSelectedLayers() 
+        },
+        { 
+            id: 'layer.toggleCollapseAll', label: 'Collapse / Expand All Groups', category: 'Layer',
+            perform: () => projectActions.toggleCollapseAllGroups && projectActions.toggleCollapseAllGroups() 
+        },
+        { 
             id: 'layer.centerContent', label: 'Center Content', category: 'Layer',
             perform: () => projectActions.centerContent()
         },
@@ -231,6 +255,22 @@ export function useAppCommands({
         {
             id: 'sprite.resize', label: 'Canvas Size...', category: 'Sprite', hotkey: 'Alt+C', keys: ['Alt+c'],
             perform: projectActions.openResizeDialog
+        },
+        {
+            id: 'sprite.properties', label: 'Sprite Properties...', category: 'Sprite',
+            perform: () => projectActions.openSpritePropertiesDialog && projectActions.openSpritePropertiesDialog()
+        },
+        {
+            id: 'sprite.slices', label: 'Slice Manager...', category: 'Sprite',
+            perform: () => projectActions.openSlicesDialog && projectActions.openSlicesDialog()
+        },
+        {
+            id: 'sprite.newTag', label: 'New Animation Tag...', category: 'Sprite',
+            perform: () => projectActions.openTagPropertiesDialog && projectActions.openTagPropertiesDialog()
+        },
+        {
+            id: 'layer.properties', label: 'Layer Properties...', category: 'Layer',
+            perform: () => projectActions.openLayerPropertiesDialog && projectActions.openLayerPropertiesDialog()
         },
         {
             id: 'sprite.crop', label: 'Crop to Selection', category: 'Sprite',

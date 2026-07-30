@@ -237,6 +237,7 @@ export const generateGifBlob = async (options: ExportGifOptions): Promise<Blob> 
 
   for (let f = 0; f < targetFrames.length; f++) {
     const frameIdx = targetFrames[f];
+    const frame = state.frames[frameIdx];
     const rawCanvas = renderFrameToCanvas(state, frameIdx);
 
     const scaledCanvas = document.createElement('canvas');
@@ -262,8 +263,12 @@ export const generateGifBlob = async (options: ExportGifOptions): Promise<Blob> 
       transparent && (!backgroundColor || backgroundColor === 'transparent')
     );
 
+    const frameDelayCentiseconds = frame?.duration 
+      ? Math.max(1, Math.round(frame.duration / 10)) 
+      : delayCentiseconds;
+
     writer.addFrame(0, 0, width, height, indexedPixels as unknown as number[], {
-      delay: delayCentiseconds,
+      delay: frameDelayCentiseconds,
       palette,
       transparent: transparentIndex >= 0 ? transparentIndex : undefined,
       disposal: 2

@@ -21,6 +21,7 @@ import {
   Settings, Waves, ChevronUp, ChevronDown, Wand2,
   Sparkles, ArrowRightLeft, Palette as PaletteIcon, RefreshCcw
 } from './Icons';
+import { Crop, Tag, Maximize2 } from 'lucide-react';
 import { SELECTION_TOOLS } from '../constants';
 import { CustomSlider } from './ui/slider';
 
@@ -39,6 +40,10 @@ interface MobileLayoutProps {
   setMousePos: (pos: Position | null) => void;
   setDragStartPos: (pos: Position | null) => void;
   onScalePixels: (selection: Set<number>, srcBox: any, QUEEN_BOX: any) => void;
+  activeTagPopover?: any;
+  onCloseTagPopover?: () => void;
+  layerPropertiesState?: { isOpen: boolean; layer: any };
+  onCloseLayerProperties?: () => void;
 }
 
 export const MobileLayout: React.FC<MobileLayoutProps> = ({
@@ -52,6 +57,10 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
   statusMessage,
   setMousePos,
   setDragStartPos,
+  activeTagPopover,
+  onCloseTagPopover,
+  layerPropertiesState,
+  onCloseLayerProperties,
   onScalePixels
 }) => {
   const [activePanel, setActivePanel] = useState<'palette' | 'layers' | 'timeline' | 'menu' | 'preview' | 'settings' | null>(null);
@@ -562,11 +571,19 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                                 onSelectLayers={(ids, active) => updateState({...state, selectedLayerIds: ids, activeLayerId: active})}
                                 onUpdateLayer={project.updateLayer} 
                                 onAddLayer={project.addLayer} 
+                                onAddGroupLayer={project.addGroupLayer}
+                                onGroupSelectedLayers={project.groupSelectedLayers}
+                                onUngroupSelectedLayers={project.ungroupSelectedLayers}
+                                onAddLayerToGroup={project.addLayerToGroup}
+                                onToggleCollapseAllGroups={project.toggleCollapseAllGroups}
                                 onDuplicateLayer={project.duplicateLayer} 
                                 onDeleteLayer={project.deleteLayer} 
                                 onDuplicateSelectedLayers={project.duplicateSelectedLayers} 
                                 onDeleteSelectedLayers={project.deleteSelectedLayers} 
                                 onReorderLayers={project.reorderLayers} 
+                                onOpenLayerProperties={project.openLayerPropertiesDialog}
+                                layerPropertiesState={layerPropertiesState}
+                                onCloseLayerProperties={onCloseLayerProperties}
                               />
                           </div>
                       )}
@@ -593,8 +610,17 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                                 onDeleteSelectedFrames={project.deleteSelectedFrames} 
                                 onInsertFrame={project.insertFrame}
                                 onTweenFrames={project.tweenFrames}
+                                onSetFrameDuration={project.setFrameDuration}
+                                onAddTag={project.addTag}
+                                onSaveTag={project.saveTag}
+                                onDeleteTag={project.deleteTag}
+                                onOpenTagProperties={project.openTagPropertiesDialog}
+                                activeTagPopover={activeTagPopover}
+                                onCloseTagPopover={onCloseTagPopover}
                                 onSelectLayer={(id) => updateState({...state, activeLayerId: id, selectedLayerIds: [id]})} 
                                 onAddLayer={project.addLayer} 
+                                onAddGroupLayer={project.addGroupLayer}
+                                onUpdateLayer={project.updateLayer}
                                 onToggleLayerVisibility={(id) => updateState({...state, layers: state.layers.map(l => l.id===id?{...l, visible:!l.visible}:l)})} 
                                 onToggleLayerLock={(id) => updateState({...state, layers: state.layers.map(l => l.id===id?{...l, locked:!l.locked}:l)})} 
                                 onReorderLayers={project.reorderLayers} 
@@ -608,31 +634,60 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                         </div> 
                       )}
                       {activePanel === 'menu' && (
-                          <div className="p-4 flex flex-col gap-6">
-                             <div className="grid grid-cols-2 gap-2">
-                                <button onClick={() => { project.createProject(); closePanel(); }} className="flex items-center gap-3 p-3 rounded-xl bg-secondary/5 border border-border/40 active:bg-secondary/20 text-left transition-colors">
-                                    <Plus size={20} className="text-muted-foreground/60" />
-                                    <span className="text-xs font-medium">New Canvas</span>
-                                </button>
-                                <button onClick={() => { fileInputRef.current?.click(); closePanel(); }} className="flex items-center gap-3 p-3 rounded-xl bg-secondary/5 border border-border/40 active:bg-secondary/20 text-left transition-colors">
-                                    <Hand size={20} className="text-muted-foreground/60" />
-                                    <span className="text-xs font-medium">Open Local</span>
-                                </button>
-                                <button onClick={() => { project.saveProject(); closePanel(); }} className="flex items-center gap-3 p-3 rounded-xl bg-secondary/5 border border-border/40 active:bg-secondary/20 text-left transition-colors">
-                                    <Check size={20} className="text-muted-foreground/60" />
-                                    <span className="text-xs font-medium">Save Pixel</span>
-                                </button>
-                                <button onClick={() => { if (project.openExportDialog) { project.openExportDialog('gif'); } else { project.downloadImage(); } closePanel(); }} className="flex items-center gap-3 p-3 rounded-xl bg-primary text-primary-foreground shadow-sm active:opacity-90 text-left">
-                                    <Share size={20} />
-                                    <span className="text-xs font-medium">Export PNG / GIF</span>
-                                </button>
+                          <div className="p-4 flex flex-col gap-5">
+                             <div className="flex flex-col gap-2">
+                                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest px-1">Canvas & File</span>
+                                <div className="grid grid-cols-2 gap-2">
+                                   <button onClick={() => { project.createProject(); closePanel(); }} className="flex items-center gap-2.5 p-2.5 rounded-xl bg-secondary/5 border border-border/40 active:bg-secondary/20 text-left transition-colors">
+                                       <Plus size={18} className="text-muted-foreground/60" />
+                                       <span className="text-xs font-medium">New Canvas</span>
+                                   </button>
+                                   <button onClick={() => { fileInputRef.current?.click(); closePanel(); }} className="flex items-center gap-2.5 p-2.5 rounded-xl bg-secondary/5 border border-border/40 active:bg-secondary/20 text-left transition-colors">
+                                       <Hand size={18} className="text-muted-foreground/60" />
+                                       <span className="text-xs font-medium">Open Local</span>
+                                   </button>
+                                   <button onClick={() => { project.saveProject(); closePanel(); }} className="flex items-center gap-2.5 p-2.5 rounded-xl bg-secondary/5 border border-border/40 active:bg-secondary/20 text-left transition-colors">
+                                       <Check size={18} className="text-muted-foreground/60" />
+                                       <span className="text-xs font-medium">Save Project</span>
+                                   </button>
+                                   <button onClick={() => { if (project.openExportDialog) { project.openExportDialog('gif'); } else { project.downloadImage(); } closePanel(); }} className="flex items-center gap-2.5 p-2.5 rounded-xl bg-primary text-primary-foreground shadow-sm active:opacity-90 text-left">
+                                       <Share size={18} />
+                                       <span className="text-xs font-medium">Export PNG / GIF</span>
+                                   </button>
+                                </div>
+                             </div>
+
+                             <div className="flex flex-col gap-2">
+                                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest px-1">Sprite & Properties</span>
+                                <div className="grid grid-cols-2 gap-2">
+                                   <button onClick={() => { if (project.openSpritePropertiesDialog) project.openSpritePropertiesDialog(); closePanel(); }} className="flex items-center gap-2.5 p-2.5 rounded-xl bg-secondary/5 border border-border/40 active:bg-secondary/20 text-left transition-colors">
+                                       <Settings size={18} className="text-primary" />
+                                       <span className="text-xs font-medium">Sprite Properties</span>
+                                   </button>
+                                   <button onClick={() => { if (project.openSlicesDialog) project.openSlicesDialog(); closePanel(); }} className="flex items-center gap-2.5 p-2.5 rounded-xl bg-secondary/5 border border-border/40 active:bg-secondary/20 text-left transition-colors">
+                                       <Crop size={18} className="text-primary" />
+                                       <span className="text-xs font-medium">Slice Manager</span>
+                                   </button>
+                                   <button onClick={() => { if (project.openResizeDialog) project.openResizeDialog(); closePanel(); }} className="flex items-center gap-2.5 p-2.5 rounded-xl bg-secondary/5 border border-border/40 active:bg-secondary/20 text-left transition-colors">
+                                       <Maximize2 size={18} className="text-muted-foreground" />
+                                       <span className="text-xs font-medium">Resize Canvas</span>
+                                   </button>
+                                   <button onClick={() => { if (project.openLayerPropertiesDialog) project.openLayerPropertiesDialog(); closePanel(); }} className="flex items-center gap-2.5 p-2.5 rounded-xl bg-secondary/5 border border-border/40 active:bg-secondary/20 text-left transition-colors">
+                                       <Layers size={18} className="text-muted-foreground" />
+                                       <span className="text-xs font-medium">Layer Properties</span>
+                                   </button>
+                                   <button onClick={() => { if (project.openTagPropertiesDialog) project.openTagPropertiesDialog(); closePanel(); }} className="flex items-center gap-2.5 p-2.5 rounded-xl bg-secondary/5 border border-border/40 active:bg-secondary/20 text-left transition-colors col-span-2">
+                                       <Tag size={18} className="text-primary" />
+                                       <span className="text-xs font-medium">New Animation Tag...</span>
+                                   </button>
+                                </div>
                              </div>
                              
-                             <div className="flex flex-col gap-3">
+                             <div className="flex flex-col gap-2">
                                 <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest px-1">Recent Works</div>
                                 <div className="flex flex-col gap-1">
                                     {project.recentProjects.length === 0 ? ( 
-                                        <div className="p-8 border border-dashed border-border rounded-xl text-center text-muted-foreground/40 text-xs">
+                                        <div className="p-6 border border-dashed border-border rounded-xl text-center text-muted-foreground/40 text-xs">
                                             No recent projects
                                         </div> 
                                     ) : (
@@ -640,10 +695,10 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                                             <button 
                                               key={p.id} 
                                               onClick={() => { project.loadRecentProject(p); closePanel(); }} 
-                                              className="w-full p-3 text-left rounded-xl hover:bg-secondary/10 active:bg-secondary/20 transition-colors flex items-center justify-between group border border-border/40"
+                                              className="w-full p-2.5 text-left rounded-xl hover:bg-secondary/10 active:bg-secondary/20 transition-colors flex items-center justify-between group border border-border/40"
                                             >
                                                 <div className="flex flex-col gap-0.5">
-                                                    <div className="text-sm font-medium">{p.title}</div>
+                                                    <div className="text-xs font-medium">{p.title}</div>
                                                     <div className="text-[10px] text-muted-foreground/60 font-mono">
                                                       {p.width}x{p.height} • {new Date(p.timestamp).toLocaleDateString()}
                                                     </div>

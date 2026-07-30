@@ -1,50 +1,13 @@
-import { deflate, inflate } from 'pako';
-import { ProjectState, Layer, Frame, PixelGrid, PixelValue } from '../types';
-import { rgbToHex, hexToRgb } from '../utils';
+import { inflate, deflate } from 'pako';
+import { 
+  ProjectState, Layer, Frame, FrameTag, Slice, SliceKey, Tileset, 
+  ColorProfile, UserData, UserPropertyMap, ExternalFile, CelExtra, 
+  PixelGrid, LayerBlendMode, LayerType 
+} from '../types';
+import { hexToRgb, rgbToHex, findNearestPaletteIndex } from '../utils';
 
-// Helper to convert UTF-8 string to Uint8Array with 2-byte length prefix
-function encodeString(str: string): Uint8Array {
-  const encoder = new TextEncoder();
-  const bytes = encoder.encode(str);
-  const result = new Uint8Array(2 + bytes.length);
-  result[0] = bytes.length & 0xff;
-  result[1] = (bytes.length >> 8) & 0xff;
-  result.set(bytes, 2);
-  return result;
-}
-
-// Helper to read 2-byte length UTF-8 string
-function decodeString(view: DataView, offset: number): { str: string; length: number } {
-  const len = view.getUint16(offset, true);
-  const bytes = new Uint8Array(view.buffer, view.byteOffset + offset + 2, len);
-  const decoder = new TextDecoder('utf-8');
-  return { str: decoder.decode(bytes), length: 2 + len };
-}
-
-// Blend mode mapping for Aseprite
-const BLEND_MODE_MAP: Record<string, number> = {
-  'normal': 0,
-  'multiply': 1,
-  'screen': 2,
-  'overlay': 3,
-  'darken': 4,
-  'lighten': 5,
-  'color-dodge': 6,
-  'color-burn': 7,
-  'hard-light': 8,
-  'soft-light': 9,
-  'difference': 10,
-  'exclusion': 11,
-  'hue': 12,
-  'saturation': 13,
-  'color': 14,
-  'luminosity': 15,
-  'addition': 16,
-  'subtract': 17,
-  'divide': 18
-};
-
-const REVERSE_BLEND_MODE_MAP: Record<number, string> = {
+// --- Aseprite Blend Mode Mapping ---
+const ASEPRITE_BLEND_MODES: Record<number, LayerBlendMode> = {
   0: 'normal',
   1: 'multiply',
   2: 'screen',
@@ -66,476 +29,1172 @@ const REVERSE_BLEND_MODE_MAP: Record<number, string> = {
   18: 'divide'
 };
 
+const BLEND_MODE_TO_ASEPRITE: Record<LayerBlendMode, number> = {
+  'normal': 0,
+  'multiply': 1,
+  'screen': 2,
+  'overlay': 3,
+  'darken': 4,
+  'lighten': 5,
+  'color-dodge': 6,
+  'color-burn': 7,
+  'hard-light': 8,
+  'soft-light': 9,
+  'difference': 10,
+  'exclusion': 11,
+  'hue': 12,
+  'saturation': 13,
+  'color': 14,
+  'luminosity': 15,
+  'addition': 16,
+  'subtract': 17,
+  'divide': 18
+};
+
 /**
- * Encodes a ProjectState into Aseprite (.aseprite / .ase) binary format.
+ * Converts layers from Aseprite chunk order (where Group Header precedes its children)
+ * to PixelForge Studio app order (where Group Header comes after its children in bottom-to-top array,
+ * so it appears at the top of the group in the UI list).
  */
-export function encodeAseprite(state: ProjectState): Uint8Array {
-  const isIndexed = state.colorMode === 'indexed';
-  const width = state.width;
-  const height = state.height;
-  const numFrames = Math.max(1, state.frames.length);
-
-  // Build full palette list
-  const paletteHexList = state.palette && state.palette.length > 0 
-    ? state.palette 
-    : ['#000000', '#ffffff'];
-
-  // Map palette colors for indexed mode lookup
-  const paletteColorMap = new Map<string, number>();
-  paletteHexList.forEach((hex, idx) => {
-    paletteColorMap.set(hex.toLowerCase(), idx);
-  });
-
-  const frameChunksBuffers: Uint8Array[][] = [];
-
-  for (let f = 0; f < numFrames; f++) {
-    const frame = state.frames[f] || { id: `frame-${f}`, layerData: {} };
-    const chunks: Uint8Array[] = [];
-
-    // Frame 0 contains metadata chunks (Layer Chunks & Palette Chunk)
-    if (f === 0) {
-      // 1. Layer Chunks (Type 0x2004)
-      state.layers.forEach((layer) => {
-        const nameBytes = encodeString(layer.name || 'Layer');
-        const payloadLen = 18 + nameBytes.length;
-        const chunkSize = 6 + payloadLen;
-        const buf = new Uint8Array(chunkSize);
-        const view = new DataView(buf.buffer);
-
-        view.setUint32(0, chunkSize, true);
-        view.setUint16(4, 0x2004, true); // Chunk Type
-
-        // Flags: 1 = visible, 2 = editable
-        let flags = 0;
-        if (layer.visible !== false) flags |= 1;
-        if (!layer.locked) flags |= 2;
-        view.setUint16(6, flags, true);
-
-        view.setUint16(8, 0, true); // Layer type (0 = Normal)
-        view.setUint16(10, 0, true); // Child level
-        view.setUint16(12, 0, true); // Default width
-        view.setUint16(14, 0, true); // Default height
-        
-        const blendModeInt = BLEND_MODE_MAP[layer.blendMode || 'normal'] ?? 0;
-        view.setUint16(16, blendModeInt, true); // Blend mode
-
-        const opacityByte = Math.round(((layer.opacity ?? 100) / 100) * 255);
-        view.setUint8(18, opacityByte); // Opacity
-        // Bytes 19-21 reserved
-
-        buf.set(nameBytes, 24);
-        chunks.push(buf);
-      });
-
-      // 2. Palette Chunk (Type 0x2019)
-      const numColors = paletteHexList.length;
-      const palettePayloadLen = 20 + numColors * 6;
-      const paletteChunkSize = 6 + palettePayloadLen;
-      const pBuf = new Uint8Array(paletteChunkSize);
-      const pView = new DataView(pBuf.buffer);
-
-      pView.setUint32(0, paletteChunkSize, true);
-      pView.setUint16(4, 0x2019, true); // Palette Chunk Type
-
-      pView.setUint32(6, numColors, true); // Palette size
-      pView.setUint32(10, 0, true); // First color index
-      pView.setUint32(14, Math.max(0, numColors - 1), true); // Last color index
-      // Bytes 18-25 reserved (0)
-
-      let pOffset = 26;
-      paletteHexList.forEach((hex) => {
-        pView.setUint16(pOffset, 0, true); // Color flags (no name)
-        const [r, g, b] = hexToRgb(hex);
-        pView.setUint8(pOffset + 2, r);
-        pView.setUint8(pOffset + 3, g);
-        pView.setUint8(pOffset + 4, b);
-        pView.setUint8(pOffset + 5, 255); // Alpha
-        pOffset += 6;
-      });
-
-      chunks.push(pBuf);
-    }
-
-    // 3. Cel Chunks (Type 0x2005) for each layer in this frame
-    state.layers.forEach((layer, layerIdx) => {
-      const grid = frame.layerData[layer.id];
-      if (!grid) return; // No pixels on this layer for this frame
-
-      // Construct uncompressed pixel buffer
-      let uncompressedPixels: Uint8Array;
-
-      if (isIndexed) {
-        uncompressedPixels = new Uint8Array(width * height);
-        for (let i = 0; i < width * height; i++) {
-          const val = grid[i];
-          if (val === null || val === undefined) {
-            uncompressedPixels[i] = 0; // Transparent index
-          } else if (typeof val === 'number') {
-            uncompressedPixels[i] = val;
-          } else {
-            const idx = paletteColorMap.get(val.toLowerCase());
-            uncompressedPixels[i] = idx !== undefined ? idx : 0;
-          }
-        }
-      } else {
-        // 32 bpp RGBA
-        uncompressedPixels = new Uint8Array(width * height * 4);
-        for (let i = 0; i < width * height; i++) {
-          const val = grid[i];
-          const byteIdx = i * 4;
-          if (val === null || val === undefined) {
-            uncompressedPixels[byteIdx] = 0;
-            uncompressedPixels[byteIdx + 1] = 0;
-            uncompressedPixels[byteIdx + 2] = 0;
-            uncompressedPixels[byteIdx + 3] = 0;
-          } else {
-            const hexColor = typeof val === 'number' ? (paletteHexList[val] || '#000000') : val;
-            const [r, g, b] = hexToRgb(hexColor);
-            uncompressedPixels[byteIdx] = r;
-            uncompressedPixels[byteIdx + 1] = g;
-            uncompressedPixels[byteIdx + 2] = b;
-            uncompressedPixels[byteIdx + 3] = 255;
-          }
+export function convertAsepriteChunkOrderToAppOrder(rawLayers: Layer[]): Layer[] {
+  const layers = [...rawLayers];
+  for (let i = layers.length - 1; i >= 0; i--) {
+    if (layers[i].type === 'group') {
+      const groupLayer = layers[i];
+      const groupLevel = groupLayer.childLevel ?? 0;
+      let lastDescendantIdx = i;
+      for (let j = i + 1; j < layers.length; j++) {
+        if ((layers[j].childLevel ?? 0) > groupLevel) {
+          lastDescendantIdx = j;
+        } else {
+          break;
         }
       }
-
-      // Compress pixels with zlib
-      const compressedPixels = deflate(uncompressedPixels);
-
-      // Payload size: 2(layerIdx) + 2(x) + 2(y) + 1(opacity) + 2(celType=2) + 2(zIndex) + 5(reserved) + 2(width) + 2(height) + compressedPixels.length = 20 + compressedPixels.length
-      const payloadLen = 20 + compressedPixels.length;
-      const chunkSize = 6 + payloadLen;
-      const celBuf = new Uint8Array(chunkSize);
-      const celView = new DataView(celBuf.buffer);
-
-      celView.setUint32(0, chunkSize, true);
-      celView.setUint16(4, 0x2005, true); // Cel Chunk Type
-
-      celView.setUint16(6, layerIdx, true); // Layer index
-      celView.setInt16(8, 0, true); // X position
-      celView.setInt16(10, 0, true); // Y position
-      celView.setUint8(12, 255); // Opacity
-      celView.setUint16(13, 2, true); // Cel Type 2 (Compressed Image)
-      celView.setInt16(15, 0, true); // Z-Index
-      // Bytes 17-21 reserved (0)
-
-      celView.setUint16(22, width, true); // Cel width
-      celView.setUint16(24, height, true); // Cel height
-
-      celBuf.set(compressedPixels, 26);
-      chunks.push(celBuf);
-    });
-
-    frameChunksBuffers.push(chunks);
+      if (lastDescendantIdx > i) {
+        layers.splice(i, 1);
+        layers.splice(lastDescendantIdx, 0, groupLayer);
+      }
+    }
   }
-
-  // Calculate total file size and frame offsets
-  let totalFileSize = 128; // Header
-  const frameSizes: number[] = [];
-
-  frameChunksBuffers.forEach((chunks) => {
-    let chunksSizeSum = 0;
-    chunks.forEach((c) => (chunksSizeSum += c.length));
-    const frameTotalSize = 16 + chunksSizeSum; // 16-byte frame header + chunks
-    frameSizes.push(frameTotalSize);
-    totalFileSize += frameTotalSize;
-  });
-
-  // Create full binary output buffer
-  const fileBuf = new Uint8Array(totalFileSize);
-  const view = new DataView(fileBuf.buffer);
-
-  // --- WRITE FILE HEADER (128 bytes) ---
-  view.setUint32(0, totalFileSize, true);
-  view.setUint16(4, 0xA5E0, true); // Magic Number 0xA5E0
-  view.setUint16(6, numFrames, true);
-  view.setUint16(8, width, true);
-  view.setUint16(10, height, true);
-  view.setUint16(12, isIndexed ? 8 : 32, true); // Color depth
-  view.setUint32(14, 1, true); // Flags (1 = layer opacity valid)
-  view.setUint16(18, 100, true); // Speed (deprecated)
-  // Bytes 20-27 reserved
-  view.setUint8(28, 0); // Transparent index
-  // Bytes 29-31 reserved
-  view.setUint16(32, paletteHexList.length, true); // Number of colors
-  view.setUint8(34, 1); // Pixel width
-  view.setUint8(35, 1); // Pixel height
-  view.setUint16(36, 0, true); // Grid X
-  view.setUint16(38, 0, true); // Grid Y
-  view.setUint16(40, 16, true); // Grid Width
-  view.setUint16(42, 16, true); // Grid Height
-  // Bytes 44-127 reserved (0)
-
-  // --- WRITE FRAMES ---
-  let offset = 128;
-  for (let f = 0; f < numFrames; f++) {
-    const chunks = frameChunksBuffers[f];
-    const frameSize = frameSizes[f];
-    const chunkCount = chunks.length;
-
-    // Write Frame Header (16 bytes)
-    view.setUint32(offset, frameSize, true);
-    view.setUint16(offset + 4, 0xF1FA, true); // Frame Magic 0xF1FA
-    view.setUint16(offset + 6, chunkCount > 0xffff ? 0xffff : chunkCount, true); // Old chunk count
-    view.setUint16(offset + 8, 100, true); // Frame duration ms
-    // Bytes 10-11 reserved
-    view.setUint32(offset + 12, chunkCount, true); // New chunk count
-
-    offset += 16;
-
-    // Write Chunks
-    chunks.forEach((cBuf) => {
-      fileBuf.set(cBuf, offset);
-      offset += cBuf.length;
-    });
-  }
-
-  return fileBuf;
+  return layers;
 }
 
 /**
- * Parses an Aseprite (.aseprite / .ase) binary file buffer into a ProjectState.
+ * Converts layers from PixelForge Studio app order (where Group Header comes after its children)
+ * back to Aseprite chunk order (where Group Header precedes its children).
  */
-export function parseAseprite(buffer: ArrayBuffer, fileName?: string): ProjectState {
-  const view = new DataView(buffer);
-  const fileSize = view.getUint32(0, true);
-  const magic = view.getUint16(4, true);
+export function convertAppOrderToAsepriteChunkOrder(appLayers: Layer[]): Layer[] {
+  const layers = [...appLayers];
+  for (let i = 0; i < layers.length; i++) {
+    if (layers[i].type === 'group') {
+      const groupLayer = layers[i];
+      const groupLevel = groupLayer.childLevel ?? 0;
+      let firstDescendantIdx = i;
+      for (let j = i - 1; j >= 0; j--) {
+        if ((layers[j].childLevel ?? 0) > groupLevel) {
+          firstDescendantIdx = j;
+        } else {
+          break;
+        }
+      }
+      if (firstDescendantIdx < i) {
+        layers.splice(i, 1);
+        layers.splice(firstDescendantIdx, 0, groupLayer);
+      }
+    }
+  }
+  return layers;
+}
 
-  if (magic !== 0xA5E0) {
-    throw new Error(`Invalid Aseprite file: Magic 0x${magic.toString(16).toUpperCase()} does not match 0xA5E0`);
+// --- Binary Reader Helper ---
+class BinaryReader {
+  private view: DataView;
+  private utf8Decoder = new TextDecoder('utf-8');
+  public offset: number = 0;
+
+  constructor(buffer: ArrayBuffer) {
+    this.view = new DataView(buffer);
   }
 
-  const numFrames = view.getUint16(6, true);
-  const width = view.getUint16(8, true);
-  const height = view.getUint16(10, true);
-  const colorDepth = view.getUint16(12, true); // 32 = RGBA, 8 = Indexed
-  const transparentIndex = view.getUint8(28);
+  get length(): number {
+    return this.view.byteLength;
+  }
 
-  const layers: Layer[] = [];
-  let palette: string[] = [];
-  const frames: Frame[] = [];
+  readByte(): number {
+    const val = this.view.getUint8(this.offset);
+    this.offset += 1;
+    return val;
+  }
 
-  let offset = 128; // Start after 128-byte main header
+  readWord(): number {
+    const val = this.view.getUint16(this.offset, true);
+    this.offset += 2;
+    return val;
+  }
 
-  for (let f = 0; f < numFrames; f++) {
-    if (offset >= buffer.byteLength) break;
+  readShort(): number {
+    const val = this.view.getInt16(this.offset, true);
+    this.offset += 2;
+    return val;
+  }
 
-    const frameSize = view.getUint32(offset, true);
-    const frameMagic = view.getUint16(offset + 4, true);
+  readDword(): number {
+    const val = this.view.getUint32(this.offset, true);
+    this.offset += 4;
+    return val;
+  }
 
-    if (frameMagic !== 0xF1FA) {
-      console.warn(`Frame ${f} has invalid magic 0x${frameMagic.toString(16)}`);
+  readLong(): number {
+    const val = this.view.getInt32(this.offset, true);
+    this.offset += 4;
+    return val;
+  }
+
+  readInt64(): number {
+    const low = this.view.getUint32(this.offset, true);
+    const high = this.view.getInt32(this.offset + 4, true);
+    this.offset += 8;
+    return high * 0x100000000 + low;
+  }
+
+  readUint64(): number {
+    const low = this.view.getUint32(this.offset, true);
+    const high = this.view.getUint32(this.offset + 4, true);
+    this.offset += 8;
+    return high * 0x100000000 + low;
+  }
+
+  readFixed(): number {
+    const raw = this.view.getInt32(this.offset, true);
+    this.offset += 4;
+    return raw / 65536.0;
+  }
+
+  readFloat(): number {
+    const val = this.view.getFloat32(this.offset, true);
+    this.offset += 4;
+    return val;
+  }
+
+  readDouble(): number {
+    const val = this.view.getFloat64(this.offset, true);
+    this.offset += 8;
+    return val;
+  }
+
+  readString(): string {
+    const len = this.readWord();
+    if (len === 0) return '';
+    const bytes = new Uint8Array(this.view.buffer, this.view.byteOffset + this.offset, len);
+    this.offset += len;
+    return this.utf8Decoder.decode(bytes);
+  }
+
+  readBytes(len: number): Uint8Array {
+    const bytes = new Uint8Array(this.view.buffer, this.view.byteOffset + this.offset, len);
+    this.offset += len;
+    return bytes;
+  }
+
+  readUUID(): string {
+    const bytes = this.readBytes(16);
+    return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  seek(pos: number) {
+    this.offset = pos;
+  }
+}
+
+// --- Binary Writer Helper ---
+class BinaryWriter {
+  private buffer: Uint8Array;
+  private view: DataView;
+  private utf8Encoder = new TextEncoder();
+  public offset: number = 0;
+
+  constructor(initialCapacity = 1024 * 1024) {
+    this.buffer = new Uint8Array(initialCapacity);
+    this.view = new DataView(this.buffer.buffer);
+  }
+
+  private ensureCapacity(additionalBytes: number) {
+    if (this.offset + additionalBytes > this.buffer.byteLength) {
+      const newCapacity = Math.max(this.buffer.byteLength * 2, this.offset + additionalBytes + 1024);
+      const newBuf = new Uint8Array(newCapacity);
+      newBuf.set(this.buffer);
+      this.buffer = newBuf;
+      this.view = new DataView(this.buffer.buffer);
+    }
+  }
+
+  writeByte(val: number) {
+    this.ensureCapacity(1);
+    this.view.setUint8(this.offset, val & 0xff);
+    this.offset += 1;
+  }
+
+  writeWord(val: number) {
+    this.ensureCapacity(2);
+    this.view.setUint16(this.offset, val & 0xffff, true);
+    this.offset += 2;
+  }
+
+  writeShort(val: number) {
+    this.ensureCapacity(2);
+    this.view.setInt16(this.offset, val, true);
+    this.offset += 2;
+  }
+
+  writeDword(val: number) {
+    this.ensureCapacity(4);
+    this.view.setUint32(this.offset, val >>> 0, true);
+    this.offset += 4;
+  }
+
+  writeLong(val: number) {
+    this.ensureCapacity(4);
+    this.view.setInt32(this.offset, val, true);
+    this.offset += 4;
+  }
+
+  writeInt64(val: number) {
+    this.ensureCapacity(8);
+    const low = val % 0x100000000;
+    const high = Math.floor(val / 0x100000000);
+    this.view.setUint32(this.offset, low >>> 0, true);
+    this.view.setInt32(this.offset + 4, high, true);
+    this.offset += 8;
+  }
+
+  writeUint64(val: number) {
+    this.ensureCapacity(8);
+    const low = val % 0x100000000;
+    const high = Math.floor(val / 0x100000000);
+    this.view.setUint32(this.offset, low >>> 0, true);
+    this.view.setUint32(this.offset + 4, high >>> 0, true);
+    this.offset += 8;
+  }
+
+  writeFixed(val: number) {
+    this.ensureCapacity(4);
+    this.view.setInt32(this.offset, Math.round(val * 65536.0), true);
+    this.offset += 4;
+  }
+
+  writeFloat(val: number) {
+    this.ensureCapacity(4);
+    this.view.setFloat32(this.offset, val, true);
+    this.offset += 4;
+  }
+
+  writeDouble(val: number) {
+    this.ensureCapacity(8);
+    this.view.setFloat64(this.offset, val, true);
+    this.offset += 8;
+  }
+
+  writeString(str: string) {
+    const encoded = this.utf8Encoder.encode(str);
+    this.writeWord(encoded.length);
+    if (encoded.length > 0) {
+      this.ensureCapacity(encoded.length);
+      this.buffer.set(encoded, this.offset);
+      this.offset += encoded.length;
+    }
+  }
+
+  writeBytes(bytes: Uint8Array) {
+    if (bytes.length === 0) return;
+    this.ensureCapacity(bytes.length);
+    this.buffer.set(bytes, this.offset);
+    this.offset += bytes.length;
+  }
+
+  getBytes(): Uint8Array {
+    return this.buffer.subarray(0, this.offset);
+  }
+}
+
+// --- Helper Functions for User Data Properties (0x2020 bit 4) ---
+function parsePropertyValue(reader: BinaryReader, type: number): any {
+  switch (type) {
+    case 0x0001: // bool
+      return reader.readByte() !== 0;
+    case 0x0002: // int8
+      const i8 = reader.readByte();
+      return i8 > 127 ? i8 - 256 : i8;
+    case 0x0003: // uint8
+      return reader.readByte();
+    case 0x0004: // int16
+      return reader.readShort();
+    case 0x0005: // uint16
+      return reader.readWord();
+    case 0x0006: // int32
+      return reader.readLong();
+    case 0x0007: // uint32
+      return reader.readDword();
+    case 0x0008: // int64
+      return reader.readInt64();
+    case 0x0009: // uint64
+      return reader.readUint64();
+    case 0x000A: // FIXED
+      return reader.readFixed();
+    case 0x000B: // FLOAT
+      return reader.readFloat();
+    case 0x000C: // DOUBLE
+      return reader.readDouble();
+    case 0x000D: // STRING
+      return reader.readString();
+    case 0x000E: // POINT
+      return { x: reader.readLong(), y: reader.readLong() };
+    case 0x000F: // SIZE
+      return { w: reader.readLong(), h: reader.readLong() };
+    case 0x0010: // RECT
+      return {
+        x: reader.readLong(),
+        y: reader.readLong(),
+        w: reader.readLong(),
+        h: reader.readLong()
+      };
+    case 0x0011: { // vector
+      const elemCount = reader.readDword();
+      const elemType = reader.readWord();
+      const vec: any[] = [];
+      for (let i = 0; i < elemCount; i++) {
+        const itemType = elemType === 0 ? reader.readWord() : elemType;
+        vec.push(parsePropertyValue(reader, itemType));
+      }
+      return vec;
+    }
+    case 0x0012: { // nested properties map
+      const propCount = reader.readDword();
+      const props: Record<string, any> = {};
+      for (let i = 0; i < propCount; i++) {
+        const name = reader.readString();
+        const propType = reader.readWord();
+        props[name] = parsePropertyValue(reader, propType);
+      }
+      return props;
+    }
+    case 0x0013: // UUID
+      return reader.readUUID();
+    default:
+      return null;
+  }
+}
+
+function getPropertyType(val: any): number {
+  if (typeof val === 'boolean') return 0x0001;
+  if (typeof val === 'number') {
+    if (Number.isInteger(val)) return 0x0006;
+    return 0x000C;
+  }
+  if (typeof val === 'string') {
+    if (/^[0-9a-f]{32}$/i.test(val)) return 0x0013;
+    return 0x000D;
+  }
+  if (Array.isArray(val)) return 0x0011;
+  if (val && typeof val === 'object') {
+    if ('x' in val && 'y' in val && 'w' in val && 'h' in val) return 0x0010;
+    if ('x' in val && 'y' in val) return 0x000E;
+    if ('w' in val && 'h' in val) return 0x000F;
+    return 0x0012;
+  }
+  return 0x000D;
+}
+
+function writePropertyValue(writer: BinaryWriter, type: number, value: any) {
+  switch (type) {
+    case 0x0001:
+      writer.writeByte(value ? 1 : 0);
+      break;
+    case 0x0002:
+    case 0x0003:
+      writer.writeByte(Number(value) & 0xff);
+      break;
+    case 0x0004:
+      writer.writeShort(Number(value));
+      break;
+    case 0x0005:
+      writer.writeWord(Number(value));
+      break;
+    case 0x0006:
+      writer.writeLong(Number(value));
+      break;
+    case 0x0007:
+      writer.writeDword(Number(value));
+      break;
+    case 0x0008:
+      writer.writeInt64(Number(value));
+      break;
+    case 0x0009:
+      writer.writeUint64(Number(value));
+      break;
+    case 0x000A:
+      writer.writeFixed(Number(value));
+      break;
+    case 0x000B:
+      writer.writeFloat(Number(value));
+      break;
+    case 0x000C:
+      writer.writeDouble(Number(value));
+      break;
+    case 0x000D:
+      writer.writeString(String(value || ''));
+      break;
+    case 0x000E:
+      writer.writeLong(value?.x || 0);
+      writer.writeLong(value?.y || 0);
+      break;
+    case 0x000F:
+      writer.writeLong(value?.w || 0);
+      writer.writeLong(value?.h || 0);
+      break;
+    case 0x0010:
+      writer.writeLong(value?.x || 0);
+      writer.writeLong(value?.y || 0);
+      writer.writeLong(value?.w || 0);
+      writer.writeLong(value?.h || 0);
+      break;
+    case 0x0011: {
+      const arr = Array.isArray(value) ? value : [];
+      writer.writeDword(arr.length);
+      let sameType: number | null = arr.length > 0 ? getPropertyType(arr[0]) : 0x000D;
+      for (let i = 1; i < arr.length; i++) {
+        if (getPropertyType(arr[i]) !== sameType) {
+          sameType = 0;
+          break;
+        }
+      }
+      const elemType = sameType !== null ? sameType : 0;
+      writer.writeWord(elemType);
+      for (const item of arr) {
+        const itemType = elemType === 0 ? getPropertyType(item) : elemType;
+        if (elemType === 0) {
+          writer.writeWord(itemType);
+        }
+        writePropertyValue(writer, itemType, item);
+      }
       break;
     }
-
-    const oldNumChunks = view.getUint16(offset + 6, true);
-    const frameDuration = view.getUint16(offset + 8, true);
-    const newNumChunks = view.getUint32(offset + 12, true);
-
-    const chunkCount = newNumChunks > 0 ? newNumChunks : oldNumChunks;
-    let chunkOffset = offset + 16;
-
-    const frameLayerData: Record<string, PixelGrid> = {};
-
-    for (let c = 0; c < chunkCount; c++) {
-      if (chunkOffset >= offset + frameSize || chunkOffset >= buffer.byteLength) break;
-
-      const chunkSize = view.getUint32(chunkOffset, true);
-      const chunkType = view.getUint16(chunkOffset + 4, true);
-      const payloadOffset = chunkOffset + 6;
-
-      // 1. Layer Chunk (Type 0x2004)
-      if (chunkType === 0x2004) {
-        const flags = view.getUint16(payloadOffset, true);
-        const layerType = view.getUint16(payloadOffset + 2, true);
-        const blendModeInt = view.getUint16(payloadOffset + 10, true);
-        const opacityByte = view.getUint8(payloadOffset + 12);
-        
-        const { str: name } = decodeString(view, payloadOffset + 18);
-
-        const layerId = `layer-${layers.length}`;
-        layers.push({
-          id: layerId,
-          name: name || `Layer ${layers.length + 1}`,
-          visible: (flags & 1) !== 0,
-          locked: (flags & 2) === 0,
-          opacity: Math.round((opacityByte / 255) * 100),
-          blendMode: (REVERSE_BLEND_MODE_MAP[blendModeInt] || 'normal') as any
-        });
+    case 0x0012: {
+      const keys = Object.keys(value || {});
+      writer.writeDword(keys.length);
+      for (const k of keys) {
+        writer.writeString(k);
+        const pType = getPropertyType(value[k]);
+        writer.writeWord(pType);
+        writePropertyValue(writer, pType, value[k]);
       }
-
-      // 2. Palette Chunk (Type 0x2019)
-      else if (chunkType === 0x2019) {
-        const numColors = view.getUint32(payloadOffset, true);
-        const firstIdx = view.getUint32(payloadOffset + 4, true);
-        const lastIdx = view.getUint32(payloadOffset + 8, true);
-
-        let pEntryOffset = payloadOffset + 20;
-        const newPalette: string[] = [...palette];
-
-        for (let p = firstIdx; p <= lastIdx; p++) {
-          if (pEntryOffset >= chunkOffset + chunkSize) break;
-          const entryFlags = view.getUint16(pEntryOffset, true);
-          const r = view.getUint8(pEntryOffset + 2);
-          const g = view.getUint8(pEntryOffset + 3);
-          const b = view.getUint8(pEntryOffset + 4);
-          const a = view.getUint8(pEntryOffset + 5);
-
-          newPalette[p] = rgbToHex(r, g, b);
-
-          pEntryOffset += 6;
-          if (entryFlags & 1) {
-            // String name included
-            const nameLen = view.getUint16(pEntryOffset, true);
-            pEntryOffset += 2 + nameLen;
-          }
-        }
-        palette = newPalette;
-      }
-
-      // 3. Cel Chunk (Type 0x2005)
-      else if (chunkType === 0x2005) {
-        const layerIndex = view.getUint16(payloadOffset, true);
-        const celX = view.getInt16(payloadOffset + 2, true);
-        const celY = view.getInt16(payloadOffset + 4, true);
-        const celOpacity = view.getUint8(payloadOffset + 6);
-        const celType = view.getUint16(payloadOffset + 7, true);
-
-        const targetLayer = layers[layerIndex];
-        const layerId = targetLayer ? targetLayer.id : `layer-${layerIndex}`;
-
-        // Cel Type 2: Compressed Image (zlib)
-        if (celType === 2) {
-          const celWidth = view.getUint16(payloadOffset + 16, true);
-          const celHeight = view.getUint16(payloadOffset + 18, true);
-
-          const compressedOffset = payloadOffset + 20;
-          const compressedLength = chunkSize - 6 - 20;
-
-          if (compressedLength > 0 && compressedOffset + compressedLength <= buffer.byteLength) {
-            const compressedBytes = new Uint8Array(buffer, compressedOffset, compressedLength);
-            try {
-              const rawBytes = inflate(compressedBytes);
-              const grid: PixelGrid = new Array(width * height).fill(null);
-
-              if (colorDepth === 32) {
-                // RGBA (32 bpp)
-                for (let cy = 0; cy < celHeight; cy++) {
-                  for (let cx = 0; cx < celWidth; cx++) {
-                    const rawIdx = (cy * celWidth + cx) * 4;
-                    const r = rawBytes[rawIdx];
-                    const g = rawBytes[rawIdx + 1];
-                    const b = rawBytes[rawIdx + 2];
-                    const a = rawBytes[rawIdx + 3];
-
-                    const tx = celX + cx;
-                    const ty = celY + cy;
-
-                    if (tx >= 0 && tx < width && ty >= 0 && ty < height && a > 0) {
-                      grid[ty * width + tx] = rgbToHex(r, g, b);
-                    }
-                  }
-                }
-              } else if (colorDepth === 8) {
-                // Indexed (8 bpp)
-                for (let cy = 0; cy < celHeight; cy++) {
-                  for (let cx = 0; cx < celWidth; cx++) {
-                    const rawIdx = cy * celWidth + cx;
-                    const colorIdx = rawBytes[rawIdx];
-
-                    const tx = celX + cx;
-                    const ty = celY + cy;
-
-                    if (tx >= 0 && tx < width && ty >= 0 && ty < height && colorIdx !== transparentIndex) {
-                      const hex = palette[colorIdx] || '#000000';
-                      grid[ty * width + tx] = hex;
-                    }
-                  }
-                }
-              }
-
-              frameLayerData[layerId] = grid;
-            } catch (err) {
-              console.error(`Failed to decompress cel chunk for layer ${layerIndex}:`, err);
-            }
-          }
-        }
-        // Cel Type 0: Raw Image (Uncompressed)
-        else if (celType === 0) {
-          const celWidth = view.getUint16(payloadOffset + 16, true);
-          const celHeight = view.getUint16(payloadOffset + 18, true);
-          const rawOffset = payloadOffset + 20;
-
-          const grid: PixelGrid = new Array(width * height).fill(null);
-          const rawBytes = new Uint8Array(buffer, rawOffset, chunkSize - 6 - 20);
-
-          if (colorDepth === 32) {
-            for (let cy = 0; cy < celHeight; cy++) {
-              for (let cx = 0; cx < celWidth; cx++) {
-                const rawIdx = (cy * celWidth + cx) * 4;
-                const r = rawBytes[rawIdx];
-                const g = rawBytes[rawIdx + 1];
-                const b = rawBytes[rawIdx + 2];
-                const a = rawBytes[rawIdx + 3];
-
-                const tx = celX + cx;
-                const ty = celY + cy;
-
-                if (tx >= 0 && tx < width && ty >= 0 && ty < height && a > 0) {
-                  grid[ty * width + tx] = rgbToHex(r, g, b);
-                }
-              }
-            }
-          } else if (colorDepth === 8) {
-            for (let cy = 0; cy < celHeight; cy++) {
-              for (let cx = 0; cx < celWidth; cx++) {
-                const rawIdx = cy * celWidth + cx;
-                const colorIdx = rawBytes[rawIdx];
-
-                const tx = celX + cx;
-                const ty = celY + cy;
-
-                if (tx >= 0 && tx < width && ty >= 0 && ty < height && colorIdx !== transparentIndex) {
-                  const hex = palette[colorIdx] || '#000000';
-                  grid[ty * width + tx] = hex;
-                }
-              }
-            }
-          }
-
-          frameLayerData[layerId] = grid;
-        }
-        // Cel Type 1: Linked Cel
-        else if (celType === 1) {
-          const linkedFrameIdx = view.getUint16(payloadOffset + 16, true);
-          if (frames[linkedFrameIdx] && frames[linkedFrameIdx].layerData[layerId]) {
-            frameLayerData[layerId] = [...frames[linkedFrameIdx].layerData[layerId]];
-          }
-        }
-      }
-
-      chunkOffset += chunkSize;
+      break;
     }
-
-    // Ensure all layers have a grid entry in this frame
-    layers.forEach((l) => {
-      if (!frameLayerData[l.id]) {
-        frameLayerData[l.id] = new Array(width * height).fill(null);
+    case 0x0013: {
+      const hex = String(value || '').replace(/-/g, '').padStart(32, '0');
+      const bytes = new Uint8Array(16);
+      for (let i = 0; i < 16; i++) {
+        bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16) || 0;
       }
-    });
+      writer.writeBytes(bytes);
+      break;
+    }
+  }
+}
 
-    frames.push({
-      id: `frame-${f}`,
-      layerData: frameLayerData
-    });
+function encodeUserDataChunk(uData: UserData): Uint8Array {
+  const uWriter = new BinaryWriter(256);
+  uWriter.writeDword(0);
+  uWriter.writeWord(0x2020);
 
-    offset += frameSize;
+  let uFlags = 0;
+  if (uData.text) uFlags |= 1;
+  if (uData.color) uFlags |= 2;
+  if (uData.propertiesMaps && uData.propertiesMaps.length > 0) uFlags |= 4;
+
+  uWriter.writeDword(uFlags);
+
+  if (uData.text) uWriter.writeString(uData.text);
+  if (uData.color) {
+    uWriter.writeByte(uData.color.r);
+    uWriter.writeByte(uData.color.g);
+    uWriter.writeByte(uData.color.b);
+    uWriter.writeByte(uData.color.a);
+  }
+  if (uData.propertiesMaps && uData.propertiesMaps.length > 0) {
+    const propsWriter = new BinaryWriter(256);
+    propsWriter.writeDword(uData.propertiesMaps.length);
+    for (const map of uData.propertiesMaps) {
+      propsWriter.writeDword(map.key);
+      const keys = Object.keys(map.properties || {});
+      propsWriter.writeDword(keys.length);
+      for (const k of keys) {
+        propsWriter.writeString(k);
+        const pType = getPropertyType(map.properties[k]);
+        propsWriter.writeWord(pType);
+        writePropertyValue(propsWriter, pType, map.properties[k]);
+      }
+    }
+    const propsBytes = propsWriter.getBytes();
+    uWriter.writeDword(4 + propsBytes.length);
+    uWriter.writeBytes(propsBytes);
   }
 
-  // Ensure default layer if none found
+  const uBytes = uWriter.getBytes();
+  new DataView(uBytes.buffer).setUint32(0, uBytes.length, true);
+  return uBytes;
+}
+
+/**
+ * Parses an Aseprite file (.ase/.aseprite) into a ProjectState object.
+ */
+export async function parseAseprite(buffer: ArrayBuffer, filename = 'imported'): Promise<ProjectState> {
+  const reader = new BinaryReader(buffer);
+
+  // 1. Header (128 bytes)
+  const fileSize = reader.readDword();
+  const magic = reader.readWord();
+  if (magic !== 0xa5e0) {
+    throw new Error(`Invalid Aseprite magic number: 0x${magic.toString(16).toUpperCase()}`);
+  }
+
+  const numFrames = reader.readWord();
+  const width = reader.readWord();
+  const height = reader.readWord();
+  const colorDepth = reader.readWord(); // 32 = RGBA, 16 = Grayscale, 8 = Indexed
+  const flags = reader.readDword();
+  const speed = reader.readWord();
+  reader.readDword();
+  reader.readDword();
+  const transparentIndex = reader.readByte();
+  reader.readBytes(3);
+  const numColors = reader.readWord();
+  const pixWidth = reader.readByte();
+  const pixHeight = reader.readByte();
+  const gridX = reader.readShort();
+  const gridY = reader.readShort();
+  const gridWidth = reader.readWord();
+  const gridHeight = reader.readWord();
+  reader.seek(128);
+
+  const colorMode = colorDepth === 8 ? 'indexed' : 'rgba';
+
+  const palette: string[] = [];
+  const paletteNames: Record<number, string> = {};
+  const layers: Layer[] = [];
+  const layerIdMap: string[] = [];
+  const tags: FrameTag[] = [];
+  const slices: Slice[] = [];
+  const tilesets: Tileset[] = [];
+  const externalFiles: ExternalFile[] = [];
+  let colorProfile: ColorProfile | undefined = undefined;
+  let spriteUserData: UserData | undefined = undefined;
+  let mask: { x: number; y: number; width: number; height: number; name?: string; bitmap?: Uint8Array } | undefined = undefined;
+
+  const frameDurations: number[] = [];
+  const frameLayerData: Record<string, PixelGrid>[] = [];
+  for (let f = 0; f < numFrames; f++) {
+    frameLayerData.push({});
+  }
+
+  let lastReadObject: any = null;
+  let tagUserDatas: UserData[] = [];
+
+  // Parse Frames
+  for (let frameIdx = 0; frameIdx < numFrames; frameIdx++) {
+    const frameStartPos = reader.offset;
+    const frameBytes = reader.readDword();
+    const frameMagic = reader.readWord();
+    if (frameMagic !== 0xf1fa) {
+      throw new Error(`Invalid Frame magic number at frame ${frameIdx}: 0x${frameMagic.toString(16).toUpperCase()}`);
+    }
+
+    const oldChunkCount = reader.readWord();
+    const frameDuration = reader.readWord();
+    reader.readBytes(2);
+    const newChunkCount = reader.readDword();
+
+    const chunkCount = newChunkCount > 0 ? newChunkCount : (oldChunkCount === 0xffff ? 0xffff : oldChunkCount);
+    frameDurations.push(frameDuration > 0 ? frameDuration : (speed > 0 ? speed : 100));
+
+    const frameEndPos = frameStartPos + frameBytes;
+
+    for (let c = 0; c < chunkCount && reader.offset < frameEndPos; c++) {
+      const chunkStartPos = reader.offset;
+      const chunkSize = reader.readDword();
+      const chunkType = reader.readWord();
+      const chunkDataEnd = chunkStartPos + chunkSize;
+
+      switch (chunkType) {
+        // --- 0x2004: Layer Chunk ---
+        case 0x2004: {
+          const lFlags = reader.readWord();
+          const lType = reader.readWord();
+          const childLevel = reader.readWord();
+          reader.readWord();
+          reader.readWord();
+          const blendModeInt = reader.readWord();
+          const opacityByte = reader.readByte();
+          reader.readBytes(3);
+          const name = reader.readString();
+
+          let tilesetIndex: number | undefined = undefined;
+          if (lType === 2) {
+            tilesetIndex = reader.readDword();
+          }
+
+          let uuid: string | undefined = undefined;
+          if (flags & 4) {
+            uuid = reader.readUUID();
+          }
+
+          const layerId = `layer-${layers.length}-${Date.now()}`;
+          const layer: Layer = {
+            id: layerId,
+            name: name || `Layer ${layers.length + 1}`,
+            visible: (lFlags & 1) !== 0,
+            locked: (lFlags & 2) === 0 ? false : true,
+            opacity: Math.round((opacityByte / 255) * 100),
+            blendMode: ASEPRITE_BLEND_MODES[blendModeInt] || 'normal',
+            type: lType === 1 ? 'group' : (lType === 2 ? 'tilemap' : 'normal'),
+            childLevel,
+            tilesetIndex,
+            collapsed: (lFlags & 32) !== 0,
+            uuid,
+            lockMovement: (lFlags & 4) !== 0,
+            isBackground: (lFlags & 8) !== 0,
+            preferLinkedCels: (lFlags & 16) !== 0,
+            isReference: (lFlags & 64) !== 0
+          };
+
+          layers.push(layer);
+          layerIdMap.push(layerId);
+          lastReadObject = layer;
+          break;
+        }
+
+        // --- 0x2005: Cel Chunk ---
+        case 0x2005: {
+          const layerIdx = reader.readWord();
+          const xPos = reader.readShort();
+          const yPos = reader.readShort();
+          const celOpacity = reader.readByte();
+          const celType = reader.readWord();
+          const zIndex = reader.readShort();
+          reader.readBytes(5);
+
+          // Resolve Z-Index offset
+          const effectiveLayerIdx = Math.max(0, Math.min(layerIdMap.length - 1, layerIdx + zIndex));
+          const targetLayerId = layerIdMap[effectiveLayerIdx] || layerIdMap[layerIdx];
+
+          if (targetLayerId) {
+            if (!frameLayerData[frameIdx][targetLayerId]) {
+              frameLayerData[frameIdx][targetLayerId] = new Array(width * height).fill(null);
+            }
+            const grid = frameLayerData[frameIdx][targetLayerId];
+
+            if (celType === 1) {
+              // Linked Cel
+              const linkFramePos = reader.readWord();
+              const sourceLayerId = layerIdMap[layerIdx] || targetLayerId;
+              if (linkFramePos < frameIdx && frameLayerData[linkFramePos][sourceLayerId]) {
+                const sourceGrid = frameLayerData[linkFramePos][sourceLayerId];
+                for (let i = 0; i < grid.length; i++) {
+                  grid[i] = sourceGrid[i];
+                }
+              }
+            } else if (celType === 2 || celType === 0) {
+              // Compressed Image (Type 2) or Raw (Type 0)
+              const celW = reader.readWord();
+              const celH = reader.readWord();
+
+              let uncompressedData: Uint8Array;
+              if (celType === 2) {
+                const remainingChunkBytes = chunkDataEnd - reader.offset;
+                const compressedBytes = reader.readBytes(remainingChunkBytes);
+                try {
+                  uncompressedData = inflate(compressedBytes);
+                } catch (e) {
+                  console.warn("Failed to inflate cel data", e);
+                  uncompressedData = new Uint8Array(0);
+                }
+              } else {
+                const bpp = colorDepth === 32 ? 4 : (colorDepth === 16 ? 2 : 1);
+                uncompressedData = reader.readBytes(celW * celH * bpp);
+              }
+
+              if (uncompressedData.length > 0) {
+                let pixelOffset = 0;
+                const celAlphaMult = celOpacity / 255;
+                for (let cy = 0; cy < celH; cy++) {
+                  for (let cx = 0; cx < celW; cx++) {
+                    const canvasX = xPos + cx;
+                    const canvasY = yPos + cy;
+
+                    if (canvasX >= 0 && canvasX < width && canvasY >= 0 && canvasY < height) {
+                      const gridIdx = canvasY * width + canvasX;
+
+                      if (colorDepth === 32) {
+                        const r = uncompressedData[pixelOffset];
+                        const g = uncompressedData[pixelOffset + 1];
+                        const b = uncompressedData[pixelOffset + 2];
+                        const a = Math.round(uncompressedData[pixelOffset + 3] * celAlphaMult);
+                        pixelOffset += 4;
+
+                        if (a > 0) {
+                          grid[gridIdx] = rgbToHex(r, g, b);
+                        }
+                      } else if (colorDepth === 16) {
+                        const val = uncompressedData[pixelOffset];
+                        const a = Math.round(uncompressedData[pixelOffset + 1] * celAlphaMult);
+                        pixelOffset += 2;
+
+                        if (a > 0) {
+                          grid[gridIdx] = rgbToHex(val, val, val);
+                        }
+                      } else if (colorDepth === 8) {
+                        const pIdx = uncompressedData[pixelOffset];
+                        pixelOffset += 1;
+
+                        if (pIdx !== transparentIndex) {
+                          grid[gridIdx] = pIdx;
+                        }
+                      }
+                    } else {
+                      pixelOffset += (colorDepth === 32 ? 4 : (colorDepth === 16 ? 2 : 1));
+                    }
+                  }
+                }
+              }
+            } else if (celType === 3) {
+              // Compressed Tilemap
+              const mapWidthInTiles = reader.readWord();
+              const mapHeightInTiles = reader.readWord();
+              const bitsPerTile = reader.readWord();
+              const tileIdMask = reader.readDword();
+              const xFlipMask = reader.readDword();
+              const yFlipMask = reader.readDword();
+              const dFlipMask = reader.readDword();
+              reader.readBytes(10);
+
+              const remainingChunkBytes = chunkDataEnd - reader.offset;
+              const compressedBytes = reader.readBytes(remainingChunkBytes);
+              try {
+                const tileData = inflate(compressedBytes);
+                const targetLayer = layers.find(l => l.id === targetLayerId);
+                const tileset = targetLayer?.tilesetIndex !== undefined ? tilesets.find(t => t.id === targetLayer.tilesetIndex) : tilesets[0];
+
+                if (tileset && tileset.pixels) {
+                  const tW = tileset.tileWidth;
+                  const tH = tileset.tileHeight;
+                  const tileReader = new BinaryReader(tileData.buffer);
+
+                  for (let ty = 0; ty < mapHeightInTiles; ty++) {
+                    for (let tx = 0; tx < mapWidthInTiles; tx++) {
+                      let rawTile = 0;
+                      if (bitsPerTile === 32) rawTile = tileReader.readDword();
+                      else if (bitsPerTile === 16) rawTile = tileReader.readWord();
+                      else if (bitsPerTile === 8) rawTile = tileReader.readByte();
+
+                      const tileId = rawTile & tileIdMask;
+                      const xFlip = (rawTile & xFlipMask) !== 0;
+                      const yFlip = (rawTile & yFlipMask) !== 0;
+                      const dFlip = (rawTile & dFlipMask) !== 0;
+
+                      if (tileId > 0 && tileId < tileset.tilesCount) {
+                        const tileStartPixelIndex = tileId * (tW * tH);
+                        for (let cy = 0; cy < tH; cy++) {
+                          for (let cx = 0; cx < tW; cx++) {
+                            const canvasX = xPos + tx * tW + cx;
+                            const canvasY = yPos + ty * tH + cy;
+                            if (canvasX >= 0 && canvasX < width && canvasY >= 0 && canvasY < height) {
+                              const gIdx = canvasY * width + canvasX;
+
+                              let srcCx = cx;
+                              let srcCy = cy;
+                              if (dFlip) {
+                                const tmp = srcCx;
+                                srcCx = srcCy;
+                                srcCy = tmp;
+                              }
+                              if (xFlip) {
+                                srcCx = tW - 1 - srcCx;
+                              }
+                              if (yFlip) {
+                                srcCy = tH - 1 - srcCy;
+                              }
+
+                              const tPixIdx = tileStartPixelIndex + srcCy * tW + srcCx;
+                              const val = tileset.pixels[tPixIdx];
+                              if (val !== null && val !== undefined) {
+                                grid[gIdx] = val;
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              } catch (e) {
+                console.warn("Failed to inflate tilemap data", e);
+              }
+            }
+          }
+          lastReadObject = { type: 'cel', frameIdx, layerIdx };
+          break;
+        }
+
+        // --- 0x2006: Cel Extra Chunk ---
+        case 0x2006: {
+          const ceFlags = reader.readDword();
+          const preciseX = reader.readFixed();
+          const preciseY = reader.readFixed();
+          const wInSprite = reader.readFixed();
+          const hInSprite = reader.readFixed();
+          reader.readBytes(16);
+          break;
+        }
+
+        // --- 0x2008: External Files Chunk ---
+        case 0x2008: {
+          const numEntries = reader.readDword();
+          reader.readBytes(8);
+          for (let e = 0; e < numEntries; e++) {
+            const entryId = reader.readDword();
+            const entryType = reader.readByte();
+            reader.readBytes(7);
+            const extFilename = reader.readString();
+            externalFiles.push({ id: entryId, type: entryType, filename: extFilename });
+          }
+          break;
+        }
+
+        // --- 0x2016: Mask Chunk [DEPRECATED] ---
+        case 0x2016: {
+          const mx = reader.readShort();
+          const my = reader.readShort();
+          const mw = reader.readWord();
+          const mh = reader.readWord();
+          reader.readBytes(8);
+          const mName = reader.readString();
+          const bitmapLen = mh * Math.ceil(mw / 8);
+          const bitmap = reader.readBytes(bitmapLen);
+          mask = { x: mx, y: my, width: mw, height: mh, name: mName, bitmap };
+          break;
+        }
+
+        // --- 0x2019: Palette Chunk ---
+        case 0x2019: {
+          const paletteSize = reader.readDword();
+          const fromIdx = reader.readDword();
+          const toIdx = reader.readDword();
+          reader.readBytes(8);
+
+          for (let p = fromIdx; p <= toIdx; p++) {
+            const entryFlags = reader.readWord();
+            const r = reader.readByte();
+            const g = reader.readByte();
+            const b = reader.readByte();
+            const a = reader.readByte();
+
+            if (entryFlags & 1) {
+              const cName = reader.readString();
+              paletteNames[p] = cName;
+            }
+
+            palette[p] = rgbToHex(r, g, b);
+          }
+          lastReadObject = palette;
+          break;
+        }
+
+        // --- 0x0004 & 0x0011: Old Palette Chunks ---
+        case 0x0004:
+        case 0x0011: {
+          if (palette.length === 0) {
+            const numPackets = reader.readWord();
+            let curPalIdx = 0;
+            for (let pkt = 0; pkt < numPackets; pkt++) {
+              const skip = reader.readByte();
+              const count = reader.readByte();
+              const numColors = count === 0 ? 256 : count;
+              curPalIdx += skip;
+              for (let col = 0; col < numColors; col++) {
+                let r = reader.readByte();
+                let g = reader.readByte();
+                let b = reader.readByte();
+                if (chunkType === 0x0011) {
+                  r = Math.round((r * 255) / 63);
+                  g = Math.round((g * 255) / 63);
+                  b = Math.round((b * 255) / 63);
+                }
+                palette[curPalIdx++] = rgbToHex(r, g, b);
+              }
+            }
+          }
+          break;
+        }
+
+        // --- 0x2018: Tags Chunk ---
+        case 0x2018: {
+          const numTags = reader.readWord();
+          reader.readBytes(8);
+
+          for (let t = 0; t < numTags; t++) {
+            const fromFrame = reader.readWord();
+            const toFrame = reader.readWord();
+            const dirByte = reader.readByte();
+            const repeat = reader.readWord();
+            reader.readBytes(6);
+            const r = reader.readByte();
+            const g = reader.readByte();
+            const b = reader.readByte();
+            reader.readByte();
+            const name = reader.readString();
+
+            const dirs: ('forward' | 'reverse' | 'ping-pong' | 'ping-pong-reverse')[] = [
+              'forward', 'reverse', 'ping-pong', 'ping-pong-reverse'
+            ];
+
+            const tag: FrameTag = {
+              id: `tag-${t}-${Date.now()}`,
+              name,
+              from: fromFrame,
+              to: toFrame,
+              direction: dirs[dirByte] || 'forward',
+              repeat,
+              color: rgbToHex(r, g, b)
+            };
+            tags.push(tag);
+          }
+          tagUserDatas = [];
+          lastReadObject = tags;
+          break;
+        }
+
+        // --- 0x2020: User Data Chunk ---
+        case 0x2020: {
+          const uFlags = reader.readDword();
+          let text: string | undefined = undefined;
+          let color: { r: number; g: number; b: number; a: number } | undefined = undefined;
+          let propertiesMaps: UserPropertyMap[] | undefined = undefined;
+
+          if (uFlags & 1) text = reader.readString();
+          if (uFlags & 2) {
+            color = {
+              r: reader.readByte(),
+              g: reader.readByte(),
+              b: reader.readByte(),
+              a: reader.readByte()
+            };
+          }
+          if (uFlags & 4) {
+            const sizeInBytes = reader.readDword();
+            const numMaps = reader.readDword();
+            propertiesMaps = [];
+            for (let m = 0; m < numMaps; m++) {
+              const mapKey = reader.readDword();
+              const numProps = reader.readDword();
+              const props: Record<string, any> = {};
+              for (let p = 0; p < numProps; p++) {
+                const pName = reader.readString();
+                const pType = reader.readWord();
+                props[pName] = parsePropertyValue(reader, pType);
+              }
+              propertiesMaps.push({ key: mapKey, properties: props });
+            }
+          }
+
+          const uData: UserData = { text, color, propertiesMaps };
+
+          if (lastReadObject === tags && tags.length > 0) {
+            const tagIdx = tagUserDatas.length;
+            if (tagIdx < tags.length) {
+              tags[tagIdx].userData = uData;
+              if (color) {
+                tags[tagIdx].color = rgbToHex(color.r, color.g, color.b);
+              }
+              tagUserDatas.push(uData);
+            }
+          } else if (lastReadObject && typeof lastReadObject === 'object') {
+            lastReadObject.userData = uData;
+          } else {
+            spriteUserData = uData;
+          }
+          break;
+        }
+
+        // --- 0x2022: Slice Chunk ---
+        case 0x2022: {
+          const numSliceKeys = reader.readDword();
+          const sFlags = reader.readDword();
+          reader.readDword();
+          const name = reader.readString();
+
+          const sliceKeys: SliceKey[] = [];
+          for (let k = 0; k < numSliceKeys; k++) {
+            const frameNum = reader.readDword();
+            const sx = reader.readLong();
+            const sy = reader.readLong();
+            const sw = reader.readDword();
+            const sh = reader.readDword();
+
+            let center: { x: number; y: number; w: number; h: number } | undefined = undefined;
+            if (sFlags & 1) {
+              center = {
+                x: reader.readLong(),
+                y: reader.readLong(),
+                w: reader.readDword(),
+                h: reader.readDword()
+              };
+            }
+
+            let pivot: { x: number; y: number } | undefined = undefined;
+            if (sFlags & 2) {
+              pivot = {
+                x: reader.readLong(),
+                y: reader.readLong()
+              };
+            }
+
+            sliceKeys.push({ frame: frameNum, x: sx, y: sy, w: sw, h: sh, center, pivot });
+          }
+
+          const slice: Slice = {
+            id: `slice-${slices.length}-${Date.now()}`,
+            name,
+            keys: sliceKeys
+          };
+          slices.push(slice);
+          lastReadObject = slice;
+          break;
+        }
+
+        // --- 0x2023: Tileset Chunk ---
+        case 0x2023: {
+          const tsId = reader.readDword();
+          const tsFlags = reader.readDword();
+          const numTiles = reader.readDword();
+          const tW = reader.readWord();
+          const tH = reader.readWord();
+          const baseIndex = reader.readShort();
+          reader.readBytes(14);
+          const tsName = reader.readString();
+
+          let extFileId: number | undefined = undefined;
+          let extTilesetId: number | undefined = undefined;
+
+          if (tsFlags & 1) {
+            extFileId = reader.readDword();
+            extTilesetId = reader.readDword();
+          }
+
+          let tPixels: PixelGrid | undefined = undefined;
+          if (tsFlags & 2) {
+            const compLen = reader.readDword();
+            const compBytes = reader.readBytes(compLen);
+            try {
+              const rawTiles = inflate(compBytes);
+              const totalPixels = tW * tH * numTiles;
+              tPixels = new Array(totalPixels).fill(null);
+              let pOff = 0;
+              for (let i = 0; i < totalPixels; i++) {
+                if (colorDepth === 32) {
+                  const r = rawTiles[pOff];
+                  const g = rawTiles[pOff + 1];
+                  const b = rawTiles[pOff + 2];
+                  const a = rawTiles[pOff + 3];
+                  pOff += 4;
+                  tPixels[i] = a > 0 ? rgbToHex(r, g, b) : null;
+                } else if (colorDepth === 8) {
+                  const pIdx = rawTiles[pOff++];
+                  tPixels[i] = pIdx !== transparentIndex ? pIdx : null;
+                }
+              }
+            } catch (e) {
+              console.warn("Failed to inflate tileset data", e);
+            }
+          }
+
+          const tileset: Tileset = {
+            id: tsId,
+            name: tsName,
+            tileWidth: tW,
+            tileHeight: tH,
+            baseIndex,
+            tilesCount: numTiles,
+            pixels: tPixels,
+            externalFileId: extFileId,
+            externalTilesetId: extTilesetId
+          };
+          tilesets.push(tileset);
+          lastReadObject = tileset;
+          break;
+        }
+
+        // --- 0x2007: Color Profile Chunk ---
+        case 0x2007: {
+          const cpType = reader.readWord();
+          const cpFlags = reader.readWord();
+          const fixedGamma = reader.readFixed();
+          reader.readBytes(8);
+
+          let iccData: Uint8Array | undefined = undefined;
+          if (cpType === 2) {
+            const iccLen = reader.readDword();
+            iccData = reader.readBytes(iccLen);
+          }
+
+          colorProfile = {
+            type: cpType,
+            flags: cpFlags,
+            gamma: fixedGamma,
+            iccData
+          };
+          break;
+        }
+
+        default:
+          break;
+      }
+
+      reader.seek(chunkDataEnd);
+    }
+
+    reader.seek(frameEndPos);
+  }
+
+  // Calculate parentId for each layer based on childLevel stack
+  const groupStack: { id: string; level: number }[] = [];
+  for (const layer of layers) {
+    const level = layer.childLevel ?? 0;
+    while (groupStack.length > 0 && groupStack[groupStack.length - 1].level >= level) {
+      groupStack.pop();
+    }
+    if (groupStack.length > 0) {
+      layer.parentId = groupStack[groupStack.length - 1].id;
+    } else {
+      layer.parentId = null;
+    }
+    if (layer.type === 'group') {
+      groupStack.push({ id: layer.id, level });
+    }
+  }
+
+  // Reorder layers from Aseprite chunk order (where group headers precede their children)
+  // to PixelForge Studio app order (where group headers follow their children in the bottom-to-top array)
+  const reorderedLayers = convertAsepriteChunkOrderToAppOrder(layers);
+  layers.length = 0;
+  layers.push(...reorderedLayers);
+
+  if (palette.length === 0) {
+    palette.push('#000000', '#ffffff', '#ff0000', '#00ff00', '#0000ff');
+  }
+
   if (layers.length === 0) {
+    const lId = `layer-${Date.now()}`;
     layers.push({
-      id: 'layer-0',
+      id: lId,
       name: 'Layer 1',
       visible: true,
       locked: false,
@@ -544,42 +1203,44 @@ export function parseAseprite(buffer: ArrayBuffer, fileName?: string): ProjectSt
     });
   }
 
-  // Ensure default frame if none found
-  if (frames.length === 0) {
-    const defaultLayerData: Record<string, PixelGrid> = {};
-    layers.forEach((l) => {
-      defaultLayerData[l.id] = new Array(width * height).fill(null);
+  const frames: Frame[] = [];
+  for (let f = 0; f < numFrames; f++) {
+    const fId = `frame-${f}-${Date.now()}`;
+    const fData: Record<string, PixelGrid> = {};
+
+    layers.forEach(layer => {
+      fData[layer.id] = frameLayerData[f][layer.id] || new Array(width * height).fill(null);
     });
+
     frames.push({
-      id: 'frame-0',
-      layerData: defaultLayerData
+      id: fId,
+      duration: frameDurations[f] || 100,
+      layerData: fData
     });
   }
 
-  const cleanTitle = fileName ? fileName.replace(/\.[^/.]+$/, "") : 'Pixel Art';
+  const cleanTitle = filename.replace(/\.[^/.]+$/, "") || 'imported';
 
-  const state: ProjectState = {
+  return {
     id: `project-${Date.now()}`,
     title: cleanTitle,
     width,
     height,
-    colorMode: colorDepth === 8 ? 'indexed' : 'rgba',
+    colorMode: colorMode as 'indexed' | 'rgba',
     layers,
     frames,
     activeLayerId: layers[0].id,
     selectedLayerIds: [layers[0].id],
     activeFrameIndex: 0,
     selectedFrameIndices: [0],
-    palette: palette.length > 0 ? palette : ['#000000', '#ffffff'],
+    palette,
     paletteLibrary: [],
     activePaletteId: '',
     primaryColor: palette[0] || '#ffffff',
     secondaryColor: palette[1] || '#000000',
-
     symmetry: { x: false, y: false },
     inkType: 'simple',
     shades: ['#000000', '#5d5d5d', '#b4b4b4', '#ffffff'],
-
     tool: 'pencil',
     brushSize: 1,
     brushShape: 'circle',
@@ -587,14 +1248,513 @@ export function parseAseprite(buffer: ArrayBuffer, fileName?: string): ProjectSt
     pixelPerfect: false,
     ditheringEnabled: false,
     rotationAlgorithm: 'nearest',
-    zoom: Math.min(32, Math.floor(512 / Math.max(width, height))),
+    zoom: Math.min(32, Math.max(1, Math.floor(512 / Math.max(width, height)))),
     onionSkin: false,
-    showGrid: false,
+    showGrid: gridWidth > 0 && gridHeight > 0,
+    grid: { x: gridX, y: gridY, width: gridWidth, height: gridHeight },
+    pixelRatio: { width: pixWidth || 1, height: pixHeight || 1 },
+    tags,
+    slices,
+    tilesets,
+    externalFiles,
+    colorProfile,
+    transparentIndex,
+    paletteNames,
+    userData: spriteUserData,
+    mask,
     selection: null,
     selectionMode: 'replace',
     tiled: false,
     referenceImage: null
   };
+}
 
-  return state;
+/**
+ * Encodes a ProjectState object into a binary Aseprite (.ase/.aseprite) Uint8Array buffer.
+ */
+export function encodeAseprite(state: ProjectState): Uint8Array {
+  const { 
+    width, height, colorMode, palette, paletteNames, layers, frames, 
+    tags = [], slices = [], tilesets = [], externalFiles = [], userData 
+  } = state;
+  const numFrames = frames.length;
+  const isIndexed = colorMode === 'indexed';
+  const colorDepth = isIndexed ? 8 : 32;
+
+  const hasUuids = layers.some(l => l.uuid);
+  const headerFlags = 3 | (hasUuids ? 4 : 0);
+
+  const frameBuffers: Uint8Array[] = [];
+
+  for (let frameIdx = 0; frameIdx < numFrames; frameIdx++) {
+    const frame = frames[frameIdx];
+    const frameChunksWriter = new BinaryWriter(1024 * 64);
+    let numChunksInFrame = 0;
+
+    // --- Frame 0 Special Header Chunks ---
+    if (frameIdx === 0) {
+      // 1. Color Profile Chunk (0x2007)
+      const cpWriter = new BinaryWriter(32);
+      cpWriter.writeDword(0);
+      cpWriter.writeWord(0x2007);
+      cpWriter.writeWord(state.colorProfile?.type ?? 1);
+      cpWriter.writeWord(state.colorProfile?.flags ?? 0);
+      cpWriter.writeFixed(state.colorProfile?.gamma ?? 1.0);
+      cpWriter.writeBytes(new Uint8Array(8));
+      if (state.colorProfile?.type === 2 && state.colorProfile.iccData) {
+        cpWriter.writeDword(state.colorProfile.iccData.length);
+        cpWriter.writeBytes(state.colorProfile.iccData);
+      }
+      const cpBytes = cpWriter.getBytes();
+      new DataView(cpBytes.buffer).setUint32(0, cpBytes.length, true);
+      frameChunksWriter.writeBytes(cpBytes);
+      numChunksInFrame++;
+
+      // 2. Palette Chunk (0x2019)
+      const palWriter = new BinaryWriter(1024 * 8);
+      palWriter.writeDword(0);
+      palWriter.writeWord(0x2019);
+      palWriter.writeDword(palette.length);
+      palWriter.writeDword(0);
+      palWriter.writeDword(palette.length - 1);
+      palWriter.writeBytes(new Uint8Array(8));
+
+      for (let p = 0; p < palette.length; p++) {
+        const hex = palette[p] || '#000000';
+        const [r, g, b] = hexToRgb(hex);
+        const a = 255;
+        const cName = paletteNames?.[p];
+        palWriter.writeWord(cName ? 1 : 0);
+        palWriter.writeByte(r);
+        palWriter.writeByte(g);
+        palWriter.writeByte(b);
+        palWriter.writeByte(a);
+        if (cName) {
+          palWriter.writeString(cName);
+        }
+      }
+      const palBytes = palWriter.getBytes();
+      new DataView(palBytes.buffer).setUint32(0, palBytes.length, true);
+      frameChunksWriter.writeBytes(palBytes);
+      numChunksInFrame++;
+
+      // 3. External Files Chunk (0x2008)
+      if (externalFiles.length > 0) {
+        const extWriter = new BinaryWriter(256);
+        extWriter.writeDword(0);
+        extWriter.writeWord(0x2008);
+        extWriter.writeDword(externalFiles.length);
+        extWriter.writeBytes(new Uint8Array(8));
+        for (const ext of externalFiles) {
+          extWriter.writeDword(ext.id);
+          extWriter.writeByte(ext.type);
+          extWriter.writeBytes(new Uint8Array(7));
+          extWriter.writeString(ext.filename);
+        }
+        const extBytes = extWriter.getBytes();
+        new DataView(extBytes.buffer).setUint32(0, extBytes.length, true);
+        frameChunksWriter.writeBytes(extBytes);
+        numChunksInFrame++;
+      }
+
+      // 4. Layer Chunks (0x2004)
+      const asepriteLayers = convertAppOrderToAsepriteChunkOrder(layers);
+      for (let lIdx = 0; lIdx < asepriteLayers.length; lIdx++) {
+        const layer = asepriteLayers[lIdx];
+        const lWriter = new BinaryWriter(256);
+        lWriter.writeDword(0);
+        lWriter.writeWord(0x2004);
+
+        let lFlags = 0;
+        if (layer.visible) lFlags |= 1;
+        if (!layer.locked) lFlags |= 2;
+        if (layer.lockMovement) lFlags |= 4;
+        if (layer.isBackground) lFlags |= 8;
+        if (layer.preferLinkedCels) lFlags |= 16;
+        if (layer.collapsed) lFlags |= 32;
+        if (layer.isReference) lFlags |= 64;
+
+        let lType = 0;
+        if (layer.type === 'group') lType = 1;
+        if (layer.type === 'tilemap') lType = 2;
+
+        lWriter.writeWord(lFlags);
+        lWriter.writeWord(lType);
+        
+        let computedChildLevel = layer.childLevel ?? 0;
+        if (layer.parentId) {
+          let p = asepriteLayers.find(l => l.id === layer.parentId);
+          let depth = 0;
+          while (p) {
+            depth++;
+            p = asepriteLayers.find(l => l.id === p?.parentId);
+          }
+          computedChildLevel = depth;
+        }
+        lWriter.writeWord(computedChildLevel);
+        lWriter.writeWord(width);
+        lWriter.writeWord(height);
+        lWriter.writeWord(BLEND_MODE_TO_ASEPRITE[layer.blendMode] ?? 0);
+        lWriter.writeByte(Math.round(((layer.opacity ?? 100) / 100) * 255));
+        lWriter.writeBytes(new Uint8Array(3));
+        lWriter.writeString(layer.name);
+
+        if (lType === 2) {
+          lWriter.writeDword(layer.tilesetIndex || 0);
+        }
+
+        if (headerFlags & 4) {
+          const hex = (layer.uuid || '').replace(/-/g, '').padStart(32, '0');
+          const uuidBytes = new Uint8Array(16);
+          for (let i = 0; i < 16; i++) {
+            uuidBytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16) || 0;
+          }
+          lWriter.writeBytes(uuidBytes);
+        }
+
+        const lBytes = lWriter.getBytes();
+        new DataView(lBytes.buffer).setUint32(0, lBytes.length, true);
+        frameChunksWriter.writeBytes(lBytes);
+        numChunksInFrame++;
+
+        if (layer.userData) {
+          const uBytes = encodeUserDataChunk(layer.userData);
+          frameChunksWriter.writeBytes(uBytes);
+          numChunksInFrame++;
+        }
+      }
+
+      // 5. Tileset Chunks (0x2023)
+      for (const ts of tilesets) {
+        const tsWriter = new BinaryWriter(1024);
+        tsWriter.writeDword(0);
+        tsWriter.writeWord(0x2023);
+        tsWriter.writeDword(ts.id);
+
+        let tsFlags = 0;
+        if (ts.externalFileId !== undefined) tsFlags |= 1;
+        if (ts.pixels && ts.pixels.length > 0) tsFlags |= 2;
+
+        tsWriter.writeDword(tsFlags);
+        tsWriter.writeDword(ts.tilesCount);
+        tsWriter.writeWord(ts.tileWidth);
+        tsWriter.writeWord(ts.tileHeight);
+        tsWriter.writeShort(ts.baseIndex);
+        tsWriter.writeBytes(new Uint8Array(14));
+        tsWriter.writeString(ts.name);
+
+        if (tsFlags & 1) {
+          tsWriter.writeDword(ts.externalFileId || 0);
+          tsWriter.writeDword(ts.externalTilesetId || 0);
+        }
+
+        if (tsFlags & 2 && ts.pixels) {
+          const totalPixels = ts.tileWidth * ts.tileHeight * ts.tilesCount;
+          const bpp = isIndexed ? 1 : 4;
+          const rawTiles = new Uint8Array(totalPixels * bpp);
+          let pOff = 0;
+          for (let i = 0; i < totalPixels; i++) {
+            const val = ts.pixels[i];
+            if (isIndexed) {
+              rawTiles[pOff++] = typeof val === 'number' ? (val & 0xff) : (state.transparentIndex ?? 0);
+            } else {
+              if (typeof val === 'string') {
+                const [r, g, b] = hexToRgb(val);
+                rawTiles[pOff++] = r;
+                rawTiles[pOff++] = g;
+                rawTiles[pOff++] = b;
+                rawTiles[pOff++] = 255;
+              } else {
+                rawTiles[pOff++] = 0;
+                rawTiles[pOff++] = 0;
+                rawTiles[pOff++] = 0;
+                rawTiles[pOff++] = 0;
+              }
+            }
+          }
+          const compTiles = deflate(rawTiles);
+          tsWriter.writeDword(compTiles.length);
+          tsWriter.writeBytes(compTiles);
+        }
+
+        const tsBytes = tsWriter.getBytes();
+        new DataView(tsBytes.buffer).setUint32(0, tsBytes.length, true);
+        frameChunksWriter.writeBytes(tsBytes);
+        numChunksInFrame++;
+
+        if (ts.userData) {
+          const uBytes = encodeUserDataChunk(ts.userData);
+          frameChunksWriter.writeBytes(uBytes);
+          numChunksInFrame++;
+        }
+      }
+
+      // 6. Tags Chunk (0x2018)
+      if (tags.length > 0) {
+        const tWriter = new BinaryWriter(1024);
+        tWriter.writeDword(0);
+        tWriter.writeWord(0x2018);
+        tWriter.writeWord(tags.length);
+        tWriter.writeBytes(new Uint8Array(8));
+
+        const dirMap: Record<string, number> = {
+          'forward': 0, 'reverse': 1, 'ping-pong': 2, 'ping-pong-reverse': 3
+        };
+
+        for (const tag of tags) {
+          tWriter.writeWord(tag.from);
+          tWriter.writeWord(tag.to);
+          tWriter.writeByte(dirMap[tag.direction || 'forward'] ?? 0);
+          tWriter.writeWord(tag.repeat || 0);
+          tWriter.writeBytes(new Uint8Array(6));
+          const [tr, tg, tb] = tag.color ? hexToRgb(tag.color) : [0, 0, 0];
+          tWriter.writeByte(tr);
+          tWriter.writeByte(tg);
+          tWriter.writeByte(tb);
+          tWriter.writeByte(0);
+          tWriter.writeString(tag.name);
+        }
+        const tBytes = tWriter.getBytes();
+        new DataView(tBytes.buffer).setUint32(0, tBytes.length, true);
+        frameChunksWriter.writeBytes(tBytes);
+        numChunksInFrame++;
+
+        if (tags.some(t => t.userData)) {
+          for (const tag of tags) {
+            const uBytes = encodeUserDataChunk(tag.userData || {});
+            frameChunksWriter.writeBytes(uBytes);
+            numChunksInFrame++;
+          }
+        }
+      }
+
+      // 7. Slices Chunk (0x2022)
+      for (const slice of slices) {
+        const sWriter = new BinaryWriter(512);
+        sWriter.writeDword(0);
+        sWriter.writeWord(0x2022);
+        sWriter.writeDword(slice.keys.length);
+
+        let sFlags = 0;
+        if (slice.keys.some(k => k.center)) sFlags |= 1;
+        if (slice.keys.some(k => k.pivot)) sFlags |= 2;
+
+        sWriter.writeDword(sFlags);
+        sWriter.writeDword(0);
+        sWriter.writeString(slice.name);
+
+        for (const key of slice.keys) {
+          sWriter.writeDword(key.frame || key.frameIndex || 0);
+          sWriter.writeLong(key.x);
+          sWriter.writeLong(key.y);
+          sWriter.writeDword(key.w);
+          sWriter.writeDword(key.h);
+
+          if (sFlags & 1) {
+            sWriter.writeLong(key.center?.x || 0);
+            sWriter.writeLong(key.center?.y || 0);
+            sWriter.writeDword(key.center?.w || 0);
+            sWriter.writeDword(key.center?.h || 0);
+          }
+
+          if (sFlags & 2) {
+            sWriter.writeLong(key.pivot?.x || 0);
+            sWriter.writeLong(key.pivot?.y || 0);
+          }
+        }
+        const sBytes = sWriter.getBytes();
+        new DataView(sBytes.buffer).setUint32(0, sBytes.length, true);
+        frameChunksWriter.writeBytes(sBytes);
+        numChunksInFrame++;
+
+        if (slice.userData) {
+          const uBytes = encodeUserDataChunk(slice.userData);
+          frameChunksWriter.writeBytes(uBytes);
+          numChunksInFrame++;
+        }
+      }
+
+      // 8. Sprite User Data Chunk (0x2020)
+      if (userData) {
+        const uBytes = encodeUserDataChunk(userData);
+        frameChunksWriter.writeBytes(uBytes);
+        numChunksInFrame++;
+      }
+    }
+
+    // --- Cel Chunks for this frame ---
+    const asepriteLayers = convertAppOrderToAsepriteChunkOrder(layers);
+    for (let lIdx = 0; lIdx < asepriteLayers.length; lIdx++) {
+      const layer = asepriteLayers[lIdx];
+      const px = frame.layerData[layer.id];
+      if (!px) continue;
+
+      let linkedFrameIdx = -1;
+      if (frameIdx > 0) {
+        for (let pf = 0; pf < frameIdx; pf++) {
+          const prevPx = frames[pf].layerData[layer.id];
+          if (prevPx && isPixelGridEqual(px, prevPx)) {
+            linkedFrameIdx = pf;
+            break;
+          }
+        }
+      }
+
+      if (linkedFrameIdx >= 0) {
+        const celWriter = new BinaryWriter(32);
+        celWriter.writeDword(0);
+        celWriter.writeWord(0x2005);
+        celWriter.writeWord(lIdx);
+        celWriter.writeShort(0);
+        celWriter.writeShort(0);
+        celWriter.writeByte(255);
+        celWriter.writeWord(1); // Linked
+        celWriter.writeShort(0);
+        celWriter.writeBytes(new Uint8Array(5));
+        celWriter.writeWord(linkedFrameIdx);
+
+        const celBytes = celWriter.getBytes();
+        new DataView(celBytes.buffer).setUint32(0, celBytes.length, true);
+        frameChunksWriter.writeBytes(celBytes);
+        numChunksInFrame++;
+      } else {
+        let minX = width, minY = height, maxX = -1, maxY = -1;
+        let hasPixels = false;
+
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const val = px[y * width + x];
+            if (val !== null && val !== undefined) {
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+              hasPixels = true;
+            }
+          }
+        }
+
+        if (hasPixels) {
+          const celW = maxX - minX + 1;
+          const celH = maxY - minY + 1;
+          const bpp = isIndexed ? 1 : 4;
+          const rawBuffer = new Uint8Array(celW * celH * bpp);
+
+          let rawOffset = 0;
+          for (let cy = 0; cy < celH; cy++) {
+            for (let cx = 0; cx < celW; cx++) {
+              const srcX = minX + cx;
+              const srcY = minY + cy;
+              const val = px[srcY * width + srcX];
+
+              if (isIndexed) {
+                if (typeof val === 'number') {
+                  rawBuffer[rawOffset++] = val & 0xff;
+                } else if (typeof val === 'string') {
+                  const [r, g, b] = hexToRgb(val);
+                  rawBuffer[rawOffset++] = findNearestPaletteIndex(r, g, b, palette);
+                } else {
+                  rawBuffer[rawOffset++] = state.transparentIndex ?? 0;
+                }
+              } else {
+                if (typeof val === 'string') {
+                  const [r, g, b] = hexToRgb(val);
+                  rawBuffer[rawOffset++] = r;
+                  rawBuffer[rawOffset++] = g;
+                  rawBuffer[rawOffset++] = b;
+                  rawBuffer[rawOffset++] = 255;
+                } else if (typeof val === 'number' && palette[val]) {
+                  const [r, g, b] = hexToRgb(palette[val]);
+                  rawBuffer[rawOffset++] = r;
+                  rawBuffer[rawOffset++] = g;
+                  rawBuffer[rawOffset++] = b;
+                  rawBuffer[rawOffset++] = 255;
+                } else {
+                  rawBuffer[rawOffset++] = 0;
+                  rawBuffer[rawOffset++] = 0;
+                  rawBuffer[rawOffset++] = 0;
+                  rawBuffer[rawOffset++] = 0;
+                }
+              }
+            }
+          }
+
+          const compressedCelBytes = deflate(rawBuffer);
+
+          const celWriter = new BinaryWriter(compressedCelBytes.length + 64);
+          celWriter.writeDword(0);
+          celWriter.writeWord(0x2005);
+          celWriter.writeWord(lIdx);
+          celWriter.writeShort(minX);
+          celWriter.writeShort(minY);
+          celWriter.writeByte(255);
+          celWriter.writeWord(2); // Compressed Image
+          celWriter.writeShort(0);
+          celWriter.writeBytes(new Uint8Array(5));
+          celWriter.writeWord(celW);
+          celWriter.writeWord(celH);
+          celWriter.writeBytes(compressedCelBytes);
+
+          const celBytes = celWriter.getBytes();
+          new DataView(celBytes.buffer).setUint32(0, celBytes.length, true);
+          frameChunksWriter.writeBytes(celBytes);
+          numChunksInFrame++;
+        }
+      }
+    }
+
+    const chunksData = frameChunksWriter.getBytes();
+    const frameHeaderWriter = new BinaryWriter(16 + chunksData.length);
+    const frameTotalBytes = 16 + chunksData.length;
+
+    frameHeaderWriter.writeDword(frameTotalBytes);
+    frameHeaderWriter.writeWord(0xf1fa);
+    frameHeaderWriter.writeWord(numChunksInFrame > 0xffff ? 0xffff : numChunksInFrame);
+    frameHeaderWriter.writeWord(frame.duration || 100);
+    frameHeaderWriter.writeBytes(new Uint8Array(2));
+    frameHeaderWriter.writeDword(numChunksInFrame);
+    frameHeaderWriter.writeBytes(chunksData);
+
+    frameBuffers.push(frameHeaderWriter.getBytes());
+  }
+
+  let totalFramesBytes = 0;
+  frameBuffers.forEach(b => totalFramesBytes += b.length);
+  const totalFileSize = 128 + totalFramesBytes;
+
+  const headerWriter = new BinaryWriter(128);
+  headerWriter.writeDword(totalFileSize);
+  headerWriter.writeWord(0xa5e0);
+  headerWriter.writeWord(numFrames);
+  headerWriter.writeWord(width);
+  headerWriter.writeWord(height);
+  headerWriter.writeWord(colorDepth);
+  headerWriter.writeDword(headerFlags);
+  headerWriter.writeWord(frames[0]?.duration || 100);
+  headerWriter.writeDword(0);
+  headerWriter.writeDword(0);
+  headerWriter.writeByte(state.transparentIndex ?? 0);
+  headerWriter.writeBytes(new Uint8Array(3));
+  headerWriter.writeWord(palette.length);
+  headerWriter.writeByte(state.pixelRatio?.width || 1);
+  headerWriter.writeByte(state.pixelRatio?.height || 1);
+  headerWriter.writeShort(state.grid?.x || 0);
+  headerWriter.writeShort(state.grid?.y || 0);
+  headerWriter.writeWord(state.grid?.width || 0);
+  headerWriter.writeWord(state.grid?.height || 0);
+  headerWriter.writeBytes(new Uint8Array(84));
+
+  const fileWriter = new BinaryWriter(totalFileSize);
+  fileWriter.writeBytes(headerWriter.getBytes());
+  frameBuffers.forEach(fBuf => fileWriter.writeBytes(fBuf));
+
+  return fileWriter.getBytes();
+}
+
+function isPixelGridEqual(a: PixelGrid, b: PixelGrid): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
 }

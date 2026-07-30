@@ -14,7 +14,34 @@ export interface Modifiers {
 export type PixelValue = string | number | null;
 export type PixelGrid = PixelValue[]; // Flat array of hex colors (RGBA), indices (Indexed), or null (transparent)
 
-export type LayerBlendMode = 'normal' | 'multiply' | 'screen' | 'overlay' | 'darken' | 'lighten' | 'color-dodge' | 'color-burn' | 'hard-light' | 'soft-light' | 'difference' | 'exclusion';
+export type LayerBlendMode = 'normal' | 'multiply' | 'screen' | 'overlay' | 'darken' | 'lighten' | 'color-dodge' | 'color-burn' | 'hard-light' | 'soft-light' | 'difference' | 'exclusion' | 'hue' | 'saturation' | 'color' | 'luminosity' | 'addition' | 'subtract' | 'divide';
+
+export type LayerType = 'normal' | 'group' | 'tilemap';
+
+export interface UserPropertyMap {
+  key: number; // 0 = user properties, != 0 = extension Entry ID
+  properties: Record<string, any>;
+}
+
+export interface UserData {
+  text?: string;
+  color?: { r: number; g: number; b: number; a: number };
+  propertiesMaps?: UserPropertyMap[];
+}
+
+export interface ExternalFile {
+  id: number;
+  type: number; // 0=External palette, 1=External tileset, 2=Extension name for properties, 3=Extension name for tile management
+  filename: string;
+}
+
+export interface CelExtra {
+  flags: number;
+  preciseX: number;
+  preciseY: number;
+  widthInSprite: number;
+  heightInSprite: number;
+}
 
 export interface Layer {
   id: string;
@@ -23,10 +50,76 @@ export interface Layer {
   locked: boolean;
   opacity: number; // 0 to 100
   blendMode: LayerBlendMode;
+  type?: LayerType;
+  childLevel?: number;
+  parentId?: string | null;
+  collapsed?: boolean;
+  tilesetIndex?: number;
+  uuid?: string;
+  userData?: UserData;
+  colorTag?: string;
+  isBackground?: boolean;
+  lockMovement?: boolean;
+  preferLinkedCels?: boolean;
+  isReference?: boolean;
+}
+
+export interface FrameTag {
+  id: string;
+  name: string;
+  from: number;
+  to: number;
+  direction?: 'forward' | 'reverse' | 'ping-pong' | 'ping-pong-reverse';
+  color?: string;
+  loopAnimation?: number; // 0=Forward, 1=Reverse, 2=Ping-pong
+  repeat?: number;
+  userData?: UserData;
+}
+
+export interface SliceKey {
+  frameIndex?: number;
+  frame?: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  center?: { x: number; y: number; w: number; h: number };
+  pivot?: { x: number; y: number };
+}
+
+export interface Slice {
+  id: string;
+  name: string;
+  color?: string;
+  keys: SliceKey[];
+  userData?: UserData;
+}
+
+export interface Tileset {
+  id: number;
+  name: string;
+  tileWidth: number;
+  tileHeight: number;
+  baseIndex: number;
+  tilesCount: number;
+  pixels?: PixelGrid;
+  externalFileId?: number;
+  externalTilesetId?: number;
+  userData?: UserData;
+  flags?: number;
+  tileUserData?: Record<number, UserData>;
+}
+
+export interface ColorProfile {
+  type: number;
+  flags: number;
+  gamma: number;
+  iccData?: Uint8Array;
 }
 
 export interface Frame {
   id: string;
+  duration?: number; // duration in ms (default 100)
   // Key represents Layer ID, Value is the pixel data for that layer on this frame
   layerData: Record<string, PixelGrid>; 
 }
@@ -93,6 +186,19 @@ export interface ProjectState {
   // Selection
   selection: Set<number> | null;
   selectionMode: SelectionMode;
+
+  // Aseprite extra data
+  grid?: { x: number; y: number; width: number; height: number };
+  pixelRatio?: { width: number; height: number };
+  tags?: FrameTag[];
+  slices?: Slice[];
+  tilesets?: Tileset[];
+  externalFiles?: ExternalFile[];
+  colorProfile?: ColorProfile;
+  transparentIndex?: number;
+  paletteNames?: Record<number, string>;
+  userData?: UserData;
+  mask?: { x: number; y: number; width: number; height: number; name?: string; bitmap?: Uint8Array };
 
   // File System
   fileHandle?: FileSystemFileHandle;

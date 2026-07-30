@@ -7,6 +7,10 @@ import { NewProjectDialog } from './components/NewProjectDialog';
 import { CanvasResizeDialog } from './components/CanvasResizeDialog';
 import { ReferenceImageDialog } from './components/ReferenceImageDialog';
 import { ExportDialog, ExportFormat } from './components/ExportDialog';
+import { SpritePropertiesDialog } from './components/SpritePropertiesDialog';
+import { LayerPropertiesDialog } from './components/LayerPropertiesDialog';
+import { SlicesDialog } from './components/SlicesDialog';
+import { Layer, FrameTag } from './types';
 
 // Layouts
 import { DesktopLayout } from './components/DesktopLayout';
@@ -27,6 +31,16 @@ export default function App() {
   const [isNewProjectDialogOpen, setIsNewProjectDialogOpen] = useState(false);
   const [isResizeCanvasDialogOpen, setIsResizeCanvasDialogOpen] = useState(false);
   const [isReferenceImageDialogOpen, setIsReferenceImageDialogOpen] = useState(false);
+  const [isSpritePropertiesOpen, setIsSpritePropertiesOpen] = useState(false);
+  const [isSlicesOpen, setIsSlicesOpen] = useState(false);
+  const [layerPropertiesState, setLayerPropertiesState] = useState<{ isOpen: boolean; layer: Layer | null }>({
+    isOpen: false,
+    layer: null,
+  });
+  const [tagPropertiesState, setTagPropertiesState] = useState<{ isOpen: boolean; tag: FrameTag | null }>({
+    isOpen: false,
+    tag: null,
+  });
   const [exportDialog, setExportDialog] = useState<{ isOpen: boolean; initialFormat: ExportFormat }>({
     isOpen: false,
     initialFormat: 'gif'
@@ -98,6 +112,16 @@ export default function App() {
         createProject: () => setIsNewProjectDialogOpen(true),
         openResizeDialog: () => setIsResizeCanvasDialogOpen(true),
         openReferenceImageDialog: () => setIsReferenceImageDialogOpen(true),
+        openSpritePropertiesDialog: () => setIsSpritePropertiesOpen(true),
+        openSlicesDialog: () => setIsSlicesOpen(true),
+        openLayerPropertiesDialog: (layer?: Layer) => setLayerPropertiesState({
+          isOpen: true,
+          layer: layer || project.state.layers.find(l => l.id === project.state.activeLayerId) || null,
+        }),
+        openTagPropertiesDialog: (tag?: FrameTag) => setTagPropertiesState({
+          isOpen: true,
+          tag: tag || null,
+        }),
         openExportDialog,
         downloadImage: () => openExportDialog('png'),
         downloadSpriteSheet: () => openExportDialog('spritesheet'),
@@ -148,11 +172,25 @@ export default function App() {
       project: {
         ...project,
         createProject: () => setIsNewProjectDialogOpen(true),
+        openSpritePropertiesDialog: () => setIsSpritePropertiesOpen(true),
+        openSlicesDialog: () => setIsSlicesOpen(true),
+        openLayerPropertiesDialog: (layer?: Layer) => setLayerPropertiesState({
+          isOpen: true,
+          layer: layer || project.state.layers.find(l => l.id === project.state.activeLayerId) || null,
+        }),
+        openTagPropertiesDialog: (tag?: FrameTag) => setTagPropertiesState({
+          isOpen: true,
+          tag: tag || null,
+        }),
         openExportDialog,
         downloadImage: () => openExportDialog('png'),
         downloadSpriteSheet: () => openExportDialog('spritesheet'),
         downloadGif: () => openExportDialog('gif')
       },
+      activeTagPopover: tagPropertiesState,
+      onCloseTagPopover: () => setTagPropertiesState({ isOpen: false, tag: null }),
+      layerPropertiesState,
+      onCloseLayerProperties: () => setLayerPropertiesState({ isOpen: false, layer: null }),
       canvasTools,
       fileSystem,
       handleFileChange,
@@ -201,6 +239,21 @@ export default function App() {
           onClose={() => setExportDialog(prev => ({ ...prev, isOpen: false }))}
           state={state}
           initialFormat={exportDialog.initialFormat}
+        />
+
+        <SpritePropertiesDialog
+          isOpen={isSpritePropertiesOpen}
+          onClose={() => setIsSpritePropertiesOpen(false)}
+          state={state}
+          onUpdateSpriteProperties={project.updateSpriteProperties}
+        />
+
+
+        <SlicesDialog
+          isOpen={isSlicesOpen}
+          onClose={() => setIsSlicesOpen(false)}
+          state={state}
+          onUpdateSlices={project.updateSlices}
         />
 
         {isMobile ? (

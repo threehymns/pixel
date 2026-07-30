@@ -1,7 +1,7 @@
 
 import { useRef, useEffect } from 'react';
 import { ProjectState, PixelGrid, Position, ToolType, Modifiers, PixelValue } from '../types';
-import { bresenhamLine, pixelPerfectFilter, getIndex, floodFill, getCoords, bresenhamEllipse, getFilledEllipse, rotateSelectionPixels, rotateSelectionMask, applyConvolution, hexToRgb, findNearestPaletteIndex, rgbToHex, scaleSelectionPixels, scaleSelectionMask } from '../utils';
+import { bresenhamLine, pixelPerfectFilter, getIndex, floodFill, getCoords, bresenhamEllipse, getFilledEllipse, rotateSelectionPixels, rotateSelectionMask, applyConvolution, hexToRgb, findNearestPaletteIndex, rgbToHex, scaleSelectionPixels, scaleSelectionMask, isLayerVisible } from '../utils';
 
 export function useCanvasTools(
   state: ProjectState,
@@ -65,7 +65,7 @@ export function useCanvasTools(
         let pickedHex: string | null = null;
         for (let i = stateRef.current.layers.length - 1; i >= 0; i--) {
             const l = stateRef.current.layers[i];
-            if (!l.visible) continue;
+            if (!isLayerVisible(l, stateRef.current.layers)) continue;
             const pxVal = currentFrame.layerData[l.id]?.[getIndex(x, y, width)];
             if (pxVal !== null && pxVal !== undefined) {
                 pickedHex = typeof pxVal === 'number' ? palette[pxVal] : pxVal;

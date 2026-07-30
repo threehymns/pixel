@@ -12,6 +12,7 @@
   "dependencies": {
     "@base-ui/react": "^1.2.0",
     "@radix-ui/react-context-menu": "^2.2.16",
+    "@radix-ui/react-popover": "^1.1.23",
     "@types/omggif": "^1.0.5",
     "@types/pako": "^2.0.4",
     "allotment": "1.20.2",
