@@ -51,9 +51,9 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose,
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] bg-black/50 backdrop-blur-[1px] flex justify-center items-start pt-[10vh]" onClick={onClose}>
+    <div className="fixed inset-0 z-[100] bg-black/50 backdrop-blur-[1px] flex justify-center items-start pt-[10vh] px-3" onClick={onClose}>
       <div 
-        className="w-[600px] bg-popover border border-border shadow-2xl rounded-lg overflow-hidden flex flex-col text-popover-foreground animate-in fade-in zoom-in-95 duration-100"
+        className="w-full max-w-[600px] bg-popover border border-border shadow-2xl rounded-lg overflow-hidden flex flex-col text-popover-foreground animate-in fade-in zoom-in-95 duration-100"
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center px-3 py-3 border-b border-border">

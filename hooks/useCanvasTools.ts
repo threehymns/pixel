@@ -50,6 +50,7 @@ export function useCanvasTools(
   const handleDrawStart = (pos: Position, modifiers: Modifiers) => {
     const { activeFrameIndex, activeLayerId, frames } = stateRef.current;
     const currentFrame = frames[activeFrameIndex];
+    if (!currentFrame) return;
     const layerData = currentFrame.layerData[activeLayerId];
     strokeStartDataRef.current = layerData ? [...layerData] : new Array(stateRef.current.width * stateRef.current.height).fill(null);
     strokePathRef.current = [];
@@ -59,6 +60,7 @@ export function useCanvasTools(
   const handleDraw = (x: number, y: number, modifiers: Modifiers) => {
     const { activeFrameIndex, activeLayerId, frames, tool, primaryColor, secondaryColor, width, height, selection, colorMode, palette, inkType, ditheringEnabled, symmetry } = stateRef.current;
     const currentFrame = frames[activeFrameIndex];
+    if (!currentFrame) return;
     
     const isPicking = tool === 'eyedropper' || (tool === 'pencil' && modifiers.alt);
     if (isPicking) {

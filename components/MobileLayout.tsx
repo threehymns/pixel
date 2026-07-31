@@ -21,7 +21,7 @@ import {
   Settings, Waves, ChevronUp, ChevronDown, Wand2,
   Sparkles, ArrowRightLeft, Palette as PaletteIcon, RefreshCcw
 } from './Icons';
-import { Crop, Tag, Maximize2 } from 'lucide-react';
+import { Crop, Tag, Maximize2, Scissors } from 'lucide-react';
 import { SELECTION_TOOLS } from '../constants';
 import { CustomSlider } from './ui/slider';
 
@@ -142,24 +142,29 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
 
   const tools: { id: ToolType, icon: React.ReactNode, label: string }[] = [
     { id: 'pencil', icon: <Pencil size={22} />, label: 'Pencil' },
-    { id: 'smudge', icon: <Hand size={22} />, label: 'Smudge' },
     { id: 'eraser', icon: <Eraser size={22} />, label: 'Eraser' },
-    { id: 'blur', icon: <Droplets size={22} />, label: 'Blur' },
-    { id: 'sharpen', icon: <Zap size={22} />, label: 'Sharpen' },
     { id: 'bucket', icon: <PaintBucket size={22} />, label: 'Fill' },
     { id: 'eyedropper', icon: <Pipette size={22} />, label: 'Picker' },
     { id: 'move', icon: <MousePointer2 size={22} />, label: 'Move' },
     { id: 'rect', icon: <Square size={22} />, label: 'Rect' },
+    { id: 'filled-rect', icon: <Square className="fill-current" size={22} />, label: 'Fill Rect' },
     { id: 'ellipse', icon: <Circle size={22} />, label: 'Ellipse' },
+    { id: 'filled-ellipse', icon: <Circle className="fill-current" size={22} />, label: 'Fill Circle' },
     { id: 'line', icon: <Minus className="-rotate-45" size={22} />, label: 'Line' },
+    { id: 'smudge', icon: <Hand size={22} />, label: 'Smudge' },
+    { id: 'blur', icon: <Droplets size={22} />, label: 'Blur' },
+    { id: 'sharpen', icon: <Zap size={22} />, label: 'Sharpen' },
+    { id: 'color-replace', icon: <PaletteIcon size={22} />, label: 'Replace' },
     { id: 'rect-select', icon: <BoxSelect size={22} />, label: 'Sel Rect' },
+    { id: 'ellipse-select', icon: <Circle size={22} className="stroke-dashed" />, label: 'Sel Ellipse' },
     { id: 'lasso-select', icon: <Lasso size={22} />, label: 'Sel Lasso' },
+    { id: 'poly-lasso-select', icon: <Scissors size={22} />, label: 'Poly Lasso' },
     { id: 'magic-wand', icon: <Wand2 size={22} />, label: 'Wand' },
   ];
 
   const closePanel = () => setActivePanel(null);
 
-  const isBrushTool = ['pencil', 'eraser', 'smudge', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'blur', 'sharpen'].includes(state.tool);
+  const isBrushTool = ['pencil', 'eraser', 'smudge', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'blur', 'sharpen', 'color-replace'].includes(state.tool);
   const isFillTool = state.tool === 'bucket';
   const isMagicWand = state.tool === 'magic-wand';
   const isSelectionTool = SELECTION_TOOLS.includes(state.tool);
@@ -588,7 +593,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                           </div>
                       )}
                       {activePanel === 'timeline' && (
-                          <div className="h-[400px]">
+                          <div className="h-[450px] max-h-[70vh] flex flex-col overflow-hidden">
                               <Timeline 
                                 state={state} 
                                 onSelectFrames={(indices, active, layerId) => {

@@ -622,6 +622,7 @@ export function useProject() {
   const duplicateFrame = useCallback(() => {
     if (activeProjectId === 'home') return;
     const current = state.frames[state.activeFrameIndex];
+    if (!current) return;
     const newData: Record<string, PixelGrid> = {};
     Object.keys(current.layerData).forEach(key => newData[key] = [...current.layerData[key]]);
     const newFrame: Frame = { id: `frame-${Date.now()}`, layerData: newData };
@@ -649,6 +650,7 @@ export function useProject() {
     const offset = selected[selected.length - 1] + 1;
     selected.forEach((idx, i) => {
         const source = state.frames[idx];
+        if (!source) return;
         const newData: Record<string, PixelGrid> = {};
         Object.keys(source.layerData).forEach(key => newData[key] = [...source.layerData[key]]);
         const newFrame: Frame = { id: `frame-${Date.now()}-${i}`, layerData: newData };

@@ -219,11 +219,13 @@ export const Canvas: React.FC<CanvasProps> = ({
             setRotationAngle(0);
             
             const frame = state.frames[state.activeFrameIndex];
-            const layerData = frame.layerData[state.activeLayerId];
-            if (layerData) {
-              const floats = new Map<number, PixelValue>();
-              state.selection.forEach(idx => floats.set(idx, layerData[idx]));
-              setFloatingPixels(floats);
+            if (frame) {
+              const layerData = frame.layerData[state.activeLayerId];
+              if (layerData) {
+                const floats = new Map<number, PixelValue>();
+                state.selection.forEach(idx => floats.set(idx, layerData[idx]));
+                setFloatingPixels(floats);
+              }
             }
             return;
         }
@@ -249,7 +251,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                 setMoveStart({x, y});
 
                 const frame = state.frames[state.activeFrameIndex];
-                const layerData = frame.layerData[state.activeLayerId];
+                const layerData = frame?.layerData?.[state.activeLayerId];
                 if (layerData) {
                   const floats = new Map<number, PixelValue>();
                   state.selection.forEach(idx => floats.set(idx, layerData[idx]));
@@ -266,11 +268,13 @@ export const Canvas: React.FC<CanvasProps> = ({
       setMoveOffset({x: 0, y: 0});
       
       const frame = state.frames[state.activeFrameIndex];
-      const layerData = frame.layerData[state.activeLayerId];
-      if (layerData) {
-        const floats = new Map<number, PixelValue>();
-        state.selection.forEach(idx => floats.set(idx, layerData[idx]));
-        setFloatingPixels(floats);
+      if (frame) {
+        const layerData = frame.layerData[state.activeLayerId];
+        if (layerData) {
+          const floats = new Map<number, PixelValue>();
+          state.selection.forEach(idx => floats.set(idx, layerData[idx]));
+          setFloatingPixels(floats);
+        }
       }
       return;
     }
@@ -292,10 +296,12 @@ export const Canvas: React.FC<CanvasProps> = ({
     if (state.tool === 'magic-wand') {
       if (x < 0 || x >= state.width || y < 0 || y >= state.height) return;
       const frame = state.frames[state.activeFrameIndex];
-      const layerData = frame.layerData[state.activeLayerId];
-      if (layerData) {
-        const newSel = getWandSelection(layerData, x, y, state.width, state.height, state.fillContiguous);
-        combineSelection(newSel);
+      if (frame) {
+        const layerData = frame.layerData[state.activeLayerId];
+        if (layerData) {
+          const newSel = getWandSelection(layerData, x, y, state.width, state.height, state.fillContiguous);
+          combineSelection(newSel);
+        }
       }
       return;
     }
@@ -615,6 +621,9 @@ export const Canvas: React.FC<CanvasProps> = ({
     const layerCtx = layerCanvas.getContext('2d');
     if (!layerCtx) return;
     
+    const currentFrame = state.frames[state.activeFrameIndex];
+    if (!currentFrame) return;
+    
     // Bolt Optimization: Helper to reuse cached ImageData buffers across renders,
     // avoiding megabytes of garbage allocations per frame on high-resolution images.
     const getReusedImageData = (ref: React.MutableRefObject<ImageData | null>) => {
@@ -627,7 +636,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     };
     
     // 1. Draw Onion Skin to offscreen
-    if (state.onionSkin && state.activeFrameIndex > 0) {
+    if (state.onionSkin && state.activeFrameIndex > 0 && state.frames[state.activeFrameIndex - 1]) {
       const prevFrame = state.frames[state.activeFrameIndex - 1];
       const imgData = getReusedImageData(onionSkinImageDataRef);
       const data32 = new Uint32Array(imgData.data.buffer);
@@ -675,7 +684,6 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
 
     // 2. Draw Layers to offscreen
-    const currentFrame = state.frames[state.activeFrameIndex];
     const paletteUint32 = new Uint32Array(state.palette.length);
     const hexCache = new Map<string, number>();
     const parentMap = getLayerParentMap(state.layers);

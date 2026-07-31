@@ -34,7 +34,7 @@ export const CanvasResizeDialog: React.FC<CanvasResizeDialogProps> = ({
   return (
     <div className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-sm flex justify-center items-center p-4" onClick={onClose}>
       <form 
-        className="w-[440px] bg-card border border-border shadow-2xl rounded-2xl overflow-hidden flex flex-col text-foreground animate-in fade-in zoom-in-95 duration-200"
+        className="w-full max-w-[440px] bg-card border border-border shadow-2xl rounded-2xl overflow-hidden flex flex-col text-foreground animate-in fade-in zoom-in-95 duration-200"
         onClick={e => e.stopPropagation()}
         onSubmit={handleSubmit}
       >

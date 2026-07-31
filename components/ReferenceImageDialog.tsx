@@ -50,7 +50,7 @@ export const ReferenceImageDialog: React.FC<ReferenceImageDialogProps> = ({
   return (
     <div className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-sm flex justify-center items-center p-4" onClick={onClose}>
       <div 
-        className="w-[400px] bg-card border border-border shadow-2xl rounded-2xl overflow-hidden flex flex-col text-foreground animate-in fade-in zoom-in-95 duration-200"
+        className="w-full max-w-[400px] bg-card border border-border shadow-2xl rounded-2xl overflow-hidden flex flex-col text-foreground animate-in fade-in zoom-in-95 duration-200"
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-muted/30">
