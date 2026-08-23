@@ -543,7 +543,7 @@ export const Timeline: React.FC<TimelineProps> = ({
       const initialTag: FrameTag = activeTagPopover.tag
         ? { ...activeTagPopover.tag }
         : {
-            id: `tag_${Date.now()}`,
+            id: `tag-${Date.now()}`,
             name: "New Tag",
             from,
             to,
@@ -572,60 +572,37 @@ export const Timeline: React.FC<TimelineProps> = ({
       state.selectedFrameIndices.length > 0
         ? Math.max(...state.selectedFrameIndices)
         : state.activeFrameIndex;
-    const tag: FrameTag = existingTag
-      ? { ...existingTag }
-      : {
-          id: `tag_${Date.now()}`,
-          name: "New Tag",
-          from,
-          to,
-          color: "#3b82f6",
-          direction: "forward",
-          repeat: 0,
-        };
+    
+    let tag: FrameTag;
+    if (existingTag) {
+      tag = { ...existingTag };
+    } else {
+      tag = {
+        id: `tag-${Date.now()}`,
+        name: "New Tag",
+        from,
+        to,
+        color: "#3b82f6",
+        direction: "forward",
+        repeat: 0,
+      };
+      if (onSaveTag) {
+        onSaveTag(tag);
+      } else if (onAddTag) {
+        onAddTag(tag.name, tag.from, tag.to, tag.color);
+      }
+    }
+
     setTagPopover({
       isOpen: true,
       tag,
-      isNew: !existingTag,
+      isNew: false,
     });
   };
 
   const handleCloseTagPopover = () => {
     setTagPopover(null);
     if (onCloseTagPopover) onCloseTagPopover();
-  };
-
-  const handleSaveTagPopover = () => {
-    if (!tagPopover) return;
-    const tagToSave = tagPopover.tag;
-    const validTotal = Math.max(1, state.frames.length);
-    const safeFrom = Math.max(
-      0,
-      Math.min(validTotal - 1, isNaN(tagToSave.from) ? 0 : tagToSave.from),
-    );
-    const safeTo = Math.max(
-      safeFrom,
-      Math.min(
-        validTotal - 1,
-        isNaN(tagToSave.to) ? validTotal - 1 : tagToSave.to,
-      ),
-    );
-    const finalTag: FrameTag = {
-      ...tagToSave,
-      from: safeFrom,
-      to: safeTo,
-      name: tagToSave.name.trim() || "Tag",
-      color: tagToSave.color || "#3b82f6",
-      direction: tagToSave.direction || "forward",
-      repeat: tagToSave.repeat ?? 0,
-    };
-
-    if (onSaveTag) {
-      onSaveTag(finalTag);
-    } else if (onAddTag) {
-      onAddTag(finalTag.name, finalTag.from, finalTag.to, finalTag.color);
-    }
-    handleCloseTagPopover();
   };
 
   const handleFrameClick = (
@@ -992,73 +969,22 @@ export const Timeline: React.FC<TimelineProps> = ({
 
                 <div className="h-3 w-[1px] bg-border mx-0.5"></div>
 
-                <Popover
-                  open={tagPopover?.isOpen}
-                  onOpenChange={(open) => {
-                    if (!open) handleCloseTagPopover();
-                  }}
-                >
-                  <PopoverAnchor asChild>
-                    <div className="inline-flex items-center">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            onClick={(e) => handleOpenTagPopover(undefined, e)}
-                            className={`flex items-center gap-1 text-xs px-1.5 py-0.5 rounded transition-colors ${tagPopover?.isOpen ? "bg-primary/20 text-primary font-semibold" : "text-muted-foreground hover:text-foreground hover:bg-secondary/40"}`}
-                          >
-                            <Tag size={13} className="text-primary" />
-                            <span className="text-[11px] font-medium hidden sm:inline">
-                              Tag
-                            </span>
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent side="top">
-                          Create Animation Tag from Selection
-                        </TooltipContent>
-                      </Tooltip>
-                    </div>
-                  </PopoverAnchor>
-
-                  {tagPopover?.isOpen && (
-                    <PopoverContent
-                      align="start"
-                      side="bottom"
-                      sideOffset={8}
-                      className="p-0 border-none bg-transparent shadow-none outline-none z-[100]"
-                      onOpenAutoFocus={(e) => e.preventDefault()}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={(e) => handleOpenTagPopover(undefined, e)}
+                      className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded transition-colors text-muted-foreground hover:text-foreground hover:bg-secondary/40"
                     >
-                      <AnimationTagPopover
-                        isOpen={tagPopover.isOpen}
-                        tag={tagPopover.tag}
-                        isNew={tagPopover.isNew}
-                        totalFrames={state.frames.length}
-                        frames={state.frames}
-                        onSave={(savedTag) => {
-                          if (onSaveTag) {
-                            onSaveTag(savedTag);
-                          } else if (onAddTag) {
-                            onAddTag(
-                              savedTag.name,
-                              savedTag.from,
-                              savedTag.to,
-                              savedTag.color,
-                            );
-                          }
-                          handleCloseTagPopover();
-                        }}
-                        onClose={handleCloseTagPopover}
-                        onDelete={
-                          onDeleteTag
-                            ? (tagId) => {
-                                onDeleteTag(tagId);
-                                handleCloseTagPopover();
-                              }
-                            : undefined
-                        }
-                      />
-                    </PopoverContent>
-                  )}
-                </Popover>
+                      <Tag size={13} className="text-primary" />
+                      <span className="text-[11px] font-medium hidden sm:inline">
+                        Tag
+                      </span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    Create Animation Tag from Selection
+                  </TooltipContent>
+                </Tooltip>
               </div>
             </div>
 
@@ -1171,324 +1097,376 @@ export const Timeline: React.FC<TimelineProps> = ({
                           }
                         };
 
+                        const isPopoverOpen = !!(tagPopover?.isOpen && tagPopover.tag.id === tag.id);
+
                         return (
-                          <ContextMenu key={tag.id}>
-                            <ContextMenuTrigger asChild>
-                              <div
-                                className="absolute group/tag select-none overflow-visible"
-                                style={{
-                                  left: `${leftX}px`,
-                                  top: `${topY}px`,
-                                  width: `${widthX}px`,
-                                  height: "20px",
-                                  zIndex: isTagSelected
-                                    ? 40
-                                    : isPopoverActive
-                                      ? 30
-                                      : 10,
-                                }}
-                              >
-                                {/* Tag Header Badge - semi-transparent background, fits title snugly with fully rounded corners */}
-                                <div className="flex items-center gap-1 z-20">
-                                  <Tooltip delayDuration={300}>
-                                    <TooltipTrigger asChild>
-                                      <div
-                                        className={`rounded-sm inline-flex items-center text-[10px] font-bold text-white shadow-xs transition-all cursor-default w-max max-w-[220px] h-[18px] px-1.5 gap-1 whitespace-nowrap ${
-                                          isTagSelected
-                                            ? "ring-2 ring-white scale-[1.01] shadow-md brightness-110"
-                                            : isPopoverActive
-                                              ? "ring-2 ring-amber-300"
-                                              : ""
-                                        }`}
-                                        style={{
-                                          backgroundColor: transparentBg,
-                                        }}
-                                        onMouseDown={(e) =>
-                                          handleTagMouseDown(e, tag, "move")
-                                        }
-                                        onClick={(e) => e.stopPropagation()}
-                                        onDoubleClick={(e) =>
-                                          handleOpenTagPopover(tag, e)
-                                        }
-                                        onContextMenu={(e) => {
-                                          if (!selectedTagIds.has(tag.id)) {
-                                            if (
-                                              e.shiftKey ||
-                                              e.ctrlKey ||
-                                              e.metaKey
-                                            ) {
-                                              setSelectedTagIds((prev) =>
-                                                new Set(prev).add(tag.id),
-                                              );
-                                            } else {
-                                              setSelectedTagIds(
-                                                new Set([tag.id]),
-                                              );
-                                            }
-                                          }
-                                        }}
-                                      >
-                                        {/* Tag Name & Direction Icon */}
-                                        <div className="flex items-center gap-1 pointer-events-none shrink-0 truncate">
-                                          <span className="font-bold whitespace-nowrap leading-none truncate">
-                                            {tag.name}
-                                          </span>
-                                          {!isCollapsed &&
-                                            tag.direction &&
-                                            tag.direction !== "forward" && (
-                                              <span
-                                                className="opacity-80 shrink-0 flex items-center justify-center"
-                                                title={`Direction: ${tag.direction}`}
-                                              >
-                                                {renderTagDirectionIcon()}
-                                              </span>
-                                            )}
-                                        </div>
-                                      </div>
-                                    </TooltipTrigger>
-                                    <TooltipContent
-                                      side="top"
-                                      className="text-xs bg-popover text-popover-foreground border border-border z-[100]"
-                                    >
-                                      <div className="flex flex-col gap-0.5">
-                                        <span className="font-bold text-primary">
-                                          {tag.name}
-                                        </span>
-                                        <span className="text-[10px] text-muted-foreground font-mono">
-                                          Frames {tag.from + 1} – {tag.to + 1}{" "}
-                                          ({tag.to - tag.from + 1}{" "}
-                                          {tag.to - tag.from === 0
-                                            ? "frame"
-                                            : "frames"}
-                                          )
-                                        </span>
-                                        {tag.direction &&
-                                          tag.direction !== "forward" && (
-                                            <span className="text-[10px] text-muted-foreground capitalize">
-                                              Direction: {tag.direction}
-                                            </span>
-                                          )}
-                                      </div>
-                                    </TooltipContent>
-                                  </Tooltip>
-
-                                  {/* Collapse / Expand button placed outside the label */}
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      toggleCollapseTag(tag.id, e);
-                                    }}
-                                    className="opacity-0 group-hover/tag:opacity-100 transition-opacity duration-150 p-0.5 bg-background/80 hover:bg-background border border-border/60 text-muted-foreground hover:text-foreground rounded shadow-xs cursor-pointer shrink-0 z-30"
-                                    title={
-                                      isCollapsed
-                                        ? "Expand tag frames"
-                                        : "Collapse tag frames"
-                                    }
-                                  >
-                                    {isCollapsed ? (
-                                      <ChevronsLeftRight size={10} />
-                                    ) : (
-                                      <ChevronsRightLeft size={10} />
-                                    )}
-                                  </button>
-                                </div>
-
-                                {/* Left Resize Handle - highlights left bracket leg on hover */}
-                                {!isCollapsed && (
+                          <Popover
+                            key={tag.id}
+                            open={isPopoverOpen}
+                            onOpenChange={(open) => {
+                              if (!open && tagPopover?.tag.id === tag.id) handleCloseTagPopover();
+                            }}
+                          >
+                            <ContextMenu>
+                              <ContextMenuTrigger asChild>
+                                <PopoverAnchor asChild>
                                   <div
-                                    className="absolute -left-1 top-[19px] w-2.5 cursor-ew-resize z-30 group/lh opacity-0 group-hover/tag:opacity-100 flex items-center justify-center"
-                                    style={{ height: `${legHeight}px` }}
-                                    title="Drag to resize tag start"
-                                    onMouseDown={(e) => {
-                                      e.stopPropagation();
-                                      handleTagMouseDown(
-                                        e,
-                                        tag,
-                                        "resize-left",
-                                      );
-                                    }}
-                                  >
-                                    <div className="w-[3px] h-full bg-white opacity-0 group-hover/lh:opacity-100 transition-opacity rounded-full shadow-[0_0_4px_rgba(255,255,255,0.8)]" />
-                                  </div>
-                                )}
-
-                                {/* Right Resize Handle - highlights right bracket leg on hover */}
-                                {!isCollapsed && (
-                                  <div
-                                    className="absolute top-[19px] w-2.5 cursor-ew-resize z-30 group/rh opacity-0 group-hover/tag:opacity-100 flex items-center justify-center"
+                                    className="absolute group/tag select-none overflow-visible"
                                     style={{
-                                      left: `${Math.max(0, widthX - 8)}px`,
-                                      height: `${legHeight}px`,
-                                    }}
-                                    title="Drag to resize tag end"
-                                    onMouseDown={(e) => {
-                                      e.stopPropagation();
-                                      handleTagMouseDown(
-                                        e,
-                                        tag,
-                                        "resize-right",
-                                      );
+                                      left: `${leftX}px`,
+                                      top: `${topY}px`,
+                                      width: `${widthX}px`,
+                                      height: "20px",
+                                      zIndex: isTagSelected
+                                        ? 40
+                                        : isPopoverOpen
+                                          ? 30
+                                          : 10,
                                     }}
                                   >
-                                    <div className="w-[3px] h-full bg-white opacity-0 group-hover/rh:opacity-100 transition-opacity rounded-full shadow-[0_0_4px_rgba(255,255,255,0.8)]" />
-                                  </div>
-                                )}
+                                    {/* Tag Header Badge - semi-transparent background, fits title snugly with fully rounded corners */}
+                                    <div className="flex items-center gap-1 z-20">
+                                      <Tooltip delayDuration={300}>
+                                        <TooltipTrigger asChild>
+                                          <div
+                                            className={`rounded-sm inline-flex items-center text-[10px] font-bold text-white shadow-xs transition-all cursor-default w-max max-w-[220px] h-[18px] px-1.5 gap-1 whitespace-nowrap ${
+                                              isTagSelected
+                                                ? "ring-2 ring-white scale-[1.01] shadow-md brightness-110"
+                                                : isPopoverOpen
+                                                  ? "ring-2 ring-amber-300"
+                                                  : ""
+                                            }`}
+                                            style={{
+                                              backgroundColor: transparentBg,
+                                            }}
+                                            onMouseDown={(e) =>
+                                              handleTagMouseDown(e, tag, "move")
+                                            }
+                                            onClick={(e) => e.stopPropagation()}
+                                            onDoubleClick={(e) =>
+                                              handleOpenTagPopover(tag, e)
+                                            }
+                                            onContextMenu={(e) => {
+                                              if (!selectedTagIds.has(tag.id)) {
+                                                if (
+                                                  e.shiftKey ||
+                                                  e.ctrlKey ||
+                                                  e.metaKey
+                                                ) {
+                                                  setSelectedTagIds((prev) =>
+                                                    new Set(prev).add(tag.id),
+                                                  );
+                                                } else {
+                                                  setSelectedTagIds(
+                                                    new Set([tag.id]),
+                                                  );
+                                                }
+                                              }
+                                            }}
+                                          >
+                                            {/* Tag Name & Direction Icon */}
+                                            <div className="flex items-center gap-1 pointer-events-none shrink-0 truncate">
+                                              <span className="font-bold whitespace-nowrap leading-none truncate">
+                                                {tag.name}
+                                              </span>
+                                              {!isCollapsed &&
+                                                tag.direction &&
+                                                tag.direction !== "forward" && (
+                                                  <span
+                                                    className="opacity-80 shrink-0 flex items-center justify-center"
+                                                    title={`Direction: ${tag.direction}`}
+                                                  >
+                                                    {renderTagDirectionIcon()}
+                                                  </span>
+                                                )}
+                                            </div>
+                                          </div>
+                                        </TooltipTrigger>
+                                        <TooltipContent
+                                          side="top"
+                                          className="text-xs bg-popover text-popover-foreground border border-border z-[100]"
+                                        >
+                                          <div className="flex flex-col gap-0.5">
+                                            <span className="font-bold text-primary">
+                                              {tag.name}
+                                            </span>
+                                            <span className="text-[10px] text-muted-foreground font-mono">
+                                              Frames {tag.from + 1} – {tag.to + 1}{" "}
+                                              ({tag.to - tag.from + 1}{" "}
+                                              {tag.to - tag.from === 0
+                                                ? "frame"
+                                                : "frames"}
+                                              )
+                                            </span>
+                                            {tag.direction &&
+                                              tag.direction !== "forward" && (
+                                                <span className="text-[10px] text-muted-foreground capitalize">
+                                                  Direction: {tag.direction}
+                                                </span>
+                                              )}
+                                          </div>
+                                        </TooltipContent>
+                                      </Tooltip>
 
-                                {/* Smoothly rounded Aseprite-style bracket line & legs */}
-                                {(() => {
-                                  const r = Math.min(
-                                    5,
-                                    Math.max(1, (widthX - 2) / 2),
-                                  );
-                                  const xRight = Math.max(2, widthX - 1);
-                                  return (
-                                    <svg
-                                      className="absolute top-[19px] left-0 pointer-events-none z-20 overflow-visible"
-                                      style={{
-                                        width: `${Math.max(4, widthX)}px`,
-                                        height: `${legHeight}px`,
-                                      }}
-                                    >
-                                      <path
-                                        d={`M 1 ${legHeight} V ${1 + r} Q 1 1 ${1 + r} 1 H ${xRight - r} Q ${xRight} 1 ${xRight} ${1 + r} V ${legHeight}`}
-                                        fill="none"
-                                        stroke={color}
-                                        strokeWidth="2"
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                      />
-                                    </svg>
-                                  );
-                                })()}
-                              </div>
-                            </ContextMenuTrigger>
-                            <ContextMenuContent>
-                              {selectedTagIds.size <= 1 ? (
-                                <>
-                                  <ContextMenuItem
-                                    onClick={(e) =>
-                                      handleOpenTagPopover(tag, e)
-                                    }
-                                  >
-                                    Edit Tag Properties...
-                                  </ContextMenuItem>
-                                  <ContextMenuItem
-                                    onClick={() => toggleCollapseTag(tag.id)}
-                                  >
-                                    {isCollapsed
-                                      ? "Expand / Unfold Frames (+)"
-                                      : "Collapse / Fold Frames (-)"}
-                                  </ContextMenuItem>
-                                  {onSaveTag && (
-                                    <ContextMenuItem
-                                      onClick={() => {
-                                        onSaveTag({
-                                          ...tag,
-                                          id: `tag_${Date.now()}`,
-                                          name: `${tag.name} (Copy)`,
-                                        });
-                                      }}
-                                    >
-                                      Duplicate Tag
-                                    </ContextMenuItem>
-                                  )}
-                                  {onDeleteTag && (
-                                    <>
-                                      <ContextMenuSeparator />
-                                      <ContextMenuItem
-                                        onClick={() => {
-                                          onDeleteTag(tag.id);
-                                          setSelectedTagIds((prev) => {
-                                            const next = new Set(prev);
-                                            next.delete(tag.id);
-                                            return next;
-                                          });
-                                          if (tagPopover?.tag.id === tag.id)
-                                            handleCloseTagPopover();
+                                      {/* Collapse / Expand button placed outside the label */}
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          toggleCollapseTag(tag.id, e);
                                         }}
-                                        className="text-destructive focus:text-destructive"
+                                        className="opacity-0 group-hover/tag:opacity-100 transition-opacity duration-150 p-0.5 bg-background/80 hover:bg-background border border-border/60 text-muted-foreground hover:text-foreground rounded shadow-xs cursor-pointer shrink-0 z-30"
+                                        title={
+                                          isCollapsed
+                                            ? "Expand tag frames"
+                                            : "Collapse tag frames"
+                                        }
                                       >
-                                        Delete Tag
-                                      </ContextMenuItem>
-                                    </>
-                                  )}
-                                </>
-                              ) : (
-                                <>
-                                  <ContextMenuItem
-                                    onClick={() => {
-                                      const allCollapsed = Array.from(
-                                        selectedTagIds,
-                                      ).every((id) =>
-                                        collapsedTagIds.has(id),
+                                        {isCollapsed ? (
+                                          <ChevronsLeftRight size={10} />
+                                        ) : (
+                                          <ChevronsRightLeft size={10} />
+                                        )}
+                                      </button>
+                                    </div>
+
+                                    {/* Left Resize Handle - highlights left bracket leg on hover */}
+                                    {!isCollapsed && (
+                                      <div
+                                        className="absolute -left-1 top-[19px] w-2.5 cursor-ew-resize z-30 group/lh opacity-0 group-hover/tag:opacity-100 flex items-center justify-center"
+                                        style={{ height: `${legHeight}px` }}
+                                        title="Drag to resize tag start"
+                                        onMouseDown={(e) => {
+                                          e.stopPropagation();
+                                          handleTagMouseDown(
+                                            e,
+                                            tag,
+                                            "resize-left",
+                                          );
+                                        }}
+                                      >
+                                        <div className="w-[3px] h-full bg-white opacity-0 group-hover/lh:opacity-100 transition-opacity rounded-full shadow-[0_0_4px_rgba(255,255,255,0.8)]" />
+                                      </div>
+                                    )}
+
+                                    {/* Right Resize Handle - highlights right bracket leg on hover */}
+                                    {!isCollapsed && (
+                                      <div
+                                        className="absolute top-[19px] w-2.5 cursor-ew-resize z-30 group/rh opacity-0 group-hover/tag:opacity-100 flex items-center justify-center"
+                                        style={{
+                                          left: `${Math.max(0, widthX - 8)}px`,
+                                          height: `${legHeight}px`,
+                                        }}
+                                        title="Drag to resize tag end"
+                                        onMouseDown={(e) => {
+                                          e.stopPropagation();
+                                          handleTagMouseDown(
+                                            e,
+                                            tag,
+                                            "resize-right",
+                                          );
+                                        }}
+                                      >
+                                        <div className="w-[3px] h-full bg-white opacity-0 group-hover/rh:opacity-100 transition-opacity rounded-full shadow-[0_0_4px_rgba(255,255,255,0.8)]" />
+                                      </div>
+                                    )}
+
+                                    {/* Smoothly rounded Aseprite-style bracket line & legs */}
+                                    {(() => {
+                                      const r = Math.min(
+                                        5,
+                                        Math.max(1, (widthX - 2) / 2),
                                       );
-                                      setCollapsedTagIds((prev) => {
-                                        const next = new Set(prev);
-                                        selectedTagIds.forEach((id) => {
-                                          if (allCollapsed) next.delete(id);
-                                          else next.add(id);
-                                        });
-                                        return next;
-                                      });
-                                    }}
-                                  >
-                                    {Array.from(selectedTagIds).every((id) =>
-                                      collapsedTagIds.has(id),
-                                    )
-                                      ? `Expand Frames (${selectedTagIds.size} Tags)`
-                                      : `Collapse Frames (${selectedTagIds.size} Tags)`}
-                                  </ContextMenuItem>
-                                  {onSaveTag && (
+                                      const xRight = Math.max(2, widthX - 1);
+                                      return (
+                                        <svg
+                                          className="absolute top-[19px] left-0 pointer-events-none z-20 overflow-visible"
+                                          style={{
+                                            width: `${Math.max(4, widthX)}px`,
+                                            height: `${legHeight}px`,
+                                          }}
+                                        >
+                                          <path
+                                            d={`M 1 ${legHeight} V ${1 + r} Q 1 1 ${1 + r} 1 H ${xRight - r} Q ${xRight} 1 ${xRight} ${1 + r} V ${legHeight}`}
+                                            fill="none"
+                                            stroke={color}
+                                            strokeWidth="2"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                          />
+                                        </svg>
+                                      );
+                                    })()}
+                                  </div>
+                                </PopoverAnchor>
+                              </ContextMenuTrigger>
+                              <ContextMenuContent>
+                                {selectedTagIds.size <= 1 ? (
+                                  <>
+                                    <ContextMenuItem
+                                      onClick={(e) =>
+                                        handleOpenTagPopover(tag, e)
+                                      }
+                                    >
+                                      Edit Tag Properties...
+                                    </ContextMenuItem>
+                                    <ContextMenuItem
+                                      onClick={() => toggleCollapseTag(tag.id)}
+                                    >
+                                      {isCollapsed
+                                        ? "Expand / Unfold Frames (+)"
+                                        : "Collapse / Fold Frames (-)"}
+                                    </ContextMenuItem>
+                                    {onSaveTag && (
+                                      <ContextMenuItem
+                                        onClick={() => {
+                                          onSaveTag({
+                                            ...tag,
+                                            id: `tag_${Date.now()}`,
+                                            name: `${tag.name} (Copy)`,
+                                          });
+                                        }}
+                                      >
+                                        Duplicate Tag
+                                      </ContextMenuItem>
+                                    )}
+                                    {onDeleteTag && (
+                                      <>
+                                        <ContextMenuSeparator />
+                                        <ContextMenuItem
+                                          onClick={() => {
+                                            onDeleteTag(tag.id);
+                                            setSelectedTagIds((prev) => {
+                                              const next = new Set(prev);
+                                              next.delete(tag.id);
+                                              return next;
+                                            });
+                                            if (tagPopover?.tag.id === tag.id)
+                                              handleCloseTagPopover();
+                                          }}
+                                          className="text-destructive focus:text-destructive"
+                                        >
+                                          Delete Tag
+                                        </ContextMenuItem>
+                                      </>
+                                    )}
+                                  </>
+                                ) : (
+                                  <>
                                     <ContextMenuItem
                                       onClick={() => {
-                                        const allTagsList = state.tags || [];
-                                        selectedTagIds.forEach((id) => {
-                                          const t = allTagsList.find(
-                                            (x) => x.id === id,
-                                          );
-                                          if (t) {
-                                            onSaveTag({
-                                              ...t,
-                                              id: `tag_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-                                              name: `${t.name} (Copy)`,
-                                            });
-                                          }
+                                        const allCollapsed = Array.from(
+                                          selectedTagIds,
+                                        ).every((id) =>
+                                          collapsedTagIds.has(id),
+                                        );
+                                        setCollapsedTagIds((prev) => {
+                                          const next = new Set(prev);
+                                          selectedTagIds.forEach((id) => {
+                                            if (allCollapsed) next.delete(id);
+                                            else next.add(id);
+                                          });
+                                          return next;
                                         });
                                       }}
                                     >
-                                      Duplicate Selected Tags (
-                                      {selectedTagIds.size})
+                                      {Array.from(selectedTagIds).every((id) =>
+                                        collapsedTagIds.has(id),
+                                      )
+                                        ? `Expand Frames (${selectedTagIds.size} Tags)`
+                                        : `Collapse Frames (${selectedTagIds.size} Tags)`}
                                     </ContextMenuItem>
-                                  )}
-                                  {onDeleteTag && (
-                                    <>
-                                      <ContextMenuSeparator />
+                                    {onSaveTag && (
                                       <ContextMenuItem
                                         onClick={() => {
-                                          selectedTagIds.forEach((id) =>
-                                            onDeleteTag(id),
-                                          );
-                                          setSelectedTagIds(new Set());
-                                          if (
-                                            tagPopover &&
-                                            selectedTagIds.has(
-                                              tagPopover.tag.id,
-                                            )
-                                          )
-                                            handleCloseTagPopover();
+                                          const allTagsList = state.tags || [];
+                                          selectedTagIds.forEach((id) => {
+                                            const t = allTagsList.find(
+                                              (x) => x.id === id,
+                                            );
+                                            if (t) {
+                                              onSaveTag({
+                                                ...t,
+                                                id: `tag_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+                                                name: `${t.name} (Copy)`,
+                                              });
+                                            }
+                                          });
                                         }}
-                                        className="text-destructive focus:text-destructive"
                                       >
-                                        Delete Selected Tags (
+                                        Duplicate Selected Tags (
                                         {selectedTagIds.size})
                                       </ContextMenuItem>
-                                    </>
-                                  )}
-                                </>
-                              )}
-                            </ContextMenuContent>
-                          </ContextMenu>
+                                    )}
+                                    {onDeleteTag && (
+                                      <>
+                                        <ContextMenuSeparator />
+                                        <ContextMenuItem
+                                          onClick={() => {
+                                            selectedTagIds.forEach((id) =>
+                                              onDeleteTag(id),
+                                            );
+                                            setSelectedTagIds(new Set());
+                                            if (
+                                              tagPopover &&
+                                              selectedTagIds.has(
+                                                tagPopover.tag.id,
+                                              )
+                                            )
+                                              handleCloseTagPopover();
+                                          }}
+                                          className="text-destructive focus:text-destructive"
+                                        >
+                                          Delete Selected Tags (
+                                          {selectedTagIds.size})
+                                        </ContextMenuItem>
+                                      </>
+                                    )}
+                                  </>
+                                )}
+                              </ContextMenuContent>
+                            </ContextMenu>
+
+                            {isPopoverOpen && (
+                              <PopoverContent
+                                align="right"
+                                side="bottom"
+                                sideOffset={-8}
+                                collisionPadding={16}
+                                className="p-0 border-none bg-transparent shadow-none outline-none z-[100]"
+                                onOpenAutoFocus={(e) => e.preventDefault()}
+                              >
+                                <AnimationTagPopover
+                                  isOpen={true}
+                                  tag={tag}
+                                  isNew={false}
+                                  totalFrames={state.frames.length}
+                                  frames={state.frames}
+                                  onSave={(savedTag) => {
+                                    if (onSaveTag) {
+                                      onSaveTag(savedTag);
+                                    } else if (onAddTag) {
+                                      onAddTag(
+                                        savedTag.name,
+                                        savedTag.from,
+                                        savedTag.to,
+                                        savedTag.color,
+                                      );
+                                    }
+                                  }}
+                                  onClose={handleCloseTagPopover}
+                                  onDelete={
+                                    onDeleteTag
+                                      ? (tagId) => {
+                                          onDeleteTag(tagId);
+                                          handleCloseTagPopover();
+                                        }
+                                      : undefined
+                                  }
+                                />
+                              </PopoverContent>
+                            )}
+                          </Popover>
                         );
                       })}
                     </div>

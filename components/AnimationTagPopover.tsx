@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { FrameTag, Frame } from '../types';
 import {
   Tag,
@@ -12,6 +12,7 @@ import {
   Infinity as InfinityIcon,
 } from 'lucide-react';
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
+import { PopoverArrow } from './ui/popover';
 
 export const TAG_PRESET_COLORS = [
   '#3b82f6', // Blue
@@ -49,10 +50,32 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
     return (initialTag.repeat ?? 0) === 0 ? 'infinite' : 'custom';
   });
 
+  const tagRef = useRef(tag);
+  tagRef.current = tag;
+
+  const onSaveRef = useRef(onSave);
+  onSaveRef.current = onSave;
+
+  const isDeletingRef = useRef(false);
+
   useEffect(() => {
     setTag({ ...initialTag });
     setRepeatMode((initialTag.repeat ?? 0) === 0 ? 'infinite' : 'custom');
   }, [initialTag]);
+
+  // When the popover is closed / unmounted, ensure a blank name falls back to 'Tag'
+  useEffect(() => {
+    return () => {
+      if (isDeletingRef.current) return;
+      const currentTag = tagRef.current;
+      if (!currentTag.name.trim()) {
+        onSaveRef.current({
+          ...currentTag,
+          name: 'Tag',
+        });
+      }
+    };
+  }, []);
 
   const safeTotal = Math.max(1, totalFrames);
   const safeFrom = Math.max(0, Math.min(safeTotal - 1, isNaN(tag.from) ? 0 : tag.from));
@@ -65,16 +88,23 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
     durationMs += frames[i]?.duration || 100;
   }
 
-  const handleSave = () => {
+  const updateAndSave = (partialTag: Partial<FrameTag>, newRepeatMode?: 'infinite' | 'custom') => {
+    const nextTag = { ...tag, ...partialTag };
+    const nextRepeatMode = newRepeatMode !== undefined ? newRepeatMode : repeatMode;
+    
+    const rFrom = Math.max(0, Math.min(safeTotal - 1, isNaN(nextTag.from) ? 0 : nextTag.from));
+    const rTo = Math.max(rFrom, Math.min(safeTotal - 1, isNaN(nextTag.to) ? safeTotal - 1 : nextTag.to));
+    
     const finalTag: FrameTag = {
-      ...tag,
-      from: safeFrom,
-      to: safeTo,
-      name: tag.name.trim() || 'Tag',
-      color: tag.color || '#3b82f6',
-      direction: tag.direction || 'forward',
-      repeat: repeatMode === 'infinite' ? 0 : (tag.repeat ?? 1),
+      ...nextTag,
+      from: rFrom,
+      to: rTo,
+      name: nextTag.name, // Keep exactly what they are typing, including empty string
+      color: nextTag.color || '#3b82f6',
+      direction: nextTag.direction || 'forward',
+      repeat: nextRepeatMode === 'infinite' ? 0 : (nextTag.repeat ?? 1),
     };
+    setTag(finalTag);
     onSave(finalTag);
   };
 
@@ -87,59 +117,39 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
 
   return (
     <div
-      className="w-72 bg-popover text-popover-foreground border border-border shadow-xl rounded-lg p-3 flex flex-col gap-3 text-xs select-none outline-none"
+      className="w-60 bg-popover text-popover-foreground border border-border shadow-xl rounded-lg p-3 flex flex-col gap-3 text-xs select-none outline-none relative"
       onKeyDown={(e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          handleSave();
-        } else if (e.key === 'Escape') {
+        if (e.key === 'Enter' || e.key === 'Escape') {
           e.preventDefault();
           onClose();
         }
       }}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between pb-2 border-b border-border/60">
-        <div className="flex items-center gap-2 font-semibold text-foreground">
-          <div
-            className="w-3.5 h-3.5 rounded-full border border-black/20 dark:border-white/20 shrink-0"
-            style={{ backgroundColor: tag.color || '#3b82f6' }}
-          />
-          <span>{isNew ? 'New Tag' : 'Tag Properties'}</span>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="w-5 h-5 flex items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-        >
-          <X size={13} />
-        </button>
-      </div>
-
+      <PopoverArrow />
       {/* Form Fields Table */}
-      <div className="flex flex-col gap-2.5">
+      <div className="flex flex-col gap-3">
         {/* Name */}
-        <div className="grid grid-cols-3 items-center gap-2">
-          <label className="text-muted-foreground font-medium">Name</label>
+        <div className="flex flex-col gap-1">
+          <label className="text-[9px] font-medium text-muted-foreground">Name</label>
           <input
             type="text"
             value={tag.name}
-            onChange={(e) => setTag({ ...tag, name: e.target.value })}
+            onChange={(e) => updateAndSave({ name: e.target.value })}
             placeholder="e.g. Idle, Walk"
             autoFocus
-            className="col-span-2 bg-background border border-border rounded-md px-2 py-1 text-xs font-medium text-foreground outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+            className="w-full bg-background border border-border rounded-md px-2 py-1 text-xs font-medium text-foreground outline-none focus:ring-1 focus:ring-primary focus:border-primary"
           />
         </div>
 
         {/* Color Swatches */}
-        <div className="grid grid-cols-3 items-center gap-2">
-          <label className="text-muted-foreground font-medium">Color</label>
-          <div className="col-span-2 flex items-center gap-1.5 flex-wrap">
+        <div className="flex flex-col gap-1">
+          <label className="text-[9px] font-medium text-muted-foreground">Color</label>
+          <div className="flex items-center gap-1.5 flex-wrap">
             {TAG_PRESET_COLORS.map((c) => (
               <button
                 key={c}
                 type="button"
-                onClick={() => setTag({ ...tag, color: c })}
+                onClick={() => updateAndSave({ color: c })}
                 className={`w-4 h-4 rounded-full border transition-transform cursor-pointer ${
                   tag.color === c
                     ? 'ring-2 ring-primary ring-offset-1 ring-offset-popover scale-110 border-white'
@@ -152,7 +162,7 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
               <input
                 type="color"
                 value={tag.color || '#3b82f6'}
-                onChange={(e) => setTag({ ...tag, color: e.target.value })}
+                onChange={(e) => updateAndSave({ color: e.target.value })}
                 className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
               />
               <span className="text-[9px] text-muted-foreground font-bold leading-none">+</span>
@@ -161,9 +171,9 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
         </div>
 
         {/* Frame Range & Duration */}
-        <div className="grid grid-cols-3 items-center gap-2">
-          <label className="text-muted-foreground font-medium">Frames</label>
-          <div className="col-span-2 flex items-center gap-1.5">
+        <div className="flex flex-col gap-1">
+          <label className="text-[9px] font-medium text-muted-foreground">Frames</label>
+          <div className="flex items-center gap-1.5 w-full">
             <input
               type="number"
               min="1"
@@ -172,10 +182,7 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
               onChange={(e) => {
                 const val = parseInt(e.target.value, 10);
                 if (!isNaN(val)) {
-                  setTag({
-                    ...tag,
-                    from: Math.max(0, Math.min(safeTotal - 1, val - 1)),
-                  });
+                  updateAndSave({ from: val - 1 });
                 }
               }}
               className="w-14 bg-background border border-border rounded-md px-1.5 py-1 text-xs font-mono font-medium text-foreground text-center outline-none focus:ring-1 focus:ring-primary focus:border-primary"
@@ -189,10 +196,7 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
               onChange={(e) => {
                 const val = parseInt(e.target.value, 10);
                 if (!isNaN(val)) {
-                  setTag({
-                    ...tag,
-                    to: Math.max(0, Math.min(safeTotal - 1, val - 1)),
-                  });
+                  updateAndSave({ to: val - 1 });
                 }
               }}
               className="w-14 bg-background border border-border rounded-md px-1.5 py-1 text-xs font-mono font-medium text-foreground text-center outline-none focus:ring-1 focus:ring-primary focus:border-primary"
@@ -204,9 +208,9 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
         </div>
 
         {/* Direction Segmented Control */}
-        <div className="grid grid-cols-3 items-center gap-2">
-          <label className="text-muted-foreground font-medium">Direction</label>
-          <div className="col-span-2 grid grid-cols-4 gap-0.5 bg-muted/60 p-0.5 rounded-md border border-border/50">
+        <div className="flex flex-col gap-1">
+          <label className="text-[9px] font-medium text-muted-foreground">Direction</label>
+          <div className="grid grid-cols-4 gap-0.5 bg-muted/60 p-0.5 rounded-md border border-border/50 w-full">
             {directions.map((dir) => {
               const isActive = (tag.direction || 'forward') === dir.id;
               const Icon = dir.icon;
@@ -215,7 +219,7 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      onClick={() => setTag({ ...tag, direction: dir.id })}
+                      onClick={() => updateAndSave({ direction: dir.id })}
                       className={`py-1 rounded flex items-center justify-center transition-colors ${
                         isActive
                           ? 'bg-background text-foreground font-semibold shadow-xs border border-border/40'
@@ -235,15 +239,15 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
         </div>
 
         {/* Repeats / Loop */}
-        <div className="grid grid-cols-3 items-center gap-2">
-          <label className="text-muted-foreground font-medium">Repeat</label>
-          <div className="col-span-2 flex items-center gap-1.5">
+        <div className="flex flex-col gap-1">
+          <label className="text-[9px] font-medium text-muted-foreground">Repeat</label>
+          <div className="flex items-center gap-1.5 w-full">
             <div className="flex-1 flex items-center bg-muted/60 p-0.5 rounded-md border border-border/50">
               <button
                 type="button"
                 onClick={() => {
                   setRepeatMode('infinite');
-                  setTag({ ...tag, repeat: 0 });
+                  updateAndSave({ repeat: 0 }, 'infinite');
                 }}
                 className={`flex-1 py-0.5 px-1.5 rounded text-[11px] font-medium transition-colors flex items-center justify-center gap-1 ${
                   repeatMode === 'infinite'
@@ -258,7 +262,8 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
                 type="button"
                 onClick={() => {
                   setRepeatMode('custom');
-                  if ((tag.repeat ?? 0) === 0) setTag({ ...tag, repeat: 1 });
+                  const newRepeat = (tag.repeat ?? 0) === 0 ? 1 : tag.repeat;
+                  updateAndSave({ repeat: newRepeat }, 'custom');
                 }}
                 className={`flex-1 py-0.5 px-1.5 rounded text-[11px] font-medium transition-colors text-center ${
                   repeatMode === 'custom'
@@ -277,7 +282,7 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
                 value={isNaN(tag.repeat ?? 1) ? '' : tag.repeat}
                 onChange={(e) => {
                   const val = parseInt(e.target.value, 10);
-                  setTag({ ...tag, repeat: isNaN(val) ? 1 : Math.max(1, val) });
+                  updateAndSave({ repeat: isNaN(val) ? 1 : Math.max(1, val) }, 'custom');
                 }}
                 className="w-12 bg-background border border-border rounded-md px-1 py-0.5 text-xs font-mono font-medium text-foreground text-center outline-none focus:ring-1 focus:ring-primary focus:border-primary"
               />
@@ -287,39 +292,22 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
       </div>
 
       {/* Action Footer */}
-      <div className="flex items-center justify-between pt-2 border-t border-border/60 mt-1">
-        {!isNew && onDelete ? (
+      {!isNew && onDelete && (
+        <div className="flex items-center justify-between pt-2 border-t border-border/60 mt-1">
           <button
             type="button"
-            onClick={() => onDelete(tag.id)}
+            onClick={() => {
+              isDeletingRef.current = true;
+              onDelete(tag.id);
+            }}
             className="flex items-center gap-1 text-destructive hover:bg-destructive/10 px-2 py-1 rounded-md transition-colors font-medium text-xs"
             title="Delete tag"
           >
             <Trash2 size={13} />
             <span>Delete</span>
           </button>
-        ) : (
-          <div />
-        )}
-
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-2.5 py-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors font-medium text-xs"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleSave}
-            className="flex items-center gap-1 px-3 py-1 bg-primary text-primary-foreground font-medium rounded-md shadow-xs hover:bg-primary/90 transition-colors text-xs"
-          >
-            <Check size={13} />
-            <span>Save</span>
-          </button>
         </div>
-      </div>
+      )}
     </div>
   );
 };
