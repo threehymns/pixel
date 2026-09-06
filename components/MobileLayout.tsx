@@ -342,6 +342,42 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                                     </button>
                                 )}
                             </div>
+
+                            {state.tool === 'smudge' && (
+                                <div className="flex flex-col gap-3 pt-2 border-t border-border/50">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-[10px] font-bold text-muted-foreground uppercase">Smudge Mode</span>
+                                        <div className="flex bg-muted rounded-lg p-1 gap-1">
+                                            <button
+                                                onClick={() => updateState({...state, smudgeMode: 'blend'})}
+                                                className={`px-3 py-1.5 rounded-md text-xs font-bold flex items-center gap-1.5 transition-all ${(!state.smudgeMode || state.smudgeMode === 'blend') ? 'bg-background text-primary shadow-sm' : 'text-muted-foreground'}`}
+                                            >
+                                                <Droplets size={14} /> Blend
+                                            </button>
+                                            <button
+                                                onClick={() => updateState({...state, smudgeMode: 'push'})}
+                                                className={`px-3 py-1.5 rounded-md text-xs font-bold flex items-center gap-1.5 transition-all ${state.smudgeMode === 'push' ? 'bg-background text-primary shadow-sm' : 'text-muted-foreground'}`}
+                                            >
+                                                <Hand size={14} /> Push
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-col gap-1.5">
+                                        <div className="flex justify-between items-center">
+                                            <span className="text-[10px] font-bold text-muted-foreground uppercase">Strength</span>
+                                            <span className="text-xs font-mono bg-muted px-2 py-0.5 rounded">{Math.round((state.smudgeStrength ?? 0.7) * 100)}%</span>
+                                        </div>
+                                        <CustomSlider
+                                            min={10}
+                                            max={100}
+                                            step={5}
+                                            value={Math.round((state.smudgeStrength ?? 0.7) * 100)}
+                                            onValueChange={(val) => updateState({...state, smudgeStrength: val / 100})}
+                                            className="w-full"
+                                        />
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
 

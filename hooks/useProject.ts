@@ -19,7 +19,9 @@ const UI_FIELDS: (keyof ProjectState)[] = [
     'showGrid',
     'selectionMode',
     'activePaletteId',
-    'ditheringEnabled'
+    'ditheringEnabled',
+    'smudgeMode',
+    'smudgeStrength'
 ];
 
 /**
@@ -260,15 +262,17 @@ export function useProject() {
 
     let cleanSelection: Set<number> | null = null;
     if (newState.selection) {
-      const arr = newState.selection instanceof Set 
-        ? Array.from(newState.selection) 
-        : (Array.isArray(newState.selection) ? newState.selection : []);
-      const numSet = new Set<number>();
-      for (let i = 0; i < arr.length; i++) {
-        const n = Number(arr[i]);
-        if (!isNaN(n)) numSet.add(n);
+      if (newState.selection instanceof Set) {
+        cleanSelection = newState.selection.size > 0 ? newState.selection : null;
+      } else {
+        const arr = Array.isArray(newState.selection) ? newState.selection : [];
+        const numSet = new Set<number>();
+        for (let i = 0; i < arr.length; i++) {
+          const n = Number(arr[i]);
+          if (!isNaN(n)) numSet.add(n);
+        }
+        cleanSelection = numSet.size > 0 ? numSet : null;
       }
-      cleanSelection = numSet.size > 0 ? numSet : null;
     }
     const sanitizedState = { ...newState, selection: cleanSelection };
 

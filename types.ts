@@ -167,6 +167,8 @@ export interface ProjectState {
   pixelPerfect: boolean;
   ditheringEnabled: boolean; // For palette conversion and effects
   rotationAlgorithm: 'nearest' | 'rotsprite';
+  smudgeMode?: 'blend' | 'push';
+  smudgeStrength?: number; // 0.1 to 1.0 (default 0.7)
   
   zoom: number;
   onionSkin: boolean;

@@ -8,10 +8,14 @@ export function useCanvasTools(
   updateState: (s: ProjectState, historyConfig?: { action: string, tool?: ToolType }) => void
 ) {
   const strokeStartDataRef = useRef<PixelGrid | null>(null);
+  const activeStrokePixelsRef = useRef<PixelGrid | null>(null);
   const strokePathRef = useRef<Position[]>([]);
   const originRef = useRef<Position | null>(null);
+  const smudgeReservoirRef = useRef<Map<string, PixelValue>>(new Map());
+  const lastSmudgePointRef = useRef<Position | null>(null);
   
   const stateRef = useRef(state);
+  stateRef.current = state;
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
@@ -48,13 +52,38 @@ export function useCanvasTools(
   };
 
   const handleDrawStart = (pos: Position, modifiers: Modifiers) => {
-    const { activeFrameIndex, activeLayerId, frames } = stateRef.current;
+    const { activeFrameIndex, activeLayerId, frames, width, height, tool, brushSize, brushShape } = stateRef.current;
     const currentFrame = frames[activeFrameIndex];
     if (!currentFrame) return;
     const layerData = currentFrame.layerData[activeLayerId];
-    strokeStartDataRef.current = layerData ? [...layerData] : new Array(stateRef.current.width * stateRef.current.height).fill(null);
+    const initialPixels = layerData ? [...layerData] : new Array(width * height).fill(null);
+    strokeStartDataRef.current = [...initialPixels];
+    activeStrokePixelsRef.current = [...initialPixels];
     strokePathRef.current = [];
     originRef.current = null;
+    lastSmudgePointRef.current = { x: pos.x, y: pos.y };
+
+    if (tool === 'smudge') {
+      smudgeReservoirRef.current.clear();
+      const r = brushSize / 2;
+      const radiusSq = r * r;
+      const startOffset = Math.floor(brushSize / 2);
+      for (let ry = -startOffset; ry <= startOffset; ry++) {
+        for (let rx = -startOffset; rx <= startOffset; rx++) {
+          const distSq = rx * rx + ry * ry;
+          if (brushShape === 'circle' && brushSize > 1 && distSq > radiusSq) continue;
+          const sampleX = pos.x + rx;
+          const sampleY = pos.y + ry;
+          if (sampleX >= 0 && sampleX < width && sampleY >= 0 && sampleY < height) {
+            const idx = getIndex(sampleX, sampleY, width);
+            const val = initialPixels[idx];
+            if (val !== null && val !== undefined) {
+              smudgeReservoirRef.current.set(`${rx},${ry}`, val);
+            }
+          }
+        }
+      }
+    }
   };
 
   const handleDraw = (x: number, y: number, modifiers: Modifiers) => {
@@ -84,11 +113,23 @@ export function useCanvasTools(
         return;
     }
 
-    const useStartBuffer = ['pencil', 'eraser', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'blur', 'sharpen'].includes(tool);
+    const isShapeTool = ['line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse'].includes(tool);
+    const isPixelPerfectPencil = stateRef.current.pixelPerfect && stateRef.current.brushSize === 1 && !modifiers.shift && tool === 'pencil';
+    const isFullStrokeReplay = modifiers.shift || isShapeTool || isPixelPerfectPencil;
+
+    const useStartBuffer = isFullStrokeReplay && ['pencil', 'eraser', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'blur', 'sharpen'].includes(tool);
     
+    // Ensure activeStrokePixelsRef and strokeStartDataRef are initialized
+    if (!activeStrokePixelsRef.current) {
+      const layerData = currentFrame.layerData[activeLayerId];
+      const initialPixels = layerData ? [...layerData] : new Array(width * height).fill(null);
+      strokeStartDataRef.current = [...initialPixels];
+      activeStrokePixelsRef.current = [...initialPixels];
+    }
+
     const layerPixels = (useStartBuffer && strokeStartDataRef.current)
         ? [...strokeStartDataRef.current] 
-        : [...(currentFrame.layerData[activeLayerId] || new Array(width * height).fill(null))];
+        : activeStrokePixelsRef.current;
         
     let changed = false;
 
@@ -97,10 +138,10 @@ export function useCanvasTools(
 
       let pointsToDraw: Position[] = [];
       
-      if (modifiers.shift || ['line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse'].includes(tool)) {
+      if (modifiers.shift || isShapeTool) {
           let targetX = x;
           let targetY = y;
-          if (modifiers.shift && ['line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse'].includes(tool)) {
+          if (modifiers.shift && isShapeTool) {
               const dx = x - originRef.current.x;
               const dy = y - originRef.current.y;
               const dist = Math.max(Math.abs(dx), Math.abs(dy));
@@ -108,7 +149,7 @@ export function useCanvasTools(
               targetY = originRef.current.y + dist * Math.sign(dy);
           }
 
-          if (tool === 'line' || (tool !== 'rect' && tool !== 'filled-rect' && tool !== 'ellipse' && tool !== 'filled-ellipse')) {
+          if (tool === 'line' || (!isShapeTool)) {
               pointsToDraw = bresenhamLine(originRef.current.x, originRef.current.y, targetX, targetY);
           } else if (tool === 'rect' || tool === 'filled-rect') {
               const left = Math.min(originRef.current.x, targetX);
@@ -137,17 +178,38 @@ export function useCanvasTools(
           } else if (tool === 'filled-ellipse') {
               pointsToDraw = getFilledEllipse(originRef.current.x, originRef.current.y, targetX, targetY);
           }
-      } else {
-          const lastPoint = strokePathRef.current.length > 0 ? strokePathRef.current[strokePathRef.current.length - 1] : {x, y};
-          const newPoints = bresenhamLine(lastPoint.x, lastPoint.y, x, y);
-          if (strokePathRef.current.length > 0) strokePathRef.current.push(...newPoints.slice(1));
-          else strokePathRef.current.push(...newPoints);
+      } else if (isFullStrokeReplay) {
+          if (strokePathRef.current.length > 0) {
+              const lastPoint = strokePathRef.current[strokePathRef.current.length - 1];
+              if (lastPoint.x === x && lastPoint.y === y) return;
+              const newPoints = bresenhamLine(lastPoint.x, lastPoint.y, x, y);
+              strokePathRef.current.push(...newPoints.slice(1));
+          } else {
+              strokePathRef.current.push({ x, y });
+          }
           pointsToDraw = strokePathRef.current;
+      } else {
+          // Fast incremental stroke: only process the new bresenham segment between lastPoint and current {x, y}
+          if (strokePathRef.current.length === 0) {
+              strokePathRef.current.push({x, y});
+              pointsToDraw = [{x, y}];
+          } else {
+              const lastPoint = strokePathRef.current[strokePathRef.current.length - 1];
+              if (lastPoint.x === x && lastPoint.y === y) {
+                  return; // Same point, avoid duplicate processing
+              }
+              const newPoints = bresenhamLine(lastPoint.x, lastPoint.y, x, y);
+              const incrementalPoints = newPoints.slice(1);
+              strokePathRef.current.push(...incrementalPoints);
+              pointsToDraw = incrementalPoints;
+          }
       }
       
-      if (stateRef.current.pixelPerfect && stateRef.current.brushSize === 1 && !modifiers.shift && tool === 'pencil') {
+      if (isPixelPerfectPencil) {
           pointsToDraw = pixelPerfectFilter(pointsToDraw);
       }
+
+      if (pointsToDraw.length === 0) return;
 
       const activeColorHex = modifiers.ctrl && tool === 'pencil' ? secondaryColor : primaryColor;
       const activeVal = resolvePixelValue(activeColorHex);
@@ -176,10 +238,8 @@ export function useCanvasTools(
 
       // Optimization: Allocate smudge snapshot once before the points loop instead of on every point
       const isSmudge = tool === 'smudge';
-      let smudgeBase: (PixelValue | null)[] | null = null;
-      if (isSmudge) {
-        smudgeBase = [...layerPixels];
-      }
+      const smudgeMode = stateRef.current.smudgeMode ?? 'blend';
+      const smudgeStrength = stateRef.current.smudgeStrength ?? 0.7;
 
       pointsToDraw.forEach((pt, pointIdxInStroke) => {
         const variants = [{ x: pt.x, y: pt.y }];
@@ -187,17 +247,19 @@ export function useCanvasTools(
         if (symmetry.y) variants.push({ x: pt.x, y: height - 1 - pt.y });
         if (symmetry.x && symmetry.y) variants.push({ x: width - 1 - pt.x, y: height - 1 - pt.y });
 
-        const lastPt = pointIdxInStroke > 0 ? pointsToDraw[pointIdxInStroke - 1] : originRef.current;
-        const dx_vec = pt.x - (lastPt?.x ?? pt.x);
-        const dy_vec = pt.y - (lastPt?.y ?? pt.y);
+        const prevPt = lastSmudgePointRef.current ?? (pointIdxInStroke > 0 ? pointsToDraw[pointIdxInStroke - 1] : pt);
+        const dx_vec = pt.x - prevPt.x;
+        const dy_vec = pt.y - prevPt.y;
+        lastSmudgePointRef.current = { x: pt.x, y: pt.y };
 
         variants.forEach(variant => {
-          // Optimization: Only iterate the brush bounding box
+          // Optimization: Only iterate the exact brush bounding box
           const r = size / 2;
-          const left = Math.max(0, Math.floor(variant.x - r));
-          const right = Math.min(width - 1, Math.ceil(variant.x + r));
-          const top = Math.max(0, Math.floor(variant.y - r));
-          const bottom = Math.min(height - 1, Math.ceil(variant.y + r));
+          const startOffset = Math.floor(size / 2);
+          const left = Math.max(0, variant.x - startOffset);
+          const right = Math.min(width - 1, size % 2 === 0 ? variant.x + startOffset - 1 : variant.x + startOffset);
+          const top = Math.max(0, variant.y - startOffset);
+          const bottom = Math.min(height - 1, size % 2 === 0 ? variant.y + startOffset - 1 : variant.y + startOffset);
 
           for (let drawY = top; drawY <= bottom; drawY++) {
               for (let drawX = left; drawX <= right; drawX++) {
@@ -207,10 +269,12 @@ export function useCanvasTools(
                   
                   // Check if inside brush
                   let inBrush = true;
-                  if (stateRef.current.brushShape === 'circle') {
-                      if (distSq > radiusSq) inBrush = false;
-                  } else {
-                      if (Math.abs(relX) > r || Math.abs(relY) > r) inBrush = false;
+                  if (size > 1) {
+                      if (stateRef.current.brushShape === 'circle') {
+                          if (distSq > radiusSq) inBrush = false;
+                      } else {
+                          if (Math.abs(relX) > r || Math.abs(relY) > r) inBrush = false;
+                      }
                   }
 
                   if (!inBrush) continue;
@@ -224,22 +288,80 @@ export function useCanvasTools(
                       } else {
                           layerPixels[idx] = activeVal; 
                       }
-                  } else if (isSmudge && smudgeBase) {
-                      // IMPROVED WARP/PUSH ALGORITHM
-                      // Calculate falloff: Pixels in center move more than pixels at edge
-                      const dist = Math.sqrt(distSq);
-                      const normDist = Math.max(0, Math.min(1, dist / r));
-                      
-                      // Quadratic falloff for smooth warping effect
-                      const falloff = Math.pow(1 - normDist, 2);
-                      
-                      // Displacement vector
-                      const sx = Math.round(drawX - dx_vec * falloff);
-                      const sy = Math.round(drawY - dy_vec * falloff);
-                      
-                      if (sx >= 0 && sx < width && sy >= 0 && sy < height) {
-                          const srcIdx = getIndex(sx, sy, width);
-                          layerPixels[idx] = smudgeBase[srcIdx];
+                  } else if (isSmudge) {
+                      if (smudgeMode === 'push') {
+                          if (dx_vec !== 0 || dy_vec !== 0) {
+                              const sx = Math.round(drawX - dx_vec);
+                              const sy = Math.round(drawY - dy_vec);
+                              if (sx >= 0 && sx < width && sy >= 0 && sy < height) {
+                                  const srcIdx = getIndex(sx, sy, width);
+                                  const srcVal = layerPixels[srcIdx];
+                                  if (srcVal !== null && srcVal !== undefined) {
+                                      layerPixels[idx] = srcVal;
+                                      if (size === 1 || (Math.abs(relX - dx_vec) > r || Math.abs(relY - dy_vec) > r)) {
+                                          layerPixels[srcIdx] = null;
+                                      }
+                                  }
+                              }
+                          }
+                      } else {
+                          // Smart Blend mode
+                          const key = `${relX},${relY}`;
+                          let carriedVal = smudgeReservoirRef.current.get(key) ?? null;
+                          const canvasVal = layerPixels[idx];
+
+                          if (carriedVal === null) {
+                              if (canvasVal !== null && canvasVal !== undefined) {
+                                  smudgeReservoirRef.current.set(key, canvasVal);
+                                  carriedVal = canvasVal;
+                              }
+                          }
+
+                          if (carriedVal !== null) {
+                              if (canvasVal === null || canvasVal === undefined) {
+                                  // Dragging paint into empty space: deposit carried paint smoothly
+                                  layerPixels[idx] = carriedVal;
+                              } else {
+                                  // Both carried color and canvas color are present -> Smart Color Blend
+                                  const hex1 = typeof carriedVal === 'number' ? palette[carriedVal] : carriedVal;
+                                  const hex2 = typeof canvasVal === 'number' ? palette[canvasVal] : canvasVal;
+                                  if (hex1 && hex2) {
+                                      const [r1, g1, b1] = hexToRgb(hex1);
+                                      const [r2, g2, b2] = hexToRgb(hex2);
+
+                                      let falloff = 1.0;
+                                      if (size > 1) {
+                                          const dist = Math.sqrt(distSq);
+                                          const normDist = Math.min(1, dist / r);
+                                          falloff = Math.max(0.25, 1.0 - 0.65 * normDist);
+                                      }
+                                      const blendFactor = Math.min(1, Math.max(0.08, smudgeStrength * falloff));
+
+                                      const mixedR = Math.round(r2 * (1 - blendFactor) + r1 * blendFactor);
+                                      const mixedG = Math.round(g2 * (1 - blendFactor) + g1 * blendFactor);
+                                      const mixedB = Math.round(b2 * (1 - blendFactor) + b1 * blendFactor);
+
+                                      let mixedVal: PixelValue;
+                                      if (colorMode === 'rgba') {
+                                          mixedVal = rgbToHex(mixedR, mixedG, mixedB);
+                                      } else {
+                                          mixedVal = findNearestPaletteIndex(mixedR, mixedG, mixedB, palette);
+                                      }
+                                      layerPixels[idx] = mixedVal;
+
+                                      // Reservoir color pickup: brush absorbs some canvas color as it travels
+                                      const pickupRate = Math.min(0.65, (1 - blendFactor * 0.4) * 0.45 * falloff);
+                                      const carriedR = Math.round(r1 * (1 - pickupRate) + r2 * pickupRate);
+                                      const carriedG = Math.round(g1 * (1 - pickupRate) + g2 * pickupRate);
+                                      const carriedB = Math.round(b1 * (1 - pickupRate) + b2 * pickupRate);
+
+                                      const nextCarriedVal = colorMode === 'rgba'
+                                          ? rgbToHex(carriedR, carriedG, carriedB)
+                                          : findNearestPaletteIndex(carriedR, carriedG, carriedB, palette);
+                                      smudgeReservoirRef.current.set(key, nextCarriedVal);
+                                  }
+                              }
+                          }
                       }
                   } else if (tool === 'eraser') {
                       layerPixels[idx] = null;
@@ -337,13 +459,18 @@ export function useCanvasTools(
       });
 
       const newFrames = frames.map((f, i) => i !== activeFrameIndex ? f : { ...f, layerData: { ...f.layerData, [activeLayerId]: currentGrid } });
-      updateState({ ...stateRef.current, frames: newFrames }, { action: inkType === 'shading' ? 'Shading Fill' : 'Bucket Fill', tool: 'bucket' }); 
+      const nextState = { ...stateRef.current, frames: newFrames };
+      stateRef.current = nextState;
+      updateState(nextState, { action: inkType === 'shading' ? 'Shading Fill' : 'Bucket Fill', tool: 'bucket' }); 
       return; 
     }
 
     if (changed) {
-      const newFrames = frames.map((f, i) => i !== activeFrameIndex ? f : { ...f, layerData: { ...f.layerData, [activeLayerId]: layerPixels } });
-      updateState({ ...stateRef.current, frames: newFrames });
+      activeStrokePixelsRef.current = layerPixels;
+      const newFrames = frames.map((f, i) => i !== activeFrameIndex ? f : { ...f, layerData: { ...f.layerData, [activeLayerId]: [...layerPixels] } });
+      const nextState = { ...stateRef.current, frames: newFrames };
+      stateRef.current = nextState;
+      updateState(nextState);
     }
   };
 
@@ -355,7 +482,7 @@ export function useCanvasTools(
 
         if (stateRef.current.tool === 'pencil') actionName = `${prefix}Pencil Stroke`;
         else if (stateRef.current.tool === 'eraser') actionName = 'Eraser';
-        else if (stateRef.current.tool === 'smudge') actionName = 'Warp/Push';
+        else if (stateRef.current.tool === 'smudge') actionName = stateRef.current.smudgeMode === 'push' ? 'Push Pixels' : 'Smudge';
         else if (stateRef.current.tool === 'line') actionName = `${prefix}Line`;
         else if (stateRef.current.tool === 'rect') actionName = `${prefix}Rectangle`;
         else if (stateRef.current.tool === 'filled-rect') actionName = `${prefix}Filled Rectangle`;
@@ -366,7 +493,10 @@ export function useCanvasTools(
         
         updateState(stateRef.current, { action: actionName, tool: stateRef.current.tool });
     }
+    smudgeReservoirRef.current.clear();
+    lastSmudgePointRef.current = null;
     strokeStartDataRef.current = null;
+    activeStrokePixelsRef.current = null;
     strokePathRef.current = [];
     originRef.current = null;
   };

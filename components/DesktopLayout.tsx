@@ -826,6 +826,39 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                                   <label htmlFor="pixelPerfect" className="text-muted-foreground cursor-pointer text-[10px] hidden sm:inline">Pixel Perfect</label>
                               </div>
                           )}
+                          {state.tool === 'smudge' && (
+                              <>
+                                  <div className="flex items-center gap-1.5 ml-3 border-l border-border pl-3">
+                                      <span className="text-muted-foreground hidden sm:inline text-[10px]">Mode:</span>
+                                      <div className="flex bg-card rounded p-0.5 gap-0.5 ring-1 ring-border shadow-inner">
+                                          <ToolButton
+                                              active={!state.smudgeMode || state.smudgeMode === 'blend'}
+                                              onClick={() => updateState({...state, smudgeMode: 'blend'})}
+                                              icon={<Droplets size={14} />}
+                                              label="Smart Blend (Mix & smear colors)"
+                                          />
+                                          <ToolButton
+                                              active={state.smudgeMode === 'push'}
+                                              onClick={() => updateState({...state, smudgeMode: 'push'})}
+                                              icon={<Hand size={14} />}
+                                              label="Push (Displace / nudge pixels)"
+                                          />
+                                      </div>
+                                  </div>
+                                  <div className="flex items-center gap-2 ml-3 border-l border-border pl-3">
+                                      <span className="text-muted-foreground hidden sm:inline text-[10px]">Strength:</span>
+                                      <CustomSlider
+                                          min={10}
+                                          max={100}
+                                          step={5}
+                                          value={Math.round((state.smudgeStrength ?? 0.7) * 100)}
+                                          onValueChange={(val) => updateState({...state, smudgeStrength: val / 100})}
+                                          className="w-16 sm:w-20"
+                                      />
+                                      <span className="w-8 text-[10px] text-muted-foreground font-mono">{Math.round((state.smudgeStrength ?? 0.7) * 100)}%</span>
+                                  </div>
+                              </>
+                          )}
                       </>
                   )}
                   {(state.tool === 'bucket' || state.tool === 'magic-wand') && (

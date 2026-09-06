@@ -128,9 +128,10 @@ export const Canvas: React.FC<CanvasProps> = ({
 
   const selectionSet = useMemo(() => {
     if (!state.selection) return null;
-    const arr = state.selection instanceof Set 
-      ? Array.from(state.selection) 
-      : (Array.isArray(state.selection) ? Array.from(state.selection as any) : []);
+    if (state.selection instanceof Set) {
+      return state.selection.size > 0 ? state.selection : null;
+    }
+    const arr = Array.isArray(state.selection) ? Array.from(state.selection as any) : [];
     const numSet = new Set<number>();
     for (let i = 0; i < arr.length; i++) {
       const n = Number(arr[i]);
@@ -159,6 +160,11 @@ export const Canvas: React.FC<CanvasProps> = ({
   const [localZoom, setLocalZoom] = useState(state.zoom);
   const panRef = useRef<Position>({ x: 0, y: 0 });
   const zoomRef = useRef(state.zoom);
+
+  // Performance refs: coordinate deduplication and palette cache
+  const lastReportedCoordsRef = useRef<Position | null>(null);
+  const tileCanvasesRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
+  const paletteCacheRef = useRef<Map<number, { palette: string[]; buf: Uint32Array }>>(new Map());
   
   useEffect(() => {
     panRef.current = pan;
@@ -355,8 +361,14 @@ export const Canvas: React.FC<CanvasProps> = ({
   const handlePointerMove = (clientX: number, clientY: number, modifiers: Modifiers) => {
     updateCustomCursor(clientX, clientY);
     const coords = getPixelCoords(clientX, clientY);
-    setCursorPos(coords);
-    if (onMousePosUpdate) onMousePosUpdate(coords);
+    
+    // Only trigger React state and status bar updates when integer pixel coordinates change
+    const lastReported = lastReportedCoordsRef.current;
+    if (!lastReported || !coords || lastReported.x !== coords.x || lastReported.y !== coords.y) {
+      lastReportedCoordsRef.current = coords;
+      setCursorPos(coords);
+      if (onMousePosUpdate) onMousePosUpdate(coords);
+    }
     if (!coords) return;
     const { x, y } = coords;
 
@@ -417,9 +429,8 @@ export const Canvas: React.FC<CanvasProps> = ({
         setPolyPoints(prev => [...prev, { x, y }]);
       } else if (['rect-select', 'ellipse-select'].includes(state.tool)) {
       } else if (['pencil', 'eraser', 'smudge', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'blur', 'sharpen'].includes(state.tool)) {
-        /* FIXED: Changed 'tool' to 'state.tool' to resolve Cannot find name 'tool' error */
         if (x >= 0 && x < state.width && y >= 0 && y < state.height) {
-             callbacks.current.onDraw(x, y, modifiers);
+          callbacks.current.onDraw(x, y, modifiers);
         }
       }
     }
@@ -672,41 +683,54 @@ export const Canvas: React.FC<CanvasProps> = ({
       return ref.current;
     };
 
+    const getPaletteForAlpha = (alpha: number) => {
+      let cache = paletteCacheRef.current.get(alpha);
+      if (!cache || cache.palette !== state.palette) {
+        const palLen = state.palette.length;
+        const buf = new Uint32Array(palLen);
+        for (let p = 0; p < palLen; p++) {
+          if (state.palette[p]) {
+            buf[p] = getPackedColor(state.palette[p], alpha);
+          }
+        }
+        cache = { palette: state.palette, buf };
+        paletteCacheRef.current.set(alpha, cache);
+      }
+      return cache.buf;
+    };
+
+    const totalPixels = state.width * state.height;
+    const palLen = state.palette.length;
+
     // 1. Draw Onion Skin to offscreen
     if (state.onionSkin && state.activeFrameIndex > 0 && state.frames[state.activeFrameIndex - 1]) {
       const prevFrame = state.frames[state.activeFrameIndex - 1];
       const imgData = getReusedImageData(onionSkinImageDataRef);
       const data32 = new Uint32Array(imgData.data.buffer);
-      const paletteUint32 = new Uint32Array(state.palette.length);
 
       const parentMap = getLayerParentMap(state.layers);
-      state.layers.forEach(layer => {
-        if (layer.type === 'group') return;
-        if (!isLayerVisible(layer, state.layers, parentMap)) return;
+      for (let lIdx = 0; lIdx < state.layers.length; lIdx++) {
+        const layer = state.layers[lIdx];
+        if (layer.type === 'group') continue;
+        if (!isLayerVisible(layer, state.layers, parentMap)) continue;
         const pixels = prevFrame.layerData[layer.id];
-        if (!pixels) return;
+        if (!pixels) continue;
         const effOpacity = getEffectiveLayerOpacity(layer, state.layers, parentMap);
         const alpha = Math.round((effOpacity / 100) * 80);
-        if (alpha <= 0) return;
+        if (alpha <= 0) continue;
 
-        for (let p = 0; p < state.palette.length; p++) {
-          if (state.palette[p]) {
-            paletteUint32[p] = getPackedColor(state.palette[p], alpha);
-          }
-        }
-
-        for (let i = 0; i < pixels.length; i++) {
+        const paletteUint32 = getPaletteForAlpha(alpha);
+        const pxLen = Math.min(pixels.length, totalPixels);
+        for (let i = 0; i < pxLen; i++) {
             const val = pixels[i];
             if (val === null || val === undefined) continue;
-            let packed: number;
             if (typeof val === 'number') {
-              packed = paletteUint32[val];
+              if (val >= 0 && val < palLen) data32[i] = paletteUint32[val];
             } else {
-              packed = getPackedColor(val, alpha);
+              data32[i] = getPackedColor(val, alpha);
             }
-            if (packed) data32[i] = packed;
         }
-      });
+      }
       offCtx.putImageData(imgData, 0, 0);
     } else {
       offCtx.clearRect(0, 0, state.width, state.height);
@@ -716,18 +740,19 @@ export const Canvas: React.FC<CanvasProps> = ({
     const parentMap = getLayerParentMap(state.layers);
     const paletteKey = state.palette.join(',');
 
-    state.layers.forEach((layer) => {
-      if (layer.type === 'group') return;
-      if (!isLayerVisible(layer, state.layers, parentMap)) return;
+    for (let lIdx = 0; lIdx < state.layers.length; lIdx++) {
+      const layer = state.layers[lIdx];
+      if (layer.type === 'group') continue;
+      if (!isLayerVisible(layer, state.layers, parentMap)) continue;
       const layerPixels = currentFrame.layerData[layer.id];
-      if (!layerPixels) return;
+      if (!layerPixels) continue;
       
       const isTargetLayer = layer.id === state.activeLayerId;
       const isFloatingActive = (isMoving || isRotating || isScaling) && isTargetLayer && Boolean(state.selection);
       
       const effOpacity = getEffectiveLayerOpacity(layer, state.layers, parentMap);
       const alpha = Math.round((effOpacity / 100) * 255);
-      if (alpha <= 0) return;
+      if (alpha <= 0) continue;
 
       let layerCache = layerCanvasCacheRef.current.get(layer.id);
       if (!layerCache || layerCache.lastWidth !== state.width || layerCache.lastHeight !== state.height) {
@@ -760,28 +785,33 @@ export const Canvas: React.FC<CanvasProps> = ({
         const data32 = layerCache.data32;
         data32.fill(0);
 
-        const paletteUint32 = new Uint32Array(state.palette.length);
-        for (let p = 0; p < state.palette.length; p++) {
-          if (state.palette[p]) {
-            paletteUint32[p] = getPackedColor(state.palette[p], alpha);
+        const paletteUint32 = getPaletteForAlpha(alpha);
+        const pxLen = Math.min(layerPixels.length, totalPixels);
+
+        if (isFloatingActive && state.selection) {
+          const sel = state.selection;
+          for (let i = 0; i < pxLen; i++) {
+            if (sel.has(i)) continue;
+            const val = layerPixels[i];
+            if (val === null || val === undefined) continue;
+            if (typeof val === 'number') {
+              if (val >= 0 && val < palLen) data32[i] = paletteUint32[val];
+            } else {
+              data32[i] = getPackedColor(val, alpha);
+            }
+          }
+        } else {
+          for (let i = 0; i < pxLen; i++) {
+            const val = layerPixels[i];
+            if (val === null || val === undefined) continue;
+            if (typeof val === 'number') {
+              if (val >= 0 && val < palLen) data32[i] = paletteUint32[val];
+            } else {
+              data32[i] = getPackedColor(val, alpha);
+            }
           }
         }
 
-        const sel = state.selection;
-        for (let i = 0; i < layerPixels.length; i++) {
-          if (isFloatingActive && sel && sel.has(i)) continue;
-          const val = layerPixels[i];
-          if (val === null || val === undefined) continue;
-          let packed: number;
-          if (typeof val === 'number') {
-            packed = paletteUint32[val];
-          } else {
-            packed = getPackedColor(val, alpha);
-          }
-          if (packed) data32[i] = packed;
-        }
-
-        layerCache.ctx.clearRect(0, 0, state.width, state.height);
         layerCache.ctx.putImageData(layerCache.imageData, 0, 0);
         if (!isFloatingActive) {
           layerCache.lastPixels = layerPixels;
@@ -800,7 +830,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       offCtx.globalCompositeOperation = compositeOp;
       offCtx.drawImage(layerCache.canvas, 0, 0);
       offCtx.globalCompositeOperation = 'source-over';
-    });
+    }
 
     // 3. Draw Floating Pixels (Transformations)
     if ((isScaling || isRotating || isMoving) && floatingPixels && state.selection) {
@@ -830,25 +860,18 @@ export const Canvas: React.FC<CanvasProps> = ({
 
         const floatImgData = getReusedImageData(layerImageDataRef);
         const floatData32 = new Uint32Array(floatImgData.data.buffer);
-        const floatPaletteUint32 = new Uint32Array(state.palette.length);
-        for (let p = 0; p < state.palette.length; p++) {
-          if (state.palette[p]) {
-            floatPaletteUint32[p] = getPackedColor(state.palette[p], 255);
-          }
-        }
+        const floatPaletteUint32 = getPaletteForAlpha(255);
+        const floatPxLen = Math.min(transformedGrid.length, totalPixels);
 
-        for (let i = 0; i < transformedGrid.length; i++) {
+        for (let i = 0; i < floatPxLen; i++) {
             const val = transformedGrid[i];
             if (val === null || val === undefined) continue;
-            let packed: number;
             if (typeof val === 'number') {
-              packed = floatPaletteUint32[val];
+              if (val >= 0 && val < palLen) floatData32[i] = floatPaletteUint32[val];
             } else {
-              packed = getPackedColor(val, 255);
+              floatData32[i] = getPackedColor(val, 255);
             }
-            if (packed) floatData32[i] = packed;
         }
-        layerCtx.clearRect(0, 0, state.width, state.height);
         layerCtx.putImageData(floatImgData, 0, 0);
         offCtx.drawImage(layerCanvas, 0, 0);
     }
@@ -856,7 +879,20 @@ export const Canvas: React.FC<CanvasProps> = ({
     // Final Transfer to Art Canvas
     ctx.clearRect(0, 0, state.width, state.height);
     ctx.drawImage(offscreen, 0, 0);
-  }, [state.frames, state.activeFrameIndex, state.layers, state.activeLayerId, state.palette, state.width, state.height, state.onionSkin, isMoving, isRotating, isScaling, floatingPixels, moveOffset, rotationAngle, rotationPivot, initialBox, currentBox]);
+
+    // Synchronize Tiled Overlays if active
+    if (state.tiled && tileCanvasesRef.current.size > 0) {
+      tileCanvasesRef.current.forEach(tCanvas => {
+        if (tCanvas) {
+          const tCtx = tCanvas.getContext('2d');
+          if (tCtx) {
+            tCtx.clearRect(0, 0, state.width, state.height);
+            tCtx.drawImage(canvas, 0, 0);
+          }
+        }
+      });
+    }
+  }, [state.frames, state.activeFrameIndex, state.layers, state.activeLayerId, state.palette, state.width, state.height, state.onionSkin, isMoving, isRotating, isScaling, floatingPixels, moveOffset, rotationAngle, rotationPivot, initialBox, currentBox, state.tiled]);
 
   // UI Rendering Effect (Grid, Selection, Brush)
   const renderUI = useCallback(() => {
@@ -876,7 +912,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     const py = pan.y;
     const dashOffset = (performance.now() / 30) % 8;
 
-    // 1. Draw Grid (Viewport-Clipped for performance)
+    // 1. Draw Grid (Viewport-Clipped & Half-Pixel Snapped for crisp lines & faster rendering)
     if (state.showGrid && z > 4) {
       const cWidth = containerSize.width || canvas.width / dpr;
       const cHeight = containerSize.height || canvas.height / dpr;
@@ -891,12 +927,12 @@ export const Canvas: React.FC<CanvasProps> = ({
         ctx.lineWidth = 1;
         ctx.beginPath();
         for (let x = startX; x <= endX; x++) {
-          const screenX = px + x * z;
+          const screenX = Math.round(px + x * z) + 0.5;
           ctx.moveTo(screenX, py + startY * z);
           ctx.lineTo(screenX, py + endY * z);
         }
         for (let y = startY; y <= endY; y++) {
-          const screenY = py + y * z;
+          const screenY = Math.round(py + y * z) + 0.5;
           ctx.moveTo(px + startX * z, screenY);
           ctx.lineTo(px + endX * z, screenY);
         }
@@ -1156,12 +1192,18 @@ export const Canvas: React.FC<CanvasProps> = ({
               className="w-full h-full block"
               style={{ imageRendering: 'pixelated' }}
               ref={(el) => {
-                  if (el && artCanvasRef.current) {
+                  const key = `${tx}_${ty}`;
+                  if (el) {
+                    tileCanvasesRef.current.set(key, el);
+                    if (artCanvasRef.current) {
                       const ctx = el.getContext('2d');
                       if (ctx) {
-                          ctx.clearRect(0, 0, state.width, state.height);
-                          ctx.drawImage(artCanvasRef.current, 0, 0);
+                        ctx.clearRect(0, 0, state.width, state.height);
+                        ctx.drawImage(artCanvasRef.current, 0, 0);
                       }
+                    }
+                  } else {
+                    tileCanvasesRef.current.delete(key);
                   }
               }}
             />

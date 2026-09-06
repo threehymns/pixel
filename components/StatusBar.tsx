@@ -118,7 +118,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
               )}
               {tool === 'smudge' && (
                 <span className="flex gap-1 items-center shrink-0">
-                  <kbd className="bg-background px-1 rounded-sm text-[9px] border border-border text-foreground font-sans">Drag</kbd> Push pixels
+                  <kbd className="bg-background px-1 rounded-sm text-[9px] border border-border text-foreground font-sans">Drag</kbd> {state.smudgeMode === 'push' ? 'Push pixels' : 'Blend & smear colors'}
                 </span>
               )}
               {tool === 'line' && !isShading && (

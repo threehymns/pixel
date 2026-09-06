@@ -77,6 +77,8 @@ export const INITIAL_STATE: ProjectState = {
   pixelPerfect: false,
   ditheringEnabled: false,
   rotationAlgorithm: 'nearest',
+  smudgeMode: 'blend',
+  smudgeStrength: 0.7,
   zoom: 16,
   onionSkin: false,
   showGrid: false,

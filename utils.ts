@@ -328,16 +328,16 @@ export const hexToRgb = (hex: string): [number, number, number] => {
   return rgb;
 };
 
-const PACKED_COLOR_CACHE = new Map<string, number>();
-export const getPackedColor = (hex: string, alpha: number = 255): number => {
-  const key = `${hex}_${alpha}`;
-  const cached = PACKED_COLOR_CACHE.get(key);
-  if (cached !== undefined) return cached;
+const HEX_BGR_CACHE = new Map<string, number>();
 
-  const [r, g, b] = hexToRgb(hex);
-  const packed = ((alpha & 0xff) << 24) | ((b & 0xff) << 16) | ((g & 0xff) << 8) | (r & 0xff);
-  PACKED_COLOR_CACHE.set(key, packed);
-  return packed;
+export const getPackedColor = (hex: string, alpha: number = 255): number => {
+  let bgr = HEX_BGR_CACHE.get(hex);
+  if (bgr === undefined) {
+    const [r, g, b] = hexToRgb(hex);
+    bgr = ((b & 0xff) << 16) | ((g & 0xff) << 8) | (r & 0xff);
+    HEX_BGR_CACHE.set(hex, bgr);
+  }
+  return ((alpha & 0xff) << 24) | bgr;
 };
 
 export interface Segment {
@@ -440,10 +440,17 @@ export const getMergedSelectionSegments = (
 export function getLayerParentMap(layers: Layer[]): Map<string, Layer> {
   const parentMap = new Map<string, Layer>();
 
-  // First pass: explicit parentId
-  for (const layer of layers) {
+  // Fast layer lookup map
+  const layerById = new Map<string, Layer>();
+  for (let i = 0; i < layers.length; i++) {
+    layerById.set(layers[i].id, layers[i]);
+  }
+
+  // First pass: explicit parentId with O(1) lookup
+  for (let i = 0; i < layers.length; i++) {
+    const layer = layers[i];
     if (layer.parentId && layer.parentId !== layer.id) {
-      const explicitParent = layers.find(l => l.id === layer.parentId);
+      const explicitParent = layerById.get(layer.parentId);
       if (explicitParent) {
         parentMap.set(layer.id, explicitParent);
       }
@@ -611,43 +618,53 @@ export const renderFrameToCanvas = (state: ProjectState, frameIndex: number): HT
     const layerCtx = layerCanvas.getContext('2d');
     if (!layerCtx) return canvas;
 
-    const paletteUint32 = new Uint32Array(state.palette.length);
+    const palLen = state.palette.length;
+    // Cache paletteUint32 buffers by alpha
+    const paletteBufferCache = new Map<number, Uint32Array>();
+    const getPaletteForAlpha = (alpha: number) => {
+      let buf = paletteBufferCache.get(alpha);
+      if (!buf) {
+        buf = new Uint32Array(palLen);
+        for (let p = 0; p < palLen; p++) {
+          if (state.palette[p]) {
+            buf[p] = getPackedColor(state.palette[p], alpha);
+          }
+        }
+        paletteBufferCache.set(alpha, buf);
+      }
+      return buf;
+    };
 
     // Allocate layerImageData once before the layers loop and clear buffer with data32.fill(0)
     const layerImgData = layerCtx.createImageData(state.width, state.height);
     const data32 = new Uint32Array(layerImgData.data.buffer);
-
     const parentMap = getLayerParentMap(state.layers);
+    const totalPixels = state.width * state.height;
 
-    state.layers.forEach(l => {
-        if (l.type === 'group') return;
-        if (!isLayerVisible(l, state.layers, parentMap)) return;
+    for (let lIdx = 0; lIdx < state.layers.length; lIdx++) {
+        const l = state.layers[lIdx];
+        if (l.type === 'group') continue;
+        if (!isLayerVisible(l, state.layers, parentMap)) continue;
         const px = frame.layerData[l.id];
-        if (!px) return;
+        if (!px) continue;
 
         const effectiveOpacity = getEffectiveLayerOpacity(l, state.layers, parentMap);
         const alpha = Math.round((effectiveOpacity / 100) * 255);
-        if (alpha <= 0) return;
+        if (alpha <= 0) continue;
 
         data32.fill(0);
+        const paletteUint32 = getPaletteForAlpha(alpha);
 
-        for (let p = 0; p < state.palette.length; p++) {
-            if (state.palette[p]) {
-                paletteUint32[p] = getPackedColor(state.palette[p], alpha);
-            }
-        }
-
-        for (let i = 0; i < px.length; i++) {
+        const pxLen = Math.min(px.length, totalPixels);
+        for (let i = 0; i < pxLen; i++) {
             const val = px[i];
             if (val === null || val === undefined) continue;
 
-            let packed: number;
             if (typeof val === 'number') {
-                packed = paletteUint32[val];
+                if (val >= 0 && val < palLen) data32[i] = paletteUint32[val];
             } else {
-                packed = getPackedColor(val, alpha);
+                data32[i] = getPackedColor(val, alpha);
             }
-            if (packed) data32[i] = packed;
         }
 
         layerCtx.putImageData(layerImgData, 0, 0);
@@ -657,7 +674,7 @@ export const renderFrameToCanvas = (state: ProjectState, frameIndex: number): HT
         ctx.globalCompositeOperation = compositeOp;
         ctx.drawImage(layerCanvas, 0, 0);
         ctx.globalCompositeOperation = 'source-over';
-    });
+    }
 
     return canvas;
 };
