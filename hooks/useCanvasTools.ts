@@ -174,6 +174,13 @@ export function useCanvasTools(
       let errorBufferG: Float32Array | null = null;
       let errorBufferB: Float32Array | null = null;
 
+      // Optimization: Allocate smudge snapshot once before the points loop instead of on every point
+      const isSmudge = tool === 'smudge';
+      let smudgeBase: (PixelValue | null)[] | null = null;
+      if (isSmudge) {
+        smudgeBase = [...layerPixels];
+      }
+
       pointsToDraw.forEach((pt, pointIdxInStroke) => {
         const variants = [{ x: pt.x, y: pt.y }];
         if (symmetry.x) variants.push({ x: width - 1 - pt.x, y: pt.y });
@@ -184,21 +191,16 @@ export function useCanvasTools(
         const dx_vec = pt.x - (lastPt?.x ?? pt.x);
         const dy_vec = pt.y - (lastPt?.y ?? pt.y);
 
-        // Snapshot before this segment point to allow "smearing" across the canvas
-        const smudgeBase = tool === 'smudge' ? [...layerPixels] : null;
-
         variants.forEach(variant => {
-          // Optimization: Only iterate the brush area
+          // Optimization: Only iterate the brush bounding box
           const r = size / 2;
-          const left = Math.floor(variant.x - r);
-          const right = Math.ceil(variant.x + r);
-          const top = Math.floor(variant.y - r);
-          const bottom = Math.ceil(variant.y + r);
+          const left = Math.max(0, Math.floor(variant.x - r));
+          const right = Math.min(width - 1, Math.ceil(variant.x + r));
+          const top = Math.max(0, Math.floor(variant.y - r));
+          const bottom = Math.min(height - 1, Math.ceil(variant.y + r));
 
           for (let drawY = top; drawY <= bottom; drawY++) {
               for (let drawX = left; drawX <= right; drawX++) {
-                  if (drawX < 0 || drawX >= width || drawY < 0 || drawY >= height) continue;
-                  
                   const relX = drawX - variant.x;
                   const relY = drawY - variant.y;
                   const distSq = relX * relX + relY * relY;
@@ -222,7 +224,7 @@ export function useCanvasTools(
                       } else {
                           layerPixels[idx] = activeVal; 
                       }
-                  } else if (tool === 'smudge' && smudgeBase) {
+                  } else if (isSmudge && smudgeBase) {
                       // IMPROVED WARP/PUSH ALGORITHM
                       // Calculate falloff: Pixels in center move more than pixels at edge
                       const dist = Math.sqrt(distSq);

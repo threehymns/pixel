@@ -4,12 +4,73 @@ import { ProjectState, Position, Modifiers, PixelGrid, PixelValue } from '../typ
 import { 
   getIndex, getCoords,
   getRectSelection, getEllipseSelection, getPolygonSelection, getWandSelection,
-  hexToRgb, getSelectionBoundingBox, rotateSelectionPixels, scaleSelectionPixels,
+  hexToRgb, getPackedColor, getMergedSelectionSegments, Segment, getSelectionBoundingBox, rotateSelectionPixels, scaleSelectionPixels,
   getLayerParentMap, isLayerVisible, getEffectiveLayerOpacity
 } from '../utils';
 
 const CURSOR_SVG = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M10 2H14V8H10V2ZM10 16H14V22H10V16ZM2 10H8V14H2V10ZM16 10H22V14H16V10ZM10 10H14V14H10V10Z" fill="white"/></svg>`;
 const CURSOR_URI = `data:image/svg+xml;utf8,${encodeURIComponent(CURSOR_SVG)}`;
+
+interface CachedLayerCanvas {
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+  imageData: ImageData;
+  data32: Uint32Array;
+  lastPixels: PixelGrid | null;
+  lastOpacity: number;
+  lastVisible: boolean;
+  lastPaletteKey: string;
+  lastWidth: number;
+  lastHeight: number;
+}
+
+// Precomputed circle brush boundary contours for instant, allocation-free rendering
+const CIRCLE_CONTOUR_CACHE = new Map<number, Segment[]>();
+
+const getCircleContour = (size: number): Segment[] => {
+  let cached = CIRCLE_CONTOUR_CACHE.get(size);
+  if (cached) return cached;
+
+  if (size <= 1) {
+    cached = [
+      { x1: 0, y1: 0, x2: 1, y2: 0 },
+      { x1: 1, y1: 0, x2: 1, y2: 1 },
+      { x1: 0, y1: 1, x2: 1, y2: 1 },
+      { x1: 0, y1: 0, x2: 0, y2: 1 }
+    ];
+    CIRCLE_CONTOUR_CACHE.set(size, cached);
+    return cached;
+  }
+
+  const radiusSq = Math.pow(size / 2 - 0.1, 2);
+  const inCircle: boolean[][] = [];
+  for (let dy = 0; dy < size; dy++) {
+    inCircle[dy] = [];
+    for (let dx = 0; dx < size; dx++) {
+      const cx = dx - (size - 1) / 2;
+      const cy = dy - (size - 1) / 2;
+      inCircle[dy][dx] = (cx * cx + cy * cy <= radiusSq);
+    }
+  }
+
+  const segments: Segment[] = [];
+  for (let dy = 0; dy < size; dy++) {
+    for (let dx = 0; dx < size; dx++) {
+      if (!inCircle[dy][dx]) continue;
+      // Top edge
+      if (dy === 0 || !inCircle[dy - 1][dx]) segments.push({ x1: dx, y1: dy, x2: dx + 1, y2: dy });
+      // Bottom edge
+      if (dy === size - 1 || !inCircle[dy + 1][dx]) segments.push({ x1: dx, y1: dy + 1, x2: dx + 1, y2: dy + 1 });
+      // Left edge
+      if (dx === 0 || !inCircle[dy][dx - 1]) segments.push({ x1: dx, y1: dy, x2: dx, y2: dy + 1 });
+      // Right edge
+      if (dx === size - 1 || !inCircle[dy][dx + 1]) segments.push({ x1: dx + 1, y1: dy, x2: dx + 1, y2: dy + 1 });
+    }
+  }
+
+  CIRCLE_CONTOUR_CACHE.set(size, segments);
+  return segments;
+};
 
 interface CanvasProps {
   state: ProjectState;
@@ -43,6 +104,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   const layerCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const layerImageDataRef = useRef<ImageData | null>(null);
   const onionSkinImageDataRef = useRef<ImageData | null>(null);
+  const layerCanvasCacheRef = useRef<Map<string, CachedLayerCanvas>>(new Map());
   const cursorRef = useRef<HTMLDivElement>(null);
   const mousePosRef = useRef<{x: number, y: number}>({ x: -100, y: -100 });
   const touchTimeoutRef = useRef<number | null>(null);
@@ -77,35 +139,12 @@ export const Canvas: React.FC<CanvasProps> = ({
     return numSet.size > 0 ? numSet : null;
   }, [state.selection]);
 
-  // Bolt Optimization: Precompute boundary segments for active selection.
-  // Reduces marching-ants rendering complexity from O(Selection Area) to O(Selection Perimeter),
+  // Precompute merged boundary segments for active selection.
+  // Reduces marching-ants rendering complexity from O(Selection Area) to O(Selection Corners),
   // improving performance by 100x-1000x on high-resolution canvas selections.
   const selectionBorderSegments = useMemo(() => {
     if (!selectionSet || selectionSet.size === 0) return null;
-    const w = state.width;
-    const h = state.height;
-    const segments: { x1: number; y1: number; x2: number; y2: number }[] = [];
-
-    selectionSet.forEach(rawIdx => {
-      const idx = Number(rawIdx);
-      const x = idx % w;
-      const y = (idx / w) | 0;
-
-      if (y === 0 || !selectionSet.has(idx - w)) {
-        segments.push({ x1: x, y1: y, x2: x + 1, y2: y });
-      }
-      if (y === h - 1 || !selectionSet.has(idx + w)) {
-        segments.push({ x1: x, y1: y + 1, x2: x + 1, y2: y + 1 });
-      }
-      if (x === 0 || !selectionSet.has(idx - 1)) {
-        segments.push({ x1: x, y1: y, x2: x, y2: y + 1 });
-      }
-      if (x === w - 1 || !selectionSet.has(idx + 1)) {
-        segments.push({ x1: x + 1, y1: y, x2: x + 1, y2: y + 1 });
-      }
-    });
-
-    return segments;
+    return getMergedSelectionSegments(selectionSet, state.width, state.height);
   }, [selectionSet, state.width, state.height]);
   
   const callbacks = useRef({ onDrawStart, onDraw, onDrawEnd });
@@ -598,7 +637,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     };
   }, [handleWheel, handleTouchStart, handleTouchMove, handleTouchEnd]);
 
-  // Art Rendering Effect (Double Buffered)
+  // Art Rendering Effect (Double Buffered + Per-Layer Cached)
   useEffect(() => {
     const canvas = artCanvasRef.current;
     if (!canvas) return;
@@ -623,9 +662,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     
     const currentFrame = state.frames[state.activeFrameIndex];
     if (!currentFrame) return;
-    
-    // Bolt Optimization: Helper to reuse cached ImageData buffers across renders,
-    // avoiding megabytes of garbage allocations per frame on high-resolution images.
+
     const getReusedImageData = (ref: React.MutableRefObject<ImageData | null>) => {
       if (!ref.current || ref.current.width !== state.width || ref.current.height !== state.height) {
         ref.current = offCtx.createImageData(state.width, state.height);
@@ -634,14 +671,13 @@ export const Canvas: React.FC<CanvasProps> = ({
       }
       return ref.current;
     };
-    
+
     // 1. Draw Onion Skin to offscreen
     if (state.onionSkin && state.activeFrameIndex > 0 && state.frames[state.activeFrameIndex - 1]) {
       const prevFrame = state.frames[state.activeFrameIndex - 1];
       const imgData = getReusedImageData(onionSkinImageDataRef);
       const data32 = new Uint32Array(imgData.data.buffer);
       const paletteUint32 = new Uint32Array(state.palette.length);
-      const hexCache = new Map<string, number>();
 
       const parentMap = getLayerParentMap(state.layers);
       state.layers.forEach(layer => {
@@ -655,8 +691,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
         for (let p = 0; p < state.palette.length; p++) {
           if (state.palette[p]) {
-            const [r, g, b] = hexToRgb(state.palette[p]);
-            paletteUint32[p] = (alpha << 24) | (b << 16) | (g << 8) | r;
+            paletteUint32[p] = getPackedColor(state.palette[p], alpha);
           }
         }
 
@@ -667,13 +702,7 @@ export const Canvas: React.FC<CanvasProps> = ({
             if (typeof val === 'number') {
               packed = paletteUint32[val];
             } else {
-              let cached = hexCache.get(val);
-              if (cached === undefined) {
-                const [r, g, b] = hexToRgb(val);
-                cached = (alpha << 24) | (b << 16) | (g << 8) | r;
-                hexCache.set(val, cached);
-              }
-              packed = cached;
+              packed = getPackedColor(val, alpha);
             }
             if (packed) data32[i] = packed;
         }
@@ -683,10 +712,9 @@ export const Canvas: React.FC<CanvasProps> = ({
       offCtx.clearRect(0, 0, state.width, state.height);
     }
 
-    // 2. Draw Layers to offscreen
-    const paletteUint32 = new Uint32Array(state.palette.length);
-    const hexCache = new Map<string, number>();
+    // 2. Draw Layers to offscreen with per-layer rasterization cache
     const parentMap = getLayerParentMap(state.layers);
+    const paletteKey = state.palette.join(',');
 
     state.layers.forEach((layer) => {
       if (layer.type === 'group') return;
@@ -695,45 +723,82 @@ export const Canvas: React.FC<CanvasProps> = ({
       if (!layerPixels) return;
       
       const isTargetLayer = layer.id === state.activeLayerId;
-      const shouldSkip = (isMoving || isRotating || isScaling) && isTargetLayer && state.selection;
+      const isFloatingActive = (isMoving || isRotating || isScaling) && isTargetLayer && Boolean(state.selection);
       
-      const layerImgData = getReusedImageData(layerImageDataRef);
-      const layerData32 = new Uint32Array(layerImgData.data.buffer);
       const effOpacity = getEffectiveLayerOpacity(layer, state.layers, parentMap);
       const alpha = Math.round((effOpacity / 100) * 255);
       if (alpha <= 0) return;
 
-      for (let p = 0; p < state.palette.length; p++) {
-        if (state.palette[p]) {
-          const [r, g, b] = hexToRgb(state.palette[p]);
-          paletteUint32[p] = (alpha << 24) | (b << 16) | (g << 8) | r;
+      let layerCache = layerCanvasCacheRef.current.get(layer.id);
+      if (!layerCache || layerCache.lastWidth !== state.width || layerCache.lastHeight !== state.height) {
+        const c = document.createElement('canvas');
+        c.width = state.width;
+        c.height = state.height;
+        const cCtx = c.getContext('2d')!;
+        const imgData = cCtx.createImageData(state.width, state.height);
+        layerCache = {
+          canvas: c,
+          ctx: cCtx,
+          imageData: imgData,
+          data32: new Uint32Array(imgData.data.buffer),
+          lastPixels: null,
+          lastOpacity: -1,
+          lastVisible: true,
+          lastPaletteKey: '',
+          lastWidth: state.width,
+          lastHeight: state.height,
+        };
+        layerCanvasCacheRef.current.set(layer.id, layerCache);
+      }
+
+      const isDirty = isFloatingActive ||
+        layerCache.lastPixels !== layerPixels ||
+        layerCache.lastOpacity !== alpha ||
+        layerCache.lastPaletteKey !== paletteKey;
+
+      if (isDirty) {
+        const data32 = layerCache.data32;
+        data32.fill(0);
+
+        const paletteUint32 = new Uint32Array(state.palette.length);
+        for (let p = 0; p < state.palette.length; p++) {
+          if (state.palette[p]) {
+            paletteUint32[p] = getPackedColor(state.palette[p], alpha);
+          }
+        }
+
+        const sel = state.selection;
+        for (let i = 0; i < layerPixels.length; i++) {
+          if (isFloatingActive && sel && sel.has(i)) continue;
+          const val = layerPixels[i];
+          if (val === null || val === undefined) continue;
+          let packed: number;
+          if (typeof val === 'number') {
+            packed = paletteUint32[val];
+          } else {
+            packed = getPackedColor(val, alpha);
+          }
+          if (packed) data32[i] = packed;
+        }
+
+        layerCache.ctx.clearRect(0, 0, state.width, state.height);
+        layerCache.ctx.putImageData(layerCache.imageData, 0, 0);
+        if (!isFloatingActive) {
+          layerCache.lastPixels = layerPixels;
+          layerCache.lastOpacity = alpha;
+          layerCache.lastPaletteKey = paletteKey;
+        } else {
+          layerCache.lastPixels = null; // force update when transform ends
         }
       }
 
-      for (let i = 0; i < layerPixels.length; i++) {
-         if (shouldSkip && state.selection!.has(i)) continue;
-         const val = layerPixels[i];
-         if (val === null || val === undefined) continue;
-         let packed: number;
-         if (typeof val === 'number') {
-           packed = paletteUint32[val];
-         } else {
-           let cached = hexCache.get(val);
-           if (cached === undefined) {
-             const [r, g, b] = hexToRgb(val);
-             cached = (alpha << 24) | (b << 16) | (g << 8) | r;
-             hexCache.set(val, cached);
-           }
-           packed = cached;
-         }
-         if (packed) layerData32[i] = packed;
-      }
+      // Composite cached layer canvas to offscreen
+      const compositeOp: GlobalCompositeOperation = layer.blendMode === 'normal' 
+        ? 'source-over' 
+        : (layer.blendMode === 'addition' ? 'lighter' : (layer.blendMode === 'subtract' || layer.blendMode === 'divide' ? 'source-over' : layer.blendMode as GlobalCompositeOperation));
       
-      // Reuse cached offscreen canvas to composite layer
-      layerCtx.clearRect(0, 0, state.width, state.height);
-      layerCtx.putImageData(layerImgData, 0, 0);
-      offCtx.globalCompositeOperation = layer.blendMode === 'normal' ? 'source-over' : layer.blendMode;
-      offCtx.drawImage(layerCanvas, 0, 0);
+      offCtx.globalCompositeOperation = compositeOp;
+      offCtx.drawImage(layerCache.canvas, 0, 0);
       offCtx.globalCompositeOperation = 'source-over';
     });
 
@@ -765,12 +830,10 @@ export const Canvas: React.FC<CanvasProps> = ({
 
         const floatImgData = getReusedImageData(layerImageDataRef);
         const floatData32 = new Uint32Array(floatImgData.data.buffer);
-        const floatHexCache = new Map<string, number>();
         const floatPaletteUint32 = new Uint32Array(state.palette.length);
         for (let p = 0; p < state.palette.length; p++) {
           if (state.palette[p]) {
-            const [r, g, b] = hexToRgb(state.palette[p]);
-            floatPaletteUint32[p] = (255 << 24) | (b << 16) | (g << 8) | r;
+            floatPaletteUint32[p] = getPackedColor(state.palette[p], 255);
           }
         }
 
@@ -781,13 +844,7 @@ export const Canvas: React.FC<CanvasProps> = ({
             if (typeof val === 'number') {
               packed = floatPaletteUint32[val];
             } else {
-              let cached = floatHexCache.get(val);
-              if (cached === undefined) {
-                const [r, g, b] = hexToRgb(val);
-                cached = (255 << 24) | (b << 16) | (g << 8) | r;
-                floatHexCache.set(val, cached);
-              }
-              packed = cached;
+              packed = getPackedColor(val, 255);
             }
             if (packed) floatData32[i] = packed;
         }
@@ -819,24 +876,33 @@ export const Canvas: React.FC<CanvasProps> = ({
     const py = pan.y;
     const dashOffset = (performance.now() / 30) % 8;
 
-    // 1. Draw Grid
+    // 1. Draw Grid (Viewport-Clipped for performance)
     if (state.showGrid && z > 4) {
-      ctx.save();
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      for (let x = 0; x <= state.width; x++) {
-        const screenX = px + x * z;
-        ctx.moveTo(screenX, py);
-        ctx.lineTo(screenX, py + state.height * z);
+      const cWidth = containerSize.width || canvas.width / dpr;
+      const cHeight = containerSize.height || canvas.height / dpr;
+      const startX = Math.max(0, Math.floor(-px / z));
+      const endX = Math.min(state.width, Math.ceil((cWidth - px) / z));
+      const startY = Math.max(0, Math.floor(-py / z));
+      const endY = Math.min(state.height, Math.ceil((cHeight - py) / z));
+
+      if (startX <= endX && startY <= endY) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let x = startX; x <= endX; x++) {
+          const screenX = px + x * z;
+          ctx.moveTo(screenX, py + startY * z);
+          ctx.lineTo(screenX, py + endY * z);
+        }
+        for (let y = startY; y <= endY; y++) {
+          const screenY = py + y * z;
+          ctx.moveTo(px + startX * z, screenY);
+          ctx.lineTo(px + endX * z, screenY);
+        }
+        ctx.stroke();
+        ctx.restore();
       }
-      for (let y = 0; y <= state.height; y++) {
-        const screenY = py + y * z;
-        ctx.moveTo(px, screenY);
-        ctx.lineTo(px + state.width * z, screenY);
-      }
-      ctx.stroke();
-      ctx.restore();
     }
 
     // 2. Draw Symmetry Lines
@@ -963,14 +1029,13 @@ export const Canvas: React.FC<CanvasProps> = ({
         ctx.restore();
     }
 
-    // 6. Draw Brush Preview
+    // 6. Draw Brush Preview (Optimized with direct rect & contour caching)
     const isBrushTool = ['pencil', 'eraser', 'smudge', 'blur', 'sharpen'].includes(state.tool);
     const isOtherToolWithPreview = ['bucket', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'eyedropper'].includes(state.tool);
     if (cursorPos && !isMoving && !isRotating && !isScaling && (isBrushTool || (!isDrawing && isOtherToolWithPreview))) {
         const { x, y } = cursorPos;
         const size = (state.tool === 'bucket' || state.tool === 'eyedropper') ? 1 : state.brushSize;
         const startOffset = Math.floor(size / 2);
-        const radiusSq = Math.pow(size / 2 - 0.1, 2);
         const variants = [{ x, y }];
         if (state.symmetry.x) variants.push({ x: state.width - 1 - x, y: y });
         if (state.symmetry.y) variants.push({ x: x, y: state.height - 1 - y });
@@ -979,30 +1044,31 @@ export const Canvas: React.FC<CanvasProps> = ({
         ctx.save();
         ctx.translate(px, py);
         ctx.beginPath();
-        variants.forEach(variant => {
-            const brushPixels = new Set<number>();
-            for (let dx = 0; dx < size; dx++) {
-                for (let dy = 0; dy < size; dy++) {
-                    let inBrush = true;
-                    if (state.brushShape === 'circle' && size > 1 && !['bucket', 'eyedropper'].includes(state.tool)) {
-                        const cx = dx - (size - 1) / 2; const cy = dy - (size - 1) / 2;
-                        if (cx * cx + cy * cy > radiusSq) inBrush = false;
-                    }
-                    if (inBrush) {
-                        const bpx = variant.x - startOffset + dx; const bpy = variant.y - startOffset + dy;
-                        if (bpx >= 0 && bpx < state.width && bpy >= 0 && bpy < state.height) brushPixels.add(getIndex(bpx, bpy, state.width));
-                    }
-                }
+        
+        const isSquare = state.brushShape === 'square' || size <= 1 || ['bucket', 'eyedropper'].includes(state.tool);
+
+        if (isSquare) {
+          variants.forEach(variant => {
+            const bx = (variant.x - startOffset) * z;
+            const by = (variant.y - startOffset) * z;
+            const bw = size * z;
+            ctx.rect(bx, by, bw, bw);
+          });
+        } else {
+          const circleSegments = getCircleContour(size);
+          variants.forEach(variant => {
+            const ox = (variant.x - startOffset) * z;
+            const oy = (variant.y - startOffset) * z;
+            for (let i = 0; i < circleSegments.length; i++) {
+              const seg = circleSegments[i];
+              ctx.moveTo(ox + seg.x1 * z, oy + seg.y1 * z);
+              ctx.lineTo(ox + seg.x2 * z, oy + seg.y2 * z);
             }
-            brushPixels.forEach(idx => {
-               const { x: bpx, y: bpy } = getCoords(idx, state.width);
-               if (!brushPixels.has(getIndex(bpx, bpy - 1, state.width))) { ctx.moveTo(bpx * z, bpy * z); ctx.lineTo((bpx + 1) * z, bpy * z); }
-               if (!brushPixels.has(getIndex(bpx, bpy + 1, state.width))) { ctx.moveTo(bpx * z, (bpy + 1) * z); ctx.lineTo((bpx + 1) * z, (bpy + 1) * z); }
-               if (!brushPixels.has(getIndex(bpx - 1, bpy, state.width))) { ctx.moveTo(bpx * z, bpy * z); ctx.lineTo(bpx * z, (bpy + 1) * z); }
-               if (!brushPixels.has(getIndex(bpx + 1, bpy, state.width))) { ctx.moveTo((bpx + 1) * z, bpy * z); ctx.lineTo((bpx + 1) * z, (bpy + 1) * z); }
-            });
-        });
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)'; ctx.lineWidth = 1; ctx.stroke();
+          });
+        }
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
         ctx.restore();
     }
 

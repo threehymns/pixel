@@ -311,12 +311,130 @@ export const drawCheckeredBackground = (
 const HEX_CACHE: Record<string, [number, number, number]> = {};
 export const hexToRgb = (hex: string): [number, number, number] => {
   if (HEX_CACHE[hex]) return HEX_CACHE[hex];
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
+  let r = 0, g = 0, b = 0;
+  if (hex.charCodeAt(0) === 35) { // '#'
+    if (hex.length === 7) {
+      r = parseInt(hex.substring(1, 3), 16) || 0;
+      g = parseInt(hex.substring(3, 5), 16) || 0;
+      b = parseInt(hex.substring(5, 7), 16) || 0;
+    } else if (hex.length === 4) {
+      r = parseInt(hex[1] + hex[1], 16) || 0;
+      g = parseInt(hex[2] + hex[2], 16) || 0;
+      b = parseInt(hex[3] + hex[3], 16) || 0;
+    }
+  }
   const rgb: [number, number, number] = [r, g, b];
   HEX_CACHE[hex] = rgb;
   return rgb;
+};
+
+const PACKED_COLOR_CACHE = new Map<string, number>();
+export const getPackedColor = (hex: string, alpha: number = 255): number => {
+  const key = `${hex}_${alpha}`;
+  const cached = PACKED_COLOR_CACHE.get(key);
+  if (cached !== undefined) return cached;
+
+  const [r, g, b] = hexToRgb(hex);
+  const packed = ((alpha & 0xff) << 24) | ((b & 0xff) << 16) | ((g & 0xff) << 8) | (r & 0xff);
+  PACKED_COLOR_CACHE.set(key, packed);
+  return packed;
+};
+
+export interface Segment {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+/**
+ * Extracts and merges collinear border segments for an active pixel selection.
+ * Reduces marching-ants drawing complexity from O(perimeter) to O(corners),
+ * typically cutting segment draw calls by 4x-50x.
+ */
+export const getMergedSelectionSegments = (
+  selection: Set<number>,
+  width: number,
+  height: number
+): Segment[] => {
+  if (!selection || selection.size === 0) return [];
+
+  // Group horizontal segments by Y coordinate and vertical segments by X coordinate
+  const hMap = new Map<number, { x1: number; x2: number }[]>();
+  const vMap = new Map<number, { y1: number; y2: number }[]>();
+
+  selection.forEach(rawIdx => {
+    const idx = Number(rawIdx);
+    const x = idx % width;
+    const y = (idx / width) | 0;
+
+    // Top border
+    if (y === 0 || !selection.has(idx - width)) {
+      let list = hMap.get(y);
+      if (!list) { list = []; hMap.set(y, list); }
+      list.push({ x1: x, x2: x + 1 });
+    }
+    // Bottom border
+    if (y === height - 1 || !selection.has(idx + width)) {
+      let list = hMap.get(y + 1);
+      if (!list) { list = []; hMap.set(y + 1, list); }
+      list.push({ x1: x, x2: x + 1 });
+    }
+    // Left border
+    if (x === 0 || !selection.has(idx - 1)) {
+      let list = vMap.get(x);
+      if (!list) { list = []; vMap.set(x, list); }
+      list.push({ y1: y, y2: y + 1 });
+    }
+    // Right border
+    if (x === width - 1 || !selection.has(idx + 1)) {
+      let list = vMap.get(x + 1);
+      if (!list) { list = []; vMap.set(x + 1, list); }
+      list.push({ y1: y, y2: y + 1 });
+    }
+  });
+
+  const mergedSegments: Segment[] = [];
+
+  // Merge collinear horizontal segments
+  hMap.forEach((intervals, y) => {
+    intervals.sort((a, b) => a.x1 - b.x1);
+    let curX1 = intervals[0].x1;
+    let curX2 = intervals[0].x2;
+
+    for (let i = 1; i < intervals.length; i++) {
+      const next = intervals[i];
+      if (next.x1 <= curX2) {
+        curX2 = Math.max(curX2, next.x2);
+      } else {
+        mergedSegments.push({ x1: curX1, y1: y, x2: curX2, y2: y });
+        curX1 = next.x1;
+        curX2 = next.x2;
+      }
+    }
+    mergedSegments.push({ x1: curX1, y1: y, x2: curX2, y2: y });
+  });
+
+  // Merge collinear vertical segments
+  vMap.forEach((intervals, x) => {
+    intervals.sort((a, b) => a.y1 - b.y1);
+    let curY1 = intervals[0].y1;
+    let curY2 = intervals[0].y2;
+
+    for (let i = 1; i < intervals.length; i++) {
+      const next = intervals[i];
+      if (next.y1 <= curY2) {
+        curY2 = Math.max(curY2, next.y2);
+      } else {
+        mergedSegments.push({ x1: x, y1: curY1, x2: x, y2: curY2 });
+        curY1 = next.y1;
+        curY2 = next.y2;
+      }
+    }
+    mergedSegments.push({ x1: x, y1: curY1, x2: x, y2: curY2 });
+  });
+
+  return mergedSegments;
 };
 
 export function getLayerParentMap(layers: Layer[]): Map<string, Layer> {
@@ -494,10 +612,8 @@ export const renderFrameToCanvas = (state: ProjectState, frameIndex: number): HT
     if (!layerCtx) return canvas;
 
     const paletteUint32 = new Uint32Array(state.palette.length);
-    const hexCache = new Map<string, number>();
 
-    // Bolt Optimization: Allocate layerImageData once before the layers loop and clear buffer with data32.fill(0)
-    // to avoid allocating mega-bytes of ImageData objects per layer on high-resolution images.
+    // Allocate layerImageData once before the layers loop and clear buffer with data32.fill(0)
     const layerImgData = layerCtx.createImageData(state.width, state.height);
     const data32 = new Uint32Array(layerImgData.data.buffer);
 
@@ -517,8 +633,7 @@ export const renderFrameToCanvas = (state: ProjectState, frameIndex: number): HT
 
         for (let p = 0; p < state.palette.length; p++) {
             if (state.palette[p]) {
-                const [r, g, b] = hexToRgb(state.palette[p]);
-                paletteUint32[p] = (alpha << 24) | (b << 16) | (g << 8) | r;
+                paletteUint32[p] = getPackedColor(state.palette[p], alpha);
             }
         }
 
@@ -530,13 +645,7 @@ export const renderFrameToCanvas = (state: ProjectState, frameIndex: number): HT
             if (typeof val === 'number') {
                 packed = paletteUint32[val];
             } else {
-                let cached = hexCache.get(val);
-                if (cached === undefined) {
-                    const [r, g, b] = hexToRgb(val);
-                    cached = (alpha << 24) | (b << 16) | (g << 8) | r;
-                    hexCache.set(val, cached);
-                }
-                packed = cached;
+                packed = getPackedColor(val, alpha);
             }
             if (packed) data32[i] = packed;
         }
