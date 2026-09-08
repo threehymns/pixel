@@ -1274,9 +1274,12 @@ export async function parseAseprite(buffer: ArrayBuffer, filename = 'imported'):
  */
 export function encodeAseprite(state: ProjectState): Uint8Array {
   const { 
-    width, height, colorMode, palette, paletteNames, layers, frames, 
+    width, height, colorMode, palette = [], paletteNames, layers, frames, 
     tags = [], slices = [], tilesets = [], externalFiles = [], userData 
   } = state;
+  const effectivePalette = (palette && palette.length > 0) 
+    ? palette 
+    : ['#000000', '#ffffff'];
   const numFrames = frames.length;
   const isIndexed = colorMode === 'indexed';
   const colorDepth = isIndexed ? 8 : 32;
@@ -1314,13 +1317,13 @@ export function encodeAseprite(state: ProjectState): Uint8Array {
       const palWriter = new BinaryWriter(1024 * 8);
       palWriter.writeDword(0);
       palWriter.writeWord(0x2019);
-      palWriter.writeDword(palette.length);
+      palWriter.writeDword(effectivePalette.length);
       palWriter.writeDword(0);
-      palWriter.writeDword(palette.length - 1);
+      palWriter.writeDword(effectivePalette.length - 1);
       palWriter.writeBytes(new Uint8Array(8));
 
-      for (let p = 0; p < palette.length; p++) {
-        const hex = palette[p] || '#000000';
+      for (let p = 0; p < effectivePalette.length; p++) {
+        const hex = effectivePalette[p] || '#000000';
         const [r, g, b] = hexToRgb(hex);
         const a = 255;
         const cName = paletteNames?.[p];
@@ -1652,7 +1655,7 @@ export function encodeAseprite(state: ProjectState): Uint8Array {
                   rawBuffer[rawOffset++] = val & 0xff;
                 } else if (typeof val === 'string') {
                   const [r, g, b] = hexToRgb(val);
-                  rawBuffer[rawOffset++] = findNearestPaletteIndex(r, g, b, palette);
+                  rawBuffer[rawOffset++] = findNearestPaletteIndex(r, g, b, effectivePalette);
                 } else {
                   rawBuffer[rawOffset++] = state.transparentIndex ?? 0;
                 }
@@ -1663,8 +1666,8 @@ export function encodeAseprite(state: ProjectState): Uint8Array {
                   rawBuffer[rawOffset++] = g;
                   rawBuffer[rawOffset++] = b;
                   rawBuffer[rawOffset++] = 255;
-                } else if (typeof val === 'number' && palette[val]) {
-                  const [r, g, b] = hexToRgb(palette[val]);
+                } else if (typeof val === 'number' && effectivePalette[val]) {
+                  const [r, g, b] = hexToRgb(effectivePalette[val]);
                   rawBuffer[rawOffset++] = r;
                   rawBuffer[rawOffset++] = g;
                   rawBuffer[rawOffset++] = b;
@@ -1735,7 +1738,7 @@ export function encodeAseprite(state: ProjectState): Uint8Array {
   headerWriter.writeDword(0);
   headerWriter.writeByte(state.transparentIndex ?? 0);
   headerWriter.writeBytes(new Uint8Array(3));
-  headerWriter.writeWord(palette.length);
+  headerWriter.writeWord(effectivePalette.length);
   headerWriter.writeByte(state.pixelRatio?.width || 1);
   headerWriter.writeByte(state.pixelRatio?.height || 1);
   headerWriter.writeShort(state.grid?.x || 0);

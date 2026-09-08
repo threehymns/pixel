@@ -670,7 +670,13 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
         />
 
         {isHome ? (
-          <Home onCreateProject={project.createProject} onImportProject={() => fileInputRef.current?.click()} />
+          <Home 
+            onCreateProject={project.createProject} 
+            onImportProject={() => fileInputRef.current?.click()} 
+            recentProjects={project.recentProjects}
+            onOpenRecent={project.loadRecentProject}
+            onClearRecent={project.clearRecents}
+          />
         ) : (
           <>
             <div className="h-10 bg-secondary/50 border-b border-border/30 flex items-center px-2 space-x-2 text-xs shrink-0 overflow-x-auto no-scrollbar">

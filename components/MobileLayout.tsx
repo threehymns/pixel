@@ -197,7 +197,13 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
       />
 
       {isHome ? (
-        <Home onCreateProject={project.createProject} onImportProject={() => fileInputRef.current?.click()} />
+        <Home 
+          onCreateProject={project.createProject} 
+          onImportProject={() => fileInputRef.current?.click()} 
+          recentProjects={project.recentProjects}
+          onOpenRecent={project.loadRecentProject}
+          onClearRecent={project.clearRecents}
+        />
       ) : (
         <>
           {/* Top Bar: Minimal Status & Global Actions */}

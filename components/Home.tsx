@@ -1,13 +1,23 @@
 
 import React from 'react';
-import { Plus, File, Github, FolderOpen, Image as ImageIcon, Settings, History } from 'lucide-react';
+import { Plus, File, Github, FolderOpen, Image as ImageIcon, Settings, History, Trash2, Clock } from 'lucide-react';
+import { RecentProject } from '../types';
 
 interface HomeProps {
     onCreateProject: () => void;
     onImportProject: () => void;
+    recentProjects?: RecentProject[];
+    onOpenRecent?: (recent: RecentProject) => void;
+    onClearRecent?: () => void;
 }
 
-export const Home: React.FC<HomeProps> = ({ onCreateProject, onImportProject }) => {
+export const Home: React.FC<HomeProps> = ({ 
+    onCreateProject, 
+    onImportProject,
+    recentProjects = [],
+    onOpenRecent,
+    onClearRecent
+}) => {
     return (
         <div className="flex-1 bg-background flex items-center justify-center text-foreground select-none h-full p-4 md:p-8">
             <div className="max-w-4xl w-full flex flex-col md:flex-row bg-card border border-border rounded-2xl shadow-2xl overflow-hidden h-full md:h-[600px]">
@@ -56,35 +66,81 @@ export const Home: React.FC<HomeProps> = ({ onCreateProject, onImportProject }) 
                 </div>
 
                 {/* Right Content / Recent Files */}
-                <div className="w-full md:w-2/3 p-6 md:p-8 flex flex-col bg-card flex-1">
-                    <div className="flex items-center gap-2 mb-6 text-muted-foreground">
-                        <History size={18} />
-                        <h2 className="text-sm font-semibold tracking-wide uppercase">Recent Files</h2>
+                <div className="w-full md:w-2/3 p-6 md:p-8 flex flex-col bg-card flex-1 min-h-0">
+                    <div className="flex items-center justify-between gap-2 mb-4 text-muted-foreground">
+                        <div className="flex items-center gap-2">
+                            <History size={18} />
+                            <h2 className="text-sm font-semibold tracking-wide uppercase">Recent Files</h2>
+                        </div>
+                        {recentProjects.length > 0 && onClearRecent && (
+                            <button
+                                onClick={onClearRecent}
+                                className="text-xs text-muted-foreground hover:text-destructive flex items-center gap-1.5 transition-colors px-2 py-1 rounded hover:bg-destructive/10"
+                                title="Clear recent projects list"
+                            >
+                                <Trash2 size={12} />
+                                <span>Clear</span>
+                            </button>
+                        )}
                     </div>
                     
-                    <div className="flex-1 flex flex-col items-center justify-center text-center border-2 border-dashed border-border rounded-xl bg-muted/10 p-6">
-                        <div className="w-16 h-16 bg-muted rounded-full flex items-center justify-center mb-4 text-muted-foreground">
-                            <ImageIcon size={32} opacity={0.5} />
+                    {recentProjects.length === 0 ? (
+                        <div className="flex-1 flex flex-col items-center justify-center text-center border-2 border-dashed border-border rounded-xl bg-muted/10 p-6">
+                            <div className="w-16 h-16 bg-muted rounded-full flex items-center justify-center mb-4 text-muted-foreground">
+                                <ImageIcon size={32} opacity={0.5} />
+                            </div>
+                            <h3 className="text-lg font-medium text-foreground mb-1">No recent projects</h3>
+                            <p className="text-sm text-muted-foreground max-w-xs">
+                                Create a new project or open an existing file to get started.
+                            </p>
+                            <div className="flex gap-3 mt-6">
+                                <button 
+                                    onClick={onCreateProject}
+                                    className="px-4 py-2 bg-accent text-foreground hover:bg-accent/80 rounded-md text-sm font-medium transition-colors"
+                                >
+                                    Create New
+                                </button>
+                                <button 
+                                    onClick={onImportProject}
+                                    className="px-4 py-2 bg-accent text-foreground hover:bg-accent/80 rounded-md text-sm font-medium transition-colors"
+                                >
+                                    Browse Files
+                                </button>
+                            </div>
                         </div>
-                        <h3 className="text-lg font-medium text-foreground mb-1">No recent projects</h3>
-                        <p className="text-sm text-muted-foreground max-w-xs">
-                            Create a new project or open an existing file to get started.
-                        </p>
-                        <div className="flex gap-3 mt-6">
-                            <button 
-                                onClick={onCreateProject}
-                                className="px-4 py-2 bg-accent text-foreground hover:bg-accent/80 rounded-md text-sm font-medium transition-colors"
-                            >
-                                Create New
-                            </button>
-                            <button 
-                                onClick={onImportProject}
-                                className="px-4 py-2 bg-accent text-foreground hover:bg-accent/80 rounded-md text-sm font-medium transition-colors"
-                            >
-                                Browse Files
-                            </button>
+                    ) : (
+                        <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+                            {recentProjects.map((p) => (
+                                <button
+                                    key={p.id}
+                                    onClick={() => onOpenRecent && onOpenRecent(p)}
+                                    className="w-full text-left p-3 rounded-xl border border-border/60 hover:border-primary/50 hover:bg-accent/40 active:bg-accent transition-all flex items-center justify-between group"
+                                >
+                                    <div className="flex items-center gap-3 min-w-0">
+                                        <div className="w-9 h-9 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shrink-0 group-hover:bg-primary group-hover:text-primary-foreground transition-colors">
+                                            <ImageIcon size={18} />
+                                        </div>
+                                        <div className="min-w-0">
+                                            <div className="text-sm font-semibold text-foreground truncate group-hover:text-primary transition-colors">
+                                                {p.title}
+                                            </div>
+                                            <div className="text-xs text-muted-foreground font-mono flex items-center gap-2">
+                                                <span>{p.width} × {p.height}</span>
+                                                <span>•</span>
+                                                <span className="flex items-center gap-1 font-sans">
+                                                    <Clock size={11} />
+                                                    {new Date(p.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <span className="text-xs text-muted-foreground group-hover:text-foreground shrink-0 font-medium px-2 py-1 rounded bg-secondary/50 group-hover:bg-primary/20">
+                                        Open
+                                    </span>
+                                </button>
+                            ))}
                         </div>
-                    </div>
+                    )}
                 </div>
             </div>
         </div>

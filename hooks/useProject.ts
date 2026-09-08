@@ -4,6 +4,7 @@ import { ProjectState, Frame, Layer, FrameTag, SavedPalette, PixelGrid, HistoryE
 import { INITIAL_STATE, DEFAULT_PALETTE, GAMEBOY_PALETTE, ENDESGA_64_PALETTE } from '../constants';
 import { parseASE, parseGPL, extractColorsFromPNG, fileToProjectState, renderFrameToCanvas, renderSpriteSheet, getCoords, getIndex, hexToRgb, rgbToHex, findNearestPaletteIndex, getSelectionBoundingBox, getLayerParentMap, isDescendant, getGroupChildren } from '../utils';
 import { encodeAseprite } from '../utils/aseprite';
+import { saveRecentProject, getRecentProjects, loadRecentProjectState, clearAllRecents } from '../utils/storage';
 
 // UI fields that should not be affected by Undo/Redo
 const UI_FIELDS: (keyof ProjectState)[] = [
@@ -64,85 +65,85 @@ export function useProject() {
   const [activeProjectId, setActiveProjectId] = useState<string>('home');
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
 
-  // Load recents from LS on mount
+  // Load recents from IndexedDB on mount
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem('pixel-forge-recents');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-      const sanitized = parsed.map((p: RecentProject) => ({
-             ...p,
-             data: {
-                 ...p.data,
-                 selection: null,
-                 fileHandle: undefined, // Do not restore handles from localstorage
-                 layers: p.data.layers?.map(l => ({ 
-                     ...l, 
-                     opacity: l.opacity ?? 100,
-                     blendMode: l.blendMode ?? 'normal'
-                 })) ?? []
-             }
-      }));
-        setRecentProjects(sanitized);
-      }
-    } catch (e) {
-      console.warn("Failed to load recents", e);
-    }
-  }, []);
+    let isMounted = true;
+    getRecentProjects()
+      .then(recents => {
+        if (isMounted) {
+          setRecentProjects(recents);
+        }
+      })
+      .catch(e => {
+        console.warn("Failed to load recents from IndexedDB", e);
+      });
 
-  const saveRecents = useCallback((list: RecentProject[]) => {
-      try {
-          const cleanList = list.map(r => ({
-              ...r,
-              data: {
-                  ...r.data,
-                  selection: null,
-                  fileHandle: undefined // Ensure no handle serialization attempts
-              }
-          }));
-          localStorage.setItem('pixel-forge-recents', JSON.stringify(cleanList));
-      } catch (e) {
-          console.warn("LocalStorage full, cannot save recent project", e);
-      }
+    // Clean up legacy localStorage item if present
+    try {
+      localStorage.removeItem('pixel-forge-recents');
+    } catch {
+      // ignore
+    }
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const addToRecents = useCallback((project: ProjectState) => {
-      setRecentProjects(prev => {
-          const filtered = prev.filter(p => p.data.id !== project.id && p.title !== project.title);
-          const newEntry: RecentProject = {
-              id: project.id,
-              title: project.title,
-              timestamp: Date.now(),
-              data: project
-          };
-          const newList = [newEntry, ...filtered].slice(0, 5); // Keep max 5
-          saveRecents(newList);
-          return newList;
+    // Asynchronously encode to compressed .aseprite binary & store in IndexedDB
+    saveRecentProject(project)
+      .then(newEntry => {
+        setRecentProjects(prev => {
+          const filtered = prev.filter(p => p.id !== newEntry.id && p.title !== newEntry.title);
+          return [newEntry, ...filtered].slice(0, 10);
+        });
+      })
+      .catch(err => {
+        console.warn("Failed to save recent project to IndexedDB:", err);
       });
-  }, [saveRecents]);
+  }, []);
 
-  const loadRecentProject = useCallback((recent: RecentProject) => {
-      // Check if already open
-      const existing = projects.find(p => p.data.id === recent.data.id || p.data.title === recent.title);
-      if (existing) {
-          setActiveProjectId(existing.data.id);
-          return;
+  const loadRecentProject = useCallback(async (recent: RecentProject) => {
+    // Check if already open
+    const existing = projects.find(p => p.data.id === recent.id || p.data.title === recent.title);
+    if (existing) {
+      setActiveProjectId(existing.data.id);
+      return;
+    }
+
+    try {
+      let loadedState: ProjectState | null = recent.data || null;
+      if (!loadedState) {
+        loadedState = await loadRecentProjectState(recent.id);
       }
 
-      const newProjectState = { ...recent.data, selection: null };
+      if (!loadedState) {
+        console.warn("Could not retrieve project data for:", recent.title);
+        return;
+      }
+
+      const newProjectState: ProjectState = { 
+        ...loadedState, 
+        selection: null, 
+        fileHandle: undefined 
+      };
       
       setProjects(prev => [...prev, {
-          data: newProjectState,
-          history: [{ state: newProjectState, action: 'Open Recent', timestamp: Date.now() }],
-          historyIndex: 0,
-          lastSavedHistoryIndex: 0
+        data: newProjectState,
+        history: [{ state: newProjectState, action: 'Open Recent', timestamp: Date.now() }],
+        historyIndex: 0,
+        lastSavedHistoryIndex: 0
       }]);
       setActiveProjectId(newProjectState.id);
+    } catch (e) {
+      console.error("Failed to load recent project", e);
+    }
   }, [projects]);
 
   const clearRecents = useCallback(() => {
-      setRecentProjects([]);
-      localStorage.removeItem('pixel-forge-recents');
+    setRecentProjects([]);
+    clearAllRecents().catch(e => console.warn("Failed to clear recents from IndexedDB", e));
   }, []);
 
   const activeIndex = projects.findIndex(p => p.data.id === activeProjectId);

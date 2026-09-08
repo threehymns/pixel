@@ -210,7 +210,9 @@ export interface RecentProject {
   id: string;
   title: string;
   timestamp: number;
-  data: ProjectState;
+  width: number;
+  height: number;
+  data?: ProjectState;
 }
 
 export interface HistoryEntry {
