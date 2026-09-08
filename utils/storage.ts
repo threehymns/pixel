@@ -20,6 +20,15 @@ interface StoredBlobRecord {
     symmetry?: { x: boolean; y: boolean };
     inkType?: string;
     shades?: string[];
+    tool?: string;
+    brushSize?: number;
+    brushShape?: 'square' | 'circle';
+    zoom?: number;
+    activeLayerId?: string;
+    activeFrameIndex?: number;
+    originalLayerIds?: string[];
+    originalFrameIds?: string[];
+    colorMode?: 'indexed' | 'rgba';
   };
 }
 
@@ -105,7 +114,16 @@ export async function saveRecentProject(project: ProjectState): Promise<RecentPr
         secondaryColor: project.secondaryColor,
         symmetry: project.symmetry,
         inkType: project.inkType,
-        shades: project.shades
+        shades: project.shades,
+        tool: project.tool,
+        brushSize: project.brushSize,
+        brushShape: project.brushShape,
+        zoom: project.zoom,
+        activeLayerId: project.activeLayerId,
+        activeFrameIndex: project.activeFrameIndex,
+        originalLayerIds: project.layers.map(l => l.id),
+        originalFrameIds: project.frames.map(f => f.id),
+        colorMode: project.colorMode
       }
     };
 
@@ -219,6 +237,42 @@ export async function loadRecentProjectState(id: string): Promise<ProjectState |
     parsed.id = record.id;
     parsed.title = record.title;
 
+    // Restore original layer IDs and rewire frame.layerData
+    if (record.extra?.originalLayerIds && record.extra.originalLayerIds.length === parsed.layers.length) {
+      const oldLayerIds = parsed.layers.map(l => l.id);
+      const newLayerIds = record.extra.originalLayerIds;
+      
+      parsed.layers.forEach((layer, idx) => {
+        layer.id = newLayerIds[idx];
+      });
+
+      parsed.frames.forEach(frame => {
+        const remappedData: Record<string, any> = {};
+        oldLayerIds.forEach((oldId, idx) => {
+          if (frame.layerData[oldId]) {
+            remappedData[newLayerIds[idx]] = frame.layerData[oldId];
+          }
+        });
+        frame.layerData = remappedData;
+      });
+
+      if (record.extra.activeLayerId && newLayerIds.includes(record.extra.activeLayerId)) {
+        parsed.activeLayerId = record.extra.activeLayerId;
+        parsed.selectedLayerIds = [record.extra.activeLayerId];
+      }
+    }
+
+    // Restore original frame IDs
+    if (record.extra?.originalFrameIds && record.extra.originalFrameIds.length === parsed.frames.length) {
+      parsed.frames.forEach((frame, idx) => {
+        frame.id = record.extra!.originalFrameIds![idx];
+      });
+      if (typeof record.extra.activeFrameIndex === 'number' && record.extra.activeFrameIndex < parsed.frames.length) {
+        parsed.activeFrameIndex = record.extra.activeFrameIndex;
+        parsed.selectedFrameIndices = [record.extra.activeFrameIndex];
+      }
+    }
+
     // Restore any extra preserved properties
     if (record.extra) {
       if (record.extra.paletteLibrary) parsed.paletteLibrary = record.extra.paletteLibrary;
@@ -228,6 +282,11 @@ export async function loadRecentProjectState(id: string): Promise<ProjectState |
       if (record.extra.symmetry) parsed.symmetry = record.extra.symmetry;
       if (record.extra.inkType) parsed.inkType = record.extra.inkType as any;
       if (record.extra.shades) parsed.shades = record.extra.shades;
+      if (record.extra.tool) parsed.tool = record.extra.tool as any;
+      if (record.extra.brushSize) parsed.brushSize = record.extra.brushSize;
+      if (record.extra.brushShape) parsed.brushShape = record.extra.brushShape;
+      if (record.extra.zoom) parsed.zoom = record.extra.zoom;
+      if (record.extra.colorMode) parsed.colorMode = record.extra.colorMode;
     }
 
     parsed.selection = null;

@@ -755,7 +755,8 @@ export async function parseAseprite(buffer: ArrayBuffer, filename = 'imported'):
                         const pIdx = uncompressedData[pixelOffset];
                         pixelOffset += 1;
 
-                        if (pIdx !== transparentIndex) {
+                        const currentLayer = layers[layerIdx];
+                        if (pIdx !== transparentIndex || currentLayer?.isBackground) {
                           grid[gridIdx] = pIdx;
                         }
                       }
@@ -1284,6 +1285,13 @@ export function encodeAseprite(state: ProjectState): Uint8Array {
   const isIndexed = colorMode === 'indexed';
   const colorDepth = isIndexed ? 8 : 32;
 
+  // In indexed mode, if transparentIndex is not explicitly set, designate an index
+  // outside the active palette colors (e.g. 255 if palette has <= 255 colors)
+  // so palette color index 0 is never lost as transparent.
+  const effectiveTransparentIndex = (state.transparentIndex !== undefined && state.transparentIndex >= 0)
+    ? state.transparentIndex
+    : (isIndexed ? (effectivePalette.length <= 255 ? 255 : 0) : 0);
+
   const hasUuids = layers.some(l => l.uuid);
   const headerFlags = 3 | (hasUuids ? 4 : 0);
 
@@ -1459,7 +1467,7 @@ export function encodeAseprite(state: ProjectState): Uint8Array {
           for (let i = 0; i < totalPixels; i++) {
             const val = ts.pixels[i];
             if (isIndexed) {
-              rawTiles[pOff++] = typeof val === 'number' ? (val & 0xff) : (state.transparentIndex ?? 0);
+              rawTiles[pOff++] = typeof val === 'number' ? (val & 0xff) : effectiveTransparentIndex;
             } else {
               if (typeof val === 'string') {
                 const [r, g, b] = hexToRgb(val);
@@ -1657,7 +1665,7 @@ export function encodeAseprite(state: ProjectState): Uint8Array {
                   const [r, g, b] = hexToRgb(val);
                   rawBuffer[rawOffset++] = findNearestPaletteIndex(r, g, b, effectivePalette);
                 } else {
-                  rawBuffer[rawOffset++] = state.transparentIndex ?? 0;
+                  rawBuffer[rawOffset++] = effectiveTransparentIndex;
                 }
               } else {
                 if (typeof val === 'string') {
@@ -1736,7 +1744,7 @@ export function encodeAseprite(state: ProjectState): Uint8Array {
   headerWriter.writeWord(frames[0]?.duration || 100);
   headerWriter.writeDword(0);
   headerWriter.writeDword(0);
-  headerWriter.writeByte(state.transparentIndex ?? 0);
+  headerWriter.writeByte(effectiveTransparentIndex);
   headerWriter.writeBytes(new Uint8Array(3));
   headerWriter.writeWord(effectivePalette.length);
   headerWriter.writeByte(state.pixelRatio?.width || 1);

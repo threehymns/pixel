@@ -105,8 +105,8 @@ export function useProject() {
   }, []);
 
   const loadRecentProject = useCallback(async (recent: RecentProject) => {
-    // Check if already open
-    const existing = projects.find(p => p.data.id === recent.id || p.data.title === recent.title);
+    // Check if already open by ID
+    const existing = projects.find(p => p.data.id === recent.id);
     if (existing) {
       setActiveProjectId(existing.data.id);
       return;
@@ -154,6 +154,46 @@ export function useProject() {
       lastSavedHistoryIndex: 0
   };
   const state = activeInstance.data;
+
+  // Auto-save active project changes to IndexedDB (debounced) so unsaved work is preserved
+  useEffect(() => {
+    if (activeProjectId === 'home' || activeIndex < 0) return;
+    const currentProject = projects[activeIndex]?.data;
+    if (!currentProject || !currentProject.id || currentProject.id === 'default') return;
+
+    const timer = setTimeout(() => {
+      saveRecentProject(currentProject)
+        .then(newEntry => {
+          setRecentProjects(prev => {
+            const filtered = prev.filter(p => p.id !== newEntry.id);
+            return [newEntry, ...filtered].slice(0, 10);
+          });
+        })
+        .catch(err => {
+          console.warn("Auto-saving recent project to IndexedDB failed:", err);
+        });
+    }, 600);
+
+    return () => clearTimeout(timer);
+  }, [state, activeProjectId, activeIndex]);
+
+  // Save on window unload/hide so last-second unsaved work is never lost
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (activeProjectId === 'home' || activeIndex < 0) return;
+      const currentProject = projects[activeIndex]?.data;
+      if (currentProject && currentProject.id && currentProject.id !== 'default') {
+        saveRecentProject(currentProject).catch(() => {});
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handleBeforeUnload);
+    };
+  }, [state, activeProjectId, activeIndex]);
 
   /**
    * Helper to merge current UI state into a historical snapshot.
@@ -434,6 +474,18 @@ export function useProject() {
   }, [state, activeProjectId, addToRecents, saveProjectAs, markSaved]);
 
   const closeProject = useCallback((id: string) => {
+    const projToClose = projects.find(p => p.data.id === id);
+    if (projToClose && projToClose.data && projToClose.data.id !== 'default') {
+      saveRecentProject(projToClose.data)
+        .then(newEntry => {
+          setRecentProjects(prev => {
+            const filtered = prev.filter(p => p.id !== newEntry.id);
+            return [newEntry, ...filtered].slice(0, 10);
+          });
+        })
+        .catch(console.warn);
+    }
+
     let nextActiveId = activeProjectId;
     if (activeProjectId === id) {
         const idx = projects.findIndex(p => p.data.id === id);
