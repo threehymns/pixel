@@ -244,6 +244,7 @@ export default function App() {
           isOpen={isNewProjectDialogOpen}
           onClose={() => setIsNewProjectDialogOpen(false)}
           onCreate={project.createProject}
+          existingProjectCount={project.projects.length}
         />
 
         <CanvasResizeDialog

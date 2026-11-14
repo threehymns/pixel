@@ -228,11 +228,14 @@ export function useProject() {
       return merged;
   };
 
-  const createProject = useCallback((config?: { width: number, height: number, colorMode: ColorMode, title?: string }) => {
+  const createProject = useCallback((config?: { width: number, height: number, colorMode: ColorMode, title?: string, paletteId?: string }) => {
     const w = config?.width ?? INITIAL_STATE.width;
     const h = config?.height ?? INITIAL_STATE.height;
     const mode = config?.colorMode ?? INITIAL_STATE.colorMode;
-    const title = config?.title ?? `Untitled-${projects.length + 1}`;
+    const title = config?.title?.trim() || `Untitled-${projects.length + 1}`;
+    const chosenPalette = config?.paletteId
+      ? INITIAL_STATE.paletteLibrary.find(p => p.id === config.paletteId)
+      : undefined;
     
     const id = `project-${Date.now()}`;
     const newProject: ProjectState = {
@@ -242,6 +245,10 @@ export function useProject() {
       width: w,
       height: h,
       colorMode: mode,
+      palette: chosenPalette ? chosenPalette.colors : INITIAL_STATE.palette,
+      activePaletteId: chosenPalette ? chosenPalette.id : INITIAL_STATE.activePaletteId,
+      primaryColor: chosenPalette ? (chosenPalette.colors[chosenPalette.colors.length - 1] || '#ffffff') : INITIAL_STATE.primaryColor,
+      secondaryColor: chosenPalette ? (chosenPalette.colors[0] || '#000000') : INITIAL_STATE.secondaryColor,
       layers: [{ id: 'layer-1', name: 'Layer 1', visible: true, locked: false, opacity: 100, blendMode: 'normal' }],
       selectedLayerIds: ['layer-1'],
       frames: [{ id: 'frame-1', layerData: { 'layer-1': new Array(w * h).fill(null) } }],
