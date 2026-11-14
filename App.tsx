@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Position } from './types';
 import { CommandPalette } from './components/CommandPalette';
 import { TooltipProvider } from './components/ui/tooltip';
@@ -10,7 +10,8 @@ import { ExportDialog, ExportFormat } from './components/ExportDialog';
 import { SpritePropertiesDialog } from './components/SpritePropertiesDialog';
 import { LayerPropertiesDialog } from './components/LayerPropertiesDialog';
 import { SlicesDialog } from './components/SlicesDialog';
-import { Layer, FrameTag } from './types';
+import { OutlineDialog } from './components/OutlineDialog';
+import { Layer, FrameTag, ProjectState } from './types';
 
 // Layouts
 import { DesktopLayout } from './components/DesktopLayout';
@@ -33,6 +34,7 @@ export default function App() {
   const [isReferenceImageDialogOpen, setIsReferenceImageDialogOpen] = useState(false);
   const [isSpritePropertiesOpen, setIsSpritePropertiesOpen] = useState(false);
   const [isSlicesOpen, setIsSlicesOpen] = useState(false);
+  const [isOutlineDialogOpen, setIsOutlineDialogOpen] = useState(false);
   const [layerPropertiesState, setLayerPropertiesState] = useState<{ isOpen: boolean; layer: Layer | null }>({
     isOpen: false,
     layer: null,
@@ -81,6 +83,29 @@ export default function App() {
     if (e.target) e.target.value = ''; 
   };
 
+  const handleOutlinePreview = useCallback((previewState: ProjectState) => {
+    updateState(previewState);
+  }, [updateState]);
+
+  const handleOutlineConfirm = useCallback((finalState: ProjectState, actionSummary: string) => {
+    updateState(finalState, { action: actionSummary });
+    setStatusMessage({ text: actionSummary, type: 'success' });
+  }, [updateState]);
+
+  const handleOutlineCancel = useCallback((originalState?: ProjectState) => {
+    if (originalState) {
+      updateState(originalState);
+      return;
+    }
+    const currentProj = project.projects.find(p => p.data.id === project.activeProjectId);
+    if (currentProj) {
+      const entry = currentProj.history[currentProj.historyIndex];
+      if (entry) {
+        updateState(entry.state);
+      }
+    }
+  }, [updateState, project.projects, project.activeProjectId]);
+
   const commands = useAppCommands({
       state: state,
       updateState: (newState, config) => {
@@ -114,6 +139,7 @@ export default function App() {
         openReferenceImageDialog: () => setIsReferenceImageDialogOpen(true),
         openSpritePropertiesDialog: () => setIsSpritePropertiesOpen(true),
         openSlicesDialog: () => setIsSlicesOpen(true),
+        openOutlineDialog: () => setIsOutlineDialogOpen(true),
         openLayerPropertiesDialog: (layer?: Layer) => setLayerPropertiesState({
           isOpen: true,
           layer: layer || project.state.layers.find(l => l.id === project.state.activeLayerId) || null,
@@ -174,6 +200,7 @@ export default function App() {
         createProject: () => setIsNewProjectDialogOpen(true),
         openSpritePropertiesDialog: () => setIsSpritePropertiesOpen(true),
         openSlicesDialog: () => setIsSlicesOpen(true),
+        openOutlineDialog: () => setIsOutlineDialogOpen(true),
         openLayerPropertiesDialog: (layer?: Layer) => setLayerPropertiesState({
           isOpen: true,
           layer: layer || project.state.layers.find(l => l.id === project.state.activeLayerId) || null,
@@ -254,6 +281,15 @@ export default function App() {
           onClose={() => setIsSlicesOpen(false)}
           state={state}
           onUpdateSlices={project.updateSlices}
+        />
+
+        <OutlineDialog
+          isOpen={isOutlineDialogOpen}
+          onClose={() => setIsOutlineDialogOpen(false)}
+          state={state}
+          onPreview={handleOutlinePreview}
+          onConfirm={handleOutlineConfirm}
+          onCancel={handleOutlineCancel}
         />
 
         {isMobile ? (

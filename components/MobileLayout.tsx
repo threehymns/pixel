@@ -14,7 +14,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 import { 
   Menu, Undo, Redo, Share, Plus,
   Pencil, Eraser, PaintBucket, Pipette, MousePointer2,
-  Layers, Clock, X, ChevronRight,
+  Layers, Clock, X,
   BoxSelect, Square, Circle, Minus, Lasso,
   Check, Play, Droplets, Zap,
   Grid, Eye, Hand, FlipHorizontal, FlipVertical,
@@ -462,6 +462,28 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                     <span>{getSettingsSummary()}</span>
                     <ChevronUp size={14} className="text-muted-foreground ml-1" />
                 </button>
+            )}
+
+            {/* Selection Quick Action Pill */}
+            {!isSettingsExpanded && state.selection && state.selection.size > 0 && (
+                <div className="flex items-center gap-1.5 animate-in slide-in-from-bottom-2">
+                    <button
+                        onClick={() => project.openOutlineDialog && project.openOutlineDialog()}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-full shadow-lg text-xs font-semibold active:scale-95 transition-all"
+                        aria-label="Outline Selection"
+                    >
+                        <Sparkles size={13} />
+                        <span>Outline</span>
+                    </button>
+                    <button
+                        onClick={() => updateState({...state, selection: null}, { action: 'Deselect' })}
+                        className="flex items-center gap-1 px-2.5 py-1.5 bg-card/90 backdrop-blur-xl border border-border/40 text-muted-foreground hover:text-foreground rounded-full shadow-lg text-xs font-medium active:scale-95 transition-all"
+                        aria-label="Deselect"
+                    >
+                        <X size={12} />
+                        <span>Deselect</span>
+                    </button>
+                </div>
             )}
         </div>
 

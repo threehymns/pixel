@@ -39,6 +39,7 @@ interface UseAppCommandsProps {
         cropCanvas: () => void;
         centerContent: () => void;
         generateOutline: () => void;
+        openOutlineDialog?: () => void;
         strokeSelection: () => void;
     };
     fileSystemActions: {
@@ -151,6 +152,10 @@ export function useAppCommands({
             perform: projectActions.clearSelection,
             disabled: !state.selection || state.selection.size === 0
         },
+        {
+            id: 'fx.outline', label: 'Outline...', category: 'Edit', hotkey: 'Shift+O', keys: ['Shift+o', 'Shift+O'],
+            perform: () => projectActions.openOutlineDialog ? projectActions.openOutlineDialog() : projectActions.generateOutline()
+        },
         { 
             id: 'select.all', label: 'Select All', category: 'Select', hotkey: 'Ctrl+A', keys: ['Control+a', 'Meta+a'],
             perform: () => {
@@ -184,7 +189,7 @@ export function useAppCommands({
             checked: state.showGrid
         },
         { 
-            id: 'view.onion', label: 'Toggle Onion Skin', category: 'View', hotkey: 'Shift+O', keys: ['Shift+O'],
+            id: 'view.onion', label: 'Toggle Onion Skin', category: 'View', hotkey: 'Alt+O', keys: ['Alt+o', 'Alt+O'],
             perform: () => updateState({...state, onionSkin: !state.onionSkin}),
             checked: state.onionSkin
         },
@@ -222,8 +227,8 @@ export function useAppCommands({
             perform: () => projectActions.centerContent()
         },
         { 
-            id: 'layer.generateOutline', label: 'Generate Outline', category: 'Layer',
-            perform: () => projectActions.generateOutline()
+            id: 'layer.generateOutline', label: 'Outline...', category: 'Layer', hotkey: 'Shift+O',
+            perform: () => projectActions.openOutlineDialog ? projectActions.openOutlineDialog() : projectActions.generateOutline()
         },
         { 
             id: 'frame.new', label: 'New Frame', category: 'Sprite', hotkey: 'Alt+N', keys: ['Alt+n'],

@@ -73,6 +73,34 @@ export const Menubar: React.FC<MenubarProps> = ({
                 // Special handling to group Color Mode commands into a nested Popover
                 if (cmd.id === 'sprite.modeRGBA') return null; 
                 
+                // Special handling for Edit > FX submenu (Aseprite parity)
+                if (category === 'Edit' && cmd.id === 'fx.outline') {
+                    return (
+                        <Popover key="edit-fx-popover">
+                            <PopoverTrigger asChild onMouseEnter={handleSubmenuEnter}>
+                                <button className="w-full text-left px-3 py-1.5 rounded-sm hover:bg-primary hover:text-primary-foreground text-foreground flex items-center justify-between group">
+                                    <span className="text-xs">FX</span>
+                                    <ChevronRight size={12} className="text-muted-foreground group-hover:text-primary-foreground" />
+                                </button>
+                            </PopoverTrigger>
+                            <PopoverContent side="right" align="start" sideOffset={4} className="w-48 p-1 flex flex-col gap-0.5 shadow-lg border border-border/50 bg-card/95 backdrop-blur-sm rounded-lg z-[100]">
+                                <PopoverClose asChild>
+                                    <button 
+                                        onClick={cmd.perform}
+                                        disabled={cmd.disabled}
+                                        className="w-full text-left px-3 py-1.5 rounded-sm hover:bg-primary hover:text-primary-foreground text-foreground flex items-center justify-between group disabled:opacity-50"
+                                    >
+                                        <span className="text-xs">{cmd.label}</span>
+                                        {cmd.hotkey && (
+                                            <span className="text-[10px] text-muted-foreground group-hover:text-primary-foreground/80">{cmd.hotkey}</span>
+                                        )}
+                                    </button>
+                                </PopoverClose>
+                            </PopoverContent>
+                        </Popover>
+                    );
+                } 
+                
                 if (cmd.id === 'sprite.modeIndexed') {
                     const indexedCmd = cmd;
                     const rgbaCmd = categoryCommands.find(c => c.id === 'sprite.modeRGBA');

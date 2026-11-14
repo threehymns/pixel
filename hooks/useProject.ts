@@ -5,6 +5,7 @@ import { INITIAL_STATE, DEFAULT_PALETTE, GAMEBOY_PALETTE, ENDESGA_64_PALETTE } f
 import { parseASE, parseGPL, extractColorsFromPNG, fileToProjectState, renderFrameToCanvas, renderSpriteSheet, getCoords, getIndex, hexToRgb, rgbToHex, findNearestPaletteIndex, getSelectionBoundingBox, getLayerParentMap, isDescendant, getGroupChildren } from '../utils';
 import { encodeAseprite } from '../utils/aseprite';
 import { saveRecentProject, getRecentProjects, loadRecentProjectState, clearAllRecents } from '../utils/storage';
+import { applyOutlineEffect, DEFAULT_OUTLINE_MATRIX } from '../utils/outline';
 
 // UI fields that should not be affected by Undo/Redo
 const UI_FIELDS: (keyof ProjectState)[] = [
@@ -1581,40 +1582,17 @@ export function useProject() {
 
   const generateOutline = useCallback(() => {
       if (activeProjectId === 'home') return;
-      const { frames, width, height, activeFrameIndex, selectedLayerIds, primaryColor, colorMode, palette } = state;
-      
-      const outlineColor = colorMode === 'indexed' 
-          ? (palette.findIndex(c => c.toLowerCase() === primaryColor.toLowerCase()) > -1 ? palette.findIndex(c => c.toLowerCase() === primaryColor.toLowerCase()) : 0)
-          : primaryColor;
-
-      const newFrames = frames.map((f, i) => {
-          if (i !== activeFrameIndex) return f;
-          const newLayerData = { ...f.layerData };
-          selectedLayerIds.forEach(lId => {
-              const pixels = f.layerData[lId] || new Array(width * height).fill(null);
-              const newPixels = [...pixels];
-              for (let y = 0; y < height; y++) {
-                  for (let x = 0; x < width; x++) {
-                      const idx = y * width + x;
-                      if (pixels[idx] === null) {
-                          if ((x > 0 && pixels[y * width + (x - 1)] !== null) ||
-                              (x < width - 1 && pixels[y * width + (x + 1)] !== null) ||
-                              (y > 0 && pixels[(y - 1) * width + x] !== null) ||
-                              (y < height - 1 && pixels[(y + 1) * width + x] !== null)) {
-                              newPixels[idx] = outlineColor;
-                          }
-                      }
-                  }
-              }
-              newLayerData[lId] = newPixels;
-          });
-          return { ...f, layerData: newLayerData };
+      const { newState, actionSummary } = applyOutlineEffect(state, {
+        placement: 'outside',
+        matrix: DEFAULT_OUTLINE_MATRIX,
+        thickness: 1,
+        outlineColor: state.primaryColor || '#000000',
+        bgMode: 'transparent',
+        scope: state.selection && state.selection.size > 0 ? 'selection' : 'canvas',
+        targetLayer: 'active',
+        targetFrames: 'current'
       });
-
-      updateState(
-          { ...state, frames: newFrames },
-          { action: 'Generate Outline' }
-      );
+      updateState(newState, { action: actionSummary });
   }, [state, activeProjectId, updateState]);
 
   const strokeSelection = useCallback(() => {
