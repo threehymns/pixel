@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Allotment } from 'allotment';
 import { ProjectState, ToolType } from '../types';
 import { SELECTION_TOOLS } from '../constants';
@@ -267,6 +267,98 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
   const isPreviewFloating = floatingPanes.some((fp: any) => fp.id === 'preview');
   const isPreviewVisible = isPreviewDocked || isPreviewFloating;
 
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const updateStateRef = useRef(updateState);
+  updateStateRef.current = updateState;
+  const canvasToolsRef = useRef(canvasTools);
+  canvasToolsRef.current = canvasTools;
+  const setDragStartPosRef = useRef(setDragStartPos);
+  setDragStartPosRef.current = setDragStartPos;
+
+  const noop = useCallback(() => {}, []);
+
+  const handlePaletteColorSelect = useCallback((c: string, isPrimary: boolean) => {
+    const s = stateRef.current;
+    updateStateRef.current(isPrimary ? { ...s, primaryColor: c } : { ...s, secondaryColor: c });
+  }, []);
+
+  const handlePaletteAddColor = useCallback((c: string) => {
+    const s = stateRef.current;
+    const updatedLibrary = s.paletteLibrary.map((p) =>
+      p.id === s.activePaletteId ? { ...p, colors: [...p.colors, c] } : p
+    );
+    updateStateRef.current({ ...s, paletteLibrary: updatedLibrary, palette: [...s.palette, c] });
+  }, []);
+
+  const handlePaletteColorsSelected = useCallback((selectedColors: string[]) => {
+    const s = stateRef.current;
+    updateStateRef.current({ ...s, shades: selectedColors, inkType: 'shading' });
+  }, []);
+
+  const handleSelectLayers = useCallback((ids: string[], active: string) => {
+    const s = stateRef.current;
+    updateStateRef.current({ ...s, selectedLayerIds: ids, activeLayerId: active });
+  }, []);
+
+  const handleSelectFrames = useCallback((indices: number[], active: number, layerId?: string) => {
+    const s = stateRef.current;
+    const nextState = {
+      ...s,
+      selectedFrameIndices: indices,
+      activeFrameIndex: active,
+    };
+    if (layerId) {
+      nextState.activeLayerId = layerId;
+      nextState.selectedLayerIds = [layerId];
+    }
+    updateStateRef.current(nextState);
+  }, []);
+
+  const handleTimelineSelectLayer = useCallback((id: string) => {
+    const s = stateRef.current;
+    updateStateRef.current({ ...s, activeLayerId: id, selectedLayerIds: [id] });
+  }, []);
+
+  const handleTimelineToggleLayerVisibility = useCallback((id: string) => {
+    const s = stateRef.current;
+    updateStateRef.current({
+      ...s,
+      layers: s.layers.map((l) => (l.id === id ? { ...l, visible: !l.visible } : l)),
+    });
+  }, []);
+
+  const handleTimelineToggleLayerLock = useCallback((id: string) => {
+    const s = stateRef.current;
+    updateStateRef.current({
+      ...s,
+      layers: s.layers.map((l) => (l.id === id ? { ...l, locked: !l.locked } : l)),
+    });
+  }, []);
+
+  const handleCanvasDrawStart = useCallback((pos: any, modifiers?: any) => {
+    setDragStartPosRef.current(pos);
+    canvasToolsRef.current.handleDrawStart(
+      pos,
+      modifiers ?? { shift: false, ctrl: false, alt: false, meta: false }
+    );
+  }, []);
+
+  const handleCanvasDrawEnd = useCallback(() => {
+    setDragStartPosRef.current(null);
+    canvasToolsRef.current.handleDrawEnd();
+  }, []);
+
+  const handleCanvasSelectionUpdate = useCallback((sel: Set<number> | null) => {
+    const s = stateRef.current;
+    updateStateRef.current({ ...s, selection: sel }, { action: 'Select Area', tool: s.tool });
+  }, []);
+
+  const handleCanvasZoom = useCallback((z: number) => {
+    const s = stateRef.current;
+    updateStateRef.current({ ...s, zoom: z });
+  }, []);
+
   const renderPaneContent = (paneId: string) => {
     switch (paneId) {
       case 'file-tree':
@@ -275,7 +367,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
             rootHandle={fileSystem.rootHandle}
             onOpenFolder={fileSystem.openFolder}
             onFileOpen={project.loadProjectFromFile}
-            onResizeStart={() => {}}
+            onResizeStart={noop}
             width={0}
           />
         );
@@ -288,30 +380,19 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
             activePaletteId={state.activePaletteId}
             primaryColor={state.primaryColor}
             secondaryColor={state.secondaryColor}
-            onColorSelect={(c, p) =>
-              p ? updateState({ ...state, primaryColor: c }) : updateState({ ...state, secondaryColor: c })
-            }
-            onAddColor={(c) => {
-              const updatedLibrary = state.paletteLibrary.map((p) =>
-                p.id === state.activePaletteId ? { ...p, colors: [...p.colors, c] } : p
-              );
-              updateState({ ...state, paletteLibrary: updatedLibrary, palette: [...state.palette, c] });
-            }}
+            onColorSelect={handlePaletteColorSelect}
+            onAddColor={handlePaletteAddColor}
             onSelectPalette={project.selectPalette}
             onImportPalette={project.importPalette}
-            onResizeStart={() => {}}
-            onColorsSelected={(selectedColors) => {
-              updateState({ ...state, shades: selectedColors, inkType: 'shading' });
-            }}
+            onResizeStart={noop}
+            onColorsSelected={handlePaletteColorsSelected}
           />
         );
       case 'layers':
         return (
           <LayersPanel
             state={state}
-            onSelectLayers={(ids, active) =>
-              updateState({ ...state, selectedLayerIds: ids, activeLayerId: active })
-            }
+            onSelectLayers={handleSelectLayers}
             onUpdateLayer={project.updateLayer}
             onAddLayer={project.addLayer}
             onAddGroupLayer={project.addGroupLayer}
@@ -343,18 +424,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
         return (
           <Timeline
             state={state}
-            onSelectFrames={(indices, active, layerId) => {
-              const nextState = {
-                ...state,
-                selectedFrameIndices: indices,
-                activeFrameIndex: active,
-              };
-              if (layerId) {
-                nextState.activeLayerId = layerId;
-                nextState.selectedLayerIds = [layerId];
-              }
-              updateState(nextState);
-            }}
+            onSelectFrames={handleSelectFrames}
             onAddFrame={project.addFrame}
             onDuplicateFrame={project.duplicateFrame}
             onDeleteFrame={project.deleteFrame}
@@ -369,24 +439,12 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
             onOpenTagProperties={project.openTagPropertiesDialog}
             activeTagPopover={activeTagPopover}
             onCloseTagPopover={onCloseTagPopover}
-            onSelectLayer={(id) =>
-              updateState({ ...state, activeLayerId: id, selectedLayerIds: [id] })
-            }
+            onSelectLayer={handleTimelineSelectLayer}
             onAddLayer={project.addLayer}
             onAddGroupLayer={project.addGroupLayer}
             onUpdateLayer={project.updateLayer}
-            onToggleLayerVisibility={(id) =>
-              updateState({
-                ...state,
-                layers: state.layers.map((l) => (l.id === id ? { ...l, visible: !l.visible } : l)),
-              })
-            }
-            onToggleLayerLock={(id) =>
-              updateState({
-                ...state,
-                layers: state.layers.map((l) => (l.id === id ? { ...l, locked: !l.locked } : l)),
-              })
-            }
+            onToggleLayerVisibility={handleTimelineToggleLayerVisibility}
+            onToggleLayerLock={handleTimelineToggleLayerLock}
             onReorderLayers={project.reorderLayers}
             onReorderFrames={project.reorderFrames}
           />
@@ -1614,27 +1672,14 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                     <div className="relative flex h-full w-full min-w-0 flex-col overflow-hidden bg-canvas">
                       <Canvas
                         state={state}
-                        onDrawStart={(pos) => {
-                          setDragStartPos(pos);
-                          canvasTools.handleDrawStart(pos, {
-                            shift: false,
-                            ctrl: false,
-                            alt: false,
-                            meta: false,
-                          });
-                        }}
+                        onDrawStart={handleCanvasDrawStart}
                         onDraw={canvasTools.handleDraw}
-                        onDrawEnd={() => {
-                          setDragStartPos(null);
-                          canvasTools.handleDrawEnd();
-                        }}
-                        onSelectionUpdate={(sel) =>
-                          updateState({ ...state, selection: sel }, { action: 'Select Area', tool: state.tool })
-                        }
+                        onDrawEnd={handleCanvasDrawEnd}
+                        onSelectionUpdate={handleCanvasSelectionUpdate}
                         onMovePixels={canvasTools.handleMovePixels}
                         onRotatePixels={canvasTools.handleRotatePixels}
                         onScalePixels={onScalePixels}
-                        onZoom={(z) => updateState({ ...state, zoom: z })}
+                        onZoom={handleCanvasZoom}
                         onMousePosUpdate={setMousePos}
                       />
                     </div>

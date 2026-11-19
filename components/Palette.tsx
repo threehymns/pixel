@@ -37,6 +37,7 @@ export const Palette: React.FC<PaletteProps> = React.memo(({
   const [selectionStart, setSelectionStart] = useState<number | null>(null);
   const [selectionEnd, setSelectionEnd] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [hoveredSwatch, setHoveredSwatch] = useState<{ color: string; x: number; y: number } | null>(null);
 
   const activePalette = palettes.find((p) => p.id === activePaletteId);
 
@@ -79,10 +80,16 @@ export const Palette: React.FC<PaletteProps> = React.memo(({
     }
   };
 
-  const handlePointerEnter = (idx: number) => {
+  const handlePointerEnter = (idx: number, color: string, e: React.PointerEvent<HTMLButtonElement>) => {
     if (isDragging && selectionStart !== null) {
       setSelectionEnd(idx);
     }
+    const rect = e.currentTarget.getBoundingClientRect();
+    setHoveredSwatch({
+      color,
+      x: rect.left + rect.width / 2,
+      y: rect.top - 6,
+    });
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -184,7 +191,13 @@ export const Palette: React.FC<PaletteProps> = React.memo(({
         />
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto bg-canvas/40 p-1.5">
+      <div
+        className="min-h-0 flex-1 overflow-y-auto bg-canvas/40 p-1.5"
+        onPointerLeave={() => setHoveredSwatch(null)}
+        onScroll={() => {
+          if (hoveredSwatch) setHoveredSwatch(null);
+        }}
+      >
         <div className="grid grid-cols-[repeat(auto-fill,minmax(20px,1fr))] content-start gap-0.5">
           {colors.map((color, idx) => {
             const isPrimary = primaryColor.toLowerCase() === color.toLowerCase();
@@ -198,52 +211,57 @@ export const Palette: React.FC<PaletteProps> = React.memo(({
             }
 
             return (
-              <Tooltip key={`${color}-${idx}`}>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      aria-label={`Color ${color.toUpperCase()}`}
-                      className={`group relative aspect-square overflow-hidden rounded-[2px] border border-white/10 transition-transform active:scale-95 ${
-                        inSelection
-                          ? 'z-20 scale-110 ring-2 ring-primary shadow-md'
-                          : isPrimary || isSecondary
-                            ? 'z-10 ring-1 ring-white/80 ring-inset'
-                            : 'hover:z-10 hover:ring-1 hover:ring-white/50'
-                      }`}
-                      style={{ backgroundColor: color }}
-                      onPointerDown={(e) => {
-                        e.preventDefault();
-                        handlePointerDown(idx, e);
-                      }}
-                      onPointerEnter={() => handlePointerEnter(idx)}
-                      onContextMenu={(e) => e.preventDefault()}
-                    >
-                      {isPrimary && (
-                        <div className="absolute top-0 left-0 h-0 w-0 border-t-[8px] border-r-[8px] border-t-primary border-r-transparent" />
-                      )}
-                      {isSecondary && (
-                        <div className="absolute right-0 bottom-0 h-0 w-0 border-b-[8px] border-l-[8px] border-b-white border-l-transparent" />
-                      )}
-                      {((target === 'primary' && isPrimary) || (target === 'secondary' && isSecondary)) && (
-                        <div className="absolute inset-0 m-auto h-1 w-1 rounded-full bg-white mix-blend-difference" />
-                      )}
-                    </button>
-                  }
-                />
-                <TooltipContent side="top" className="flex-col items-center gap-0.5">
-                  <span className="font-mono text-[11px] font-semibold text-foreground tabular-nums">
-                    {color.toUpperCase()}
-                  </span>
-                  <span className="text-[11px] whitespace-nowrap text-muted-foreground">
-                    L: Primary · R: Secondary
-                  </span>
-                </TooltipContent>
-              </Tooltip>
+              <button
+                key={`${color}-${idx}`}
+                type="button"
+                aria-label={`Color ${color.toUpperCase()}`}
+                className={`group relative aspect-square overflow-hidden rounded-[2px] border border-white/10 transition-transform active:scale-95 ${
+                  inSelection
+                    ? 'z-20 scale-110 ring-2 ring-primary shadow-md'
+                    : isPrimary || isSecondary
+                      ? 'z-10 ring-1 ring-white/80 ring-inset'
+                      : 'hover:z-10 hover:ring-1 hover:ring-white/50'
+                }`}
+                style={{ backgroundColor: color }}
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  handlePointerDown(idx, e);
+                }}
+                onPointerEnter={(e) => handlePointerEnter(idx, color, e)}
+                onContextMenu={(e) => e.preventDefault()}
+              >
+                {isPrimary && (
+                  <div className="absolute top-0 left-0 h-0 w-0 border-t-[8px] border-r-[8px] border-t-primary border-r-transparent" />
+                )}
+                {isSecondary && (
+                  <div className="absolute right-0 bottom-0 h-0 w-0 border-b-[8px] border-l-[8px] border-b-white border-l-transparent" />
+                )}
+                {((target === 'primary' && isPrimary) || (target === 'secondary' && isSecondary)) && (
+                  <div className="absolute inset-0 m-auto h-1 w-1 rounded-full bg-white mix-blend-difference" />
+                )}
+              </button>
             );
           })}
         </div>
       </div>
+
+      {hoveredSwatch && (
+        <div
+          role="tooltip"
+          className="pointer-events-none fixed z-50 inline-flex w-max max-w-xs -translate-x-1/2 -translate-y-full flex-col items-center gap-0.5 rounded-md border border-border-strong bg-popover px-2 py-1 text-[11px] font-medium leading-tight text-popover-foreground shadow-lg select-none"
+          style={{
+            left: `${Math.max(80, Math.min(typeof window !== 'undefined' ? window.innerWidth - 80 : hoveredSwatch.x, hoveredSwatch.x))}px`,
+            top: `${Math.max(44, hoveredSwatch.y)}px`,
+          }}
+        >
+          <span className="font-mono text-[11px] font-semibold text-foreground tabular-nums">
+            {hoveredSwatch.color.toUpperCase()}
+          </span>
+          <span className="text-[11px] whitespace-nowrap text-muted-foreground">
+            L: Primary · R: Secondary
+          </span>
+        </div>
+      )}
     </div>
   );
 });

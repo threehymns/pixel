@@ -272,6 +272,15 @@ export const Timeline: React.FC<TimelineProps> = React.memo(({
   const tagRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const tagButtonRef = useRef<HTMLButtonElement>(null);
 
+  const selectedFrameSet = useMemo(
+    () => new Set(state.selectedFrameIndices),
+    [state.selectedFrameIndices]
+  );
+  const selectedLayerSet = useMemo(
+    () => new Set(state.selectedLayerIds),
+    [state.selectedLayerIds]
+  );
+
   useEffect(() => {
     setSidebarWidth(isMobile ? 120 : 192);
   }, [isMobile]);
@@ -1314,7 +1323,7 @@ export const Timeline: React.FC<TimelineProps> = React.memo(({
                   const idx = col.frameIndex;
                   const frame = state.frames[idx];
                   const isCurrent = state.activeFrameIndex === idx;
-                  const isSelected = state.selectedFrameIndices.includes(idx);
+                  const isSelected = selectedFrameSet.has(idx);
 
                   return (
                     <ContextMenu key={frame.id}>
@@ -1409,7 +1418,7 @@ export const Timeline: React.FC<TimelineProps> = React.memo(({
                             const isOver =
                               dragState?.type === 'layer' && dragState.overId === layer.id;
                             const isActive = state.activeLayerId === layer.id;
-                            const isSelected = state.selectedLayerIds.includes(layer.id);
+                            const isSelected = selectedLayerSet.has(layer.id);
                             const effectiveVis = isLayerVisible(layer, state.layers, parentMap);
                             const childLevel = layer.childLevel ?? 0;
                             const isGroup = layer.type === 'group';
@@ -1622,10 +1631,8 @@ export const Timeline: React.FC<TimelineProps> = React.memo(({
                                     const isActive =
                                       state.activeFrameIndex === frameIdx &&
                                       state.activeLayerId === layer.id;
-                                    const isFrameSelected =
-                                      state.selectedFrameIndices.includes(frameIdx);
-                                    const isLayerSelected =
-                                      state.selectedLayerIds.includes(layer.id);
+                                    const isFrameSelected = selectedFrameSet.has(frameIdx);
+                                    const isLayerSelected = selectedLayerSet.has(layer.id);
 
                                     return (
                                       <div

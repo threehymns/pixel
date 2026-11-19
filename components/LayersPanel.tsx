@@ -79,6 +79,22 @@ const COLOR_TAGS = [
   { id: 'gray', label: 'Gray', class: 'bg-zinc-500' },
 ];
 
+const PACKED_PALETTE_255_CACHE = new WeakMap<string[], Uint32Array>();
+
+const getPackedPalette255 = (palette: string[]): Uint32Array => {
+  const cached = PACKED_PALETTE_255_CACHE.get(palette);
+  if (cached && cached.length === palette.length) return cached;
+  const palLen = palette.length;
+  const packed = new Uint32Array(palLen);
+  for (let p = 0; p < palLen; p++) {
+    if (palette[p]) {
+      packed[p] = getPackedColor(palette[p], 255);
+    }
+  }
+  PACKED_PALETTE_255_CACHE.set(palette, packed);
+  return packed;
+};
+
 interface LayerThumbnailProps {
   pixels: (string | number | null)[] | undefined;
   palette: string[];
@@ -125,12 +141,7 @@ const LayerThumbnail = React.memo<LayerThumbnailProps>(({ pixels, palette, width
 
     const { imageData, data32 } = imgDataRef.current;
     const palLen = palette.length;
-    const paletteUint32 = new Uint32Array(palLen);
-    for (let p = 0; p < palLen; p++) {
-      if (palette[p]) {
-        paletteUint32[p] = getPackedColor(palette[p], 255);
-      }
-    }
+    const paletteUint32 = getPackedPalette255(palette);
 
     const len = Math.min(pixels.length, width * height);
     for (let i = 0; i < len; i++) {
@@ -172,11 +183,24 @@ interface GroupThumbnailProps {
   collapsed: boolean;
 }
 
+interface GroupChildSnapshot {
+  id: string;
+  visible: boolean;
+  opacity: number;
+  pixels: (string | number | null)[] | undefined;
+}
+
 const GroupThumbnail = React.memo<GroupThumbnailProps>(({ groupId, layers, activeFrame, palette, width, height, collapsed }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const tempCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const layerCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const imgDataRef = useRef<{ width: number; height: number; imageData: ImageData; data32: Uint32Array } | null>(null);
+  const lastDrawnRef = useRef<{
+    width: number;
+    height: number;
+    palette: string[];
+    children: GroupChildSnapshot[];
+  } | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -184,9 +208,46 @@ const GroupThumbnail = React.memo<GroupThumbnailProps>(({ groupId, layers, activ
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
     const children = getGroupChildren(groupId, layers).filter((l) => l.type !== 'group');
+    const prev = lastDrawnRef.current;
+    if (
+      prev &&
+      prev.width === width &&
+      prev.height === height &&
+      prev.palette === palette &&
+      prev.children.length === children.length
+    ) {
+      let unchanged = true;
+      for (let i = 0; i < children.length; i++) {
+        const c = children[i];
+        const pc = prev.children[i];
+        const pix = activeFrame?.layerData[c.id];
+        if (
+          pc.id !== c.id ||
+          pc.visible !== c.visible ||
+          pc.opacity !== (c.opacity ?? 100) ||
+          pc.pixels !== pix
+        ) {
+          unchanged = false;
+          break;
+        }
+      }
+      if (unchanged) return;
+    }
+
+    lastDrawnRef.current = {
+      width,
+      height,
+      palette,
+      children: children.map((c) => ({
+        id: c.id,
+        visible: c.visible,
+        opacity: c.opacity ?? 100,
+        pixels: activeFrame?.layerData[c.id],
+      })),
+    };
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (children.length === 0 || !activeFrame) return;
 
     if (!tempCanvasRef.current) tempCanvasRef.current = document.createElement('canvas');
@@ -220,12 +281,7 @@ const GroupThumbnail = React.memo<GroupThumbnailProps>(({ groupId, layers, activ
 
     const { imageData, data32 } = imgDataRef.current;
     const palLen = palette.length;
-    const paletteUint32 = new Uint32Array(palLen);
-    for (let p = 0; p < palLen; p++) {
-      if (palette[p]) {
-        paletteUint32[p] = getPackedColor(palette[p], 255);
-      }
-    }
+    const paletteUint32 = getPackedPalette255(palette);
     const totalPixels = width * height;
 
     children.forEach((child) => {

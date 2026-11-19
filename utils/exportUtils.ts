@@ -235,18 +235,21 @@ export const generateGifBlob = async (options: ExportGifOptions): Promise<Blob> 
   const buffer = new Uint8Array(maxBufferSize);
   const writer = new GifWriter(buffer, width, height, { loop });
 
+  const scaledCanvas = document.createElement('canvas');
+  scaledCanvas.width = width;
+  scaledCanvas.height = height;
+  const ctx = scaledCanvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) {
+    return new Blob([buffer.subarray(0, writer.end())], { type: 'image/gif' });
+  }
+  ctx.imageSmoothingEnabled = false;
+
   for (let f = 0; f < targetFrames.length; f++) {
     const frameIdx = targetFrames[f];
     const frame = state.frames[frameIdx];
     const rawCanvas = renderFrameToCanvas(state, frameIdx);
 
-    const scaledCanvas = document.createElement('canvas');
-    scaledCanvas.width = width;
-    scaledCanvas.height = height;
-    const ctx = scaledCanvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) continue;
-
-    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, width, height);
 
     if (backgroundColor && backgroundColor !== 'transparent') {
       ctx.fillStyle = backgroundColor;

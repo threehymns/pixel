@@ -26,15 +26,6 @@ const UI_FIELDS: (keyof ProjectState)[] = [
     'smudgeStrength'
 ];
 
-/**
- * Finds the nearest color in a palette to the given RGB values.
- * Uses standard Euclidean distance in RGB space.
- */
-const findNearestPaletteColor = (r: number, g: number, b: number, palette: string[]): string => {
-  const index = findNearestPaletteIndex(r, g, b, palette);
-  return palette[index] || '#000000';
-};
-
 interface PixelPoint {
   x: number;
   y: number;
@@ -43,22 +34,127 @@ interface PixelPoint {
   b: number;
 }
 
+const SPATIAL_CELL_SHIFT = 3; // 8x8 cells
+const SPATIAL_CELL_SIZE = 1 << SPATIAL_CELL_SHIFT;
+
 /**
- * Finds the nearest pixel in a list spatially.
+ * Builds an exact expanding-ring spatial grid index for fast nearest-neighbor queries.
+ * Falls back to a tight linear scan (without Math.pow) for small point clouds.
  */
-const findNearestSpatially = (point: {x: number, y: number}, list: PixelPoint[]): PixelPoint => {
-  let minDistance = Infinity;
-  let nearest = list[0];
-  
-  for (const p of list) {
-    const dist = Math.pow(point.x - p.x, 2) + Math.pow(point.y - p.y, 2);
-    if (dist < minDistance) {
-      minDistance = dist;
-      nearest = p;
-    }
-    if (dist === 0) break;
+const createSpatialPointFinder = (list: PixelPoint[]): ((point: { x: number; y: number }) => PixelPoint) => {
+  if (list.length <= 64) {
+    return (point) => {
+      let minDist = Infinity;
+      let nearest = list[0];
+      const px = point.x;
+      const py = point.y;
+      for (let i = 0; i < list.length; i++) {
+        const p = list[i];
+        const dx = px - p.x;
+        const dy = py - p.y;
+        const dist = dx * dx + dy * dy;
+        if (dist < minDist) {
+          minDist = dist;
+          nearest = p;
+          if (dist === 0) break;
+        }
+      }
+      return nearest;
+    };
   }
-  return nearest;
+
+  const grid = new Map<number, PixelPoint[]>();
+  let minCx = Infinity;
+  let maxCx = -Infinity;
+  let minCy = Infinity;
+  let maxCy = -Infinity;
+
+  for (let i = 0; i < list.length; i++) {
+    const p = list[i];
+    const cx = p.x >> SPATIAL_CELL_SHIFT;
+    const cy = p.y >> SPATIAL_CELL_SHIFT;
+    if (cx < minCx) minCx = cx;
+    if (cx > maxCx) maxCx = cx;
+    if (cy < minCy) minCy = cy;
+    if (cy > maxCy) maxCy = cy;
+    const key = (cx << 16) ^ (cy & 0xffff);
+    let bucket = grid.get(key);
+    if (!bucket) {
+      bucket = [];
+      grid.set(key, bucket);
+    }
+    bucket.push(p);
+  }
+
+  return (point) => {
+    const px = point.x;
+    const py = point.y;
+    const cx = px >> SPATIAL_CELL_SHIFT;
+    const cy = py >> SPATIAL_CELL_SHIFT;
+
+    let minDist = Infinity;
+    let nearest = list[0];
+
+    const maxR = Math.max(
+      Math.abs(cx - minCx),
+      Math.abs(cx - maxCx),
+      Math.abs(cy - minCy),
+      Math.abs(cy - maxCy)
+    );
+
+    const checkCell = (tx: number, ty: number) => {
+      const bucket = grid.get((tx << 16) ^ (ty & 0xffff));
+      if (!bucket) return;
+      for (let i = 0; i < bucket.length; i++) {
+        const p = bucket[i];
+        const dx = px - p.x;
+        const dy = py - p.y;
+        const dist = dx * dx + dy * dy;
+        if (dist < minDist) {
+          minDist = dist;
+          nearest = p;
+        }
+      }
+    };
+
+    for (let r = 0; r <= maxR; r++) {
+      if (r === 0) {
+        if (cx >= minCx && cx <= maxCx && cy >= minCy && cy <= maxCy) {
+          checkCell(cx, cy);
+        }
+      } else {
+        const xStart = Math.max(minCx, cx - r);
+        const xEnd = Math.min(maxCx, cx + r);
+
+        const topY = cy - r;
+        if (topY >= minCy && topY <= maxCy) {
+          for (let tx = xStart; tx <= xEnd; tx++) checkCell(tx, topY);
+        }
+        const botY = cy + r;
+        if (botY >= minCy && botY <= maxCy) {
+          for (let tx = xStart; tx <= xEnd; tx++) checkCell(tx, botY);
+        }
+        const leftX = cx - r;
+        if (leftX >= minCx && leftX <= maxCx) {
+          const innerYStart = Math.max(minCy, cy - r + 1);
+          const innerYEnd = Math.min(maxCy, cy + r - 1);
+          for (let ty = innerYStart; ty <= innerYEnd; ty++) checkCell(leftX, ty);
+        }
+        const rightX = cx + r;
+        if (rightX >= minCx && rightX <= maxCx) {
+          const innerYStart = Math.max(minCy, cy - r + 1);
+          const innerYEnd = Math.min(maxCy, cy + r - 1);
+          for (let ty = innerYStart; ty <= innerYEnd; ty++) checkCell(rightX, ty);
+        }
+      }
+
+      if (minDist === 0) break;
+      const nextRingMinDist = r * SPATIAL_CELL_SIZE + 1;
+      if (minDist <= nextRingMinDist * nextRingMinDist) break;
+    }
+
+    return nearest;
+  };
 };
 
 export function useProject() {
@@ -866,8 +962,10 @@ export function useProject() {
     const pairs: { s: PixelPoint, e: PixelPoint }[] = [];
 
     if (startList.length > 0 && endList.length > 0) {
-        for (const s of startList) pairs.push({ s, e: findNearestSpatially(s, endList) });
-        for (const e of endList) pairs.push({ s: findNearestSpatially(e, startList), e });
+        const findNearestEnd = createSpatialPointFinder(endList);
+        const findNearestStart = createSpatialPointFinder(startList);
+        for (const s of startList) pairs.push({ s, e: findNearestEnd(s) });
+        for (const e of endList) pairs.push({ s: findNearestStart(e), e });
     }
 
     const newFrames = [...state.frames];
@@ -889,11 +987,16 @@ export function useProject() {
             const curG = s.g + (e.g - s.g) * t;
             const curB = s.b + (e.b - s.b) * t;
 
-            const curHex = findNearestPaletteColor(curR, curG, curB, palette);
-            const curVal = state.colorMode === 'indexed' ? palette.indexOf(curHex) : curHex;
+            const nearestIdx = findNearestPaletteIndex(curR, curG, curB, palette);
+            const curVal =
+              state.colorMode === 'indexed'
+                ? palette.length > 0
+                  ? nearestIdx
+                  : '#000000'
+                : palette[nearestIdx] || '#000000';
 
             if (curX >= 0 && curX < width && curY >= 0 && curY < height) {
-                framePixels[getIndex(curX, curY, width)] = (curVal === -1) ? (palette[0] || '#000000') : curVal;
+                framePixels[getIndex(curX, curY, width)] = curVal;
             }
         }
 

@@ -4,10 +4,11 @@ import { ProjectState, Position, Modifiers, PixelGrid, PixelValue } from '../typ
 import { 
   getIndex, getCoords,
   getRectSelection, getEllipseSelection, getPolygonSelection, getWandSelection,
-  hexToRgb, getPackedColor, getMergedSelectionSegments, Segment, getSelectionBoundingBox, rotateSelectionPixels, scaleSelectionPixels,
-  getLayerParentMap, isLayerVisible, getEffectiveLayerOpacity
+  getPackedColor, getMergedSelectionSegments, Segment, getSelectionBoundingBox, rotateSelectionPixels, scaleSelectionPixels,
+  getLayerParentMap, isLayerVisible, getEffectiveLayerOpacity, prepareRotSpriteBuffer, RotSpritePrecomputedBuffer
 } from '../utils';
 import { setLiveZoom } from '../hooks/useCursorStore';
+import { subscribeLiveStroke, getLiveStroke, LiveStrokePayload } from '../hooks/useLiveStrokeStore';
 
 const CURSOR_SVG = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M10 2H14V8H10V2ZM10 16H14V22H10V16ZM2 10H8V14H2V10ZM16 10H22V14H16V10ZM10 10H14V14H10V10Z" fill="white"/></svg>`;
 const CURSOR_URI = `data:image/svg+xml;utf8,${encodeURIComponent(CURSOR_SVG)}`;
@@ -20,7 +21,7 @@ interface CachedLayerCanvas {
   lastPixels: PixelGrid | null;
   lastOpacity: number;
   lastVisible: boolean;
-  lastPaletteKey: string;
+  lastPalette: string[] | null;
   lastWidth: number;
   lastHeight: number;
 }
@@ -99,21 +100,35 @@ export const Canvas: React.FC<CanvasProps> = ({
   onMousePosUpdate
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const containerRectRef = useRef<DOMRect | null>(null);
   const artCanvasRef = useRef<HTMLCanvasElement>(null);
   const uiCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const layerCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const layerImageDataRef = useRef<ImageData | null>(null);
   const onionSkinImageDataRef = useRef<ImageData | null>(null);
+  const onionSkinValidRef = useRef<boolean>(false);
   const layerCanvasCacheRef = useRef<Map<string, CachedLayerCanvas>>(new Map());
+  const rotSpriteCacheRef = useRef<RotSpritePrecomputedBuffer | null>(null);
   const cursorRef = useRef<HTMLDivElement>(null);
   const mousePosRef = useRef<{x: number, y: number}>({ x: -100, y: -100 });
   const touchTimeoutRef = useRef<number | null>(null);
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
 
+  const refreshContainerRect = useCallback(() => {
+    if (containerRef.current) {
+      containerRectRef.current = containerRef.current.getBoundingClientRect();
+    }
+  }, []);
+
   useLayoutEffect(() => {
-    if (!containerRef.current) return;
+    const el = containerRef.current;
+    if (!el) return;
+    containerRectRef.current = el.getBoundingClientRect();
     const observer = new ResizeObserver((entries) => {
+      containerRectRef.current = el.getBoundingClientRect();
       for (const entry of entries) {
         if (entry.contentRect) {
           setContainerSize({
@@ -123,9 +138,15 @@ export const Canvas: React.FC<CanvasProps> = ({
         }
       }
     });
-    observer.observe(containerRef.current);
-    return () => observer.disconnect();
-  }, []);
+    observer.observe(el);
+    window.addEventListener('resize', refreshContainerRect, { passive: true });
+    window.addEventListener('scroll', refreshContainerRect, { capture: true, passive: true });
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', refreshContainerRect);
+      window.removeEventListener('scroll', refreshContainerRect, true);
+    };
+  }, [refreshContainerRect]);
 
   const selectionSet = useMemo(() => {
     if (!state.selection) return null;
@@ -160,7 +181,8 @@ export const Canvas: React.FC<CanvasProps> = ({
   }, [onDrawStart, onDraw, onDrawEnd]);
 
   const [isDrawing, setIsDrawing] = useState(false);
-  const [cursorPos, setCursorPos] = useState<{x: number, y: number} | null>(null);
+  const cursorPosRef = useRef<Position | null>(null);
+  const uiRafIdRef = useRef<number | null>(null);
   const [showCursor, setShowCursor] = useState(false);
   const [pan, setPan] = useState<Position>({ x: 0, y: 0 });
   const [localZoom, setLocalZoom] = useState(state.zoom);
@@ -269,15 +291,18 @@ export const Canvas: React.FC<CanvasProps> = ({
   }, [state.id, state.width, state.height, state.zoom, containerSize]);
 
   const getPixelCoords = useCallback((clientX: number, clientY: number) => {
-    if (!containerRef.current) return null;
-    const rect = containerRef.current.getBoundingClientRect();
+    const el = containerRef.current;
+    if (!el) return null;
+    const rect = containerRectRef.current || el.getBoundingClientRect();
     const mx = clientX - rect.left;
     const my = clientY - rect.top;
+    const curPan = panRef.current;
+    const curZoom = zoomRef.current;
     
-    const x = Math.floor((mx - pan.x) / localZoom);
-    const y = Math.floor((my - pan.y) / localZoom);
+    const x = Math.floor((mx - curPan.x) / curZoom);
+    const y = Math.floor((my - curPan.y) / curZoom);
     return { x, y };
-  }, [localZoom, pan]);
+  }, []);
 
   const updateCustomCursor = (clientX: number, clientY: number) => {
     mousePosRef.current = { x: clientX, y: clientY };
@@ -297,6 +322,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
   const handlePointerDown = (clientX: number, clientY: number, modifiers: Modifiers, button: number = 0) => {
     if (button !== 0 && button !== -1) return; // Support touch (-1 usually or treat as 0)
+    refreshContainerRect();
     
     const coords = getPixelCoords(clientX, clientY);
     if (!coords) return;
@@ -320,6 +346,9 @@ export const Canvas: React.FC<CanvasProps> = ({
                 const floats = new Map<number, PixelValue>();
                 state.selection.forEach(idx => floats.set(idx, layerData[idx]));
                 setFloatingPixels(floats);
+                rotSpriteCacheRef.current = state.rotationAlgorithm === 'rotsprite'
+                  ? prepareRotSpriteBuffer(state.selection, layerData, state.width)
+                  : null;
               }
             }
             return;
@@ -408,15 +437,33 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
   };
 
+  const scheduleRenderUI = useCallback(() => {
+    if (uiRafIdRef.current !== null) return;
+    uiRafIdRef.current = requestAnimationFrame(() => {
+      uiRafIdRef.current = null;
+      renderUIRef.current();
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (uiRafIdRef.current !== null) {
+        cancelAnimationFrame(uiRafIdRef.current);
+        uiRafIdRef.current = null;
+      }
+    };
+  }, []);
+
   const handlePointerMove = (clientX: number, clientY: number, modifiers: Modifiers) => {
     updateCustomCursor(clientX, clientY);
     const coords = getPixelCoords(clientX, clientY);
     
-    // Only trigger React state and status bar updates when integer pixel coordinates change
+    // Update cursor ref and schedule UI overlay repaint without triggering a React re-render
     const lastReported = lastReportedCoordsRef.current;
     if (!lastReported || !coords || lastReported.x !== coords.x || lastReported.y !== coords.y) {
       lastReportedCoordsRef.current = coords;
-      setCursorPos(coords);
+      cursorPosRef.current = coords;
+      scheduleRenderUI();
       if (onMousePosUpdate) onMousePosUpdate(coords);
     }
     if (!coords) return;
@@ -499,6 +546,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
     if (isRotating && rotationPivot && state.selection) {
         onRotatePixels(state.selection, rotationAngle, rotationPivot);
+        rotSpriteCacheRef.current = null;
         setIsRotating(false);
         setRotationPivot(null);
         setRotationAngle(0);
@@ -519,7 +567,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
     if (isDrawing) {
       if (['rect-select', 'ellipse-select', 'lasso-select'].includes(state.tool) && startPos) {
-         const cp = cursorPos || startPos;
+         const cp = cursorPosRef.current || startPos;
          let newSel = new Set<number>();
          const clamp = (val: number, max: number) => Math.max(0, Math.min(max - 1, val));
          const sx = clamp(startPos.x, state.width);
@@ -531,15 +579,12 @@ export const Canvas: React.FC<CanvasProps> = ({
          else if (state.tool === 'ellipse-select') newSel = getEllipseSelection(sx, sy, cx, cy, state.width);
          else if (state.tool === 'lasso-select') newSel = getPolygonSelection(polyPoints.length > 0 ? polyPoints : [startPos], state.width, state.height);
          combineSelection(newSel);
-      } else if (['pencil', 'eraser', 'smudge', 'bucket', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'blur', 'sharpen'].includes(state.tool)) {
-        callbacks.current.onDrawEnd();
       }
+      setIsDrawing(false);
+      setStartPos(null);
+      setPolyPoints([]);
+      callbacks.current.onDrawEnd();
     }
-
-    setIsDrawing(false);
-    setStartPos(null);
-    setPolyPoints([]);
-    callbacks.current.onDrawEnd();
   };
 
   const combineSelection = (newSelection: Set<number>) => {
@@ -565,6 +610,9 @@ export const Canvas: React.FC<CanvasProps> = ({
     onSelectionUpdate(finalSel.size > 0 ? finalSel : null);
   };
 
+  const pointerHandlersRef = useRef({ handlePointerDown, handlePointerMove, handlePointerUp, isDrawing });
+  pointerHandlersRef.current = { handlePointerDown, handlePointerMove, handlePointerUp, isDrawing };
+
   const handleWheel = useCallback((e: WheelEvent) => {
     e.preventDefault();
     const container = containerRef.current;
@@ -576,7 +624,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         
         // Zoom logic (Ctrl + Wheel)
         if (e.ctrlKey) {
-            const rect = container.getBoundingClientRect();
+            const rect = containerRectRef.current || container.getBoundingClientRect();
             const mx = e.clientX - rect.left;
             const my = e.clientY - rect.top;
             const cx = mx - currentPan.x;
@@ -615,7 +663,7 @@ export const Canvas: React.FC<CanvasProps> = ({
          e.preventDefault();
          
          // Abort any current single-finger drawing action immediately
-         if (isDrawing) {
+         if (pointerHandlersRef.current.isDrawing) {
             setIsDrawing(false);
             callbacks.current.onDrawEnd();
          }
@@ -633,11 +681,11 @@ export const Canvas: React.FC<CanvasProps> = ({
          // Add a small delay (45ms) to single-finger touch down.
          // This is often enough for the hardware to report a second finger if it's a pinch.
          touchTimeoutRef.current = window.setTimeout(() => {
-             handlePointerDown(t.clientX, t.clientY, { shift: false, ctrl: false, alt: false, meta: false }, -1);
+             pointerHandlersRef.current.handlePointerDown(t.clientX, t.clientY, { shift: false, ctrl: false, alt: false, meta: false }, -1);
              touchTimeoutRef.current = null;
          }, 45);
      }
-  }, [isDrawing, handlePointerDown]);
+  }, []);
 
   const handleTouchMove = useCallback((e: TouchEvent) => {
       if (e.touches.length >= 2) {
@@ -659,7 +707,7 @@ export const Canvas: React.FC<CanvasProps> = ({
          let newZoom = Math.min(Math.max(startZoom * scaleFactor, 0.1), 128);
          const dx = cx - startCenter.x;
          const dy = cy - startCenter.y;
-         const rect = containerRef.current!.getBoundingClientRect();
+         const rect = containerRectRef.current || containerRef.current!.getBoundingClientRect();
          const mx = startCenter.x - rect.left;
          const my = startCenter.y - rect.top;
          const canvasX = mx - startPan.x;
@@ -674,10 +722,10 @@ export const Canvas: React.FC<CanvasProps> = ({
           // Only move if we aren't waiting for a potential second finger
           if (!touchTimeoutRef.current) {
              e.preventDefault();
-             handlePointerMove(e.touches[0].clientX, e.touches[0].clientY, { shift: false, ctrl: false, alt: false, meta: false });
+             pointerHandlersRef.current.handlePointerMove(e.touches[0].clientX, e.touches[0].clientY, { shift: false, ctrl: false, alt: false, meta: false });
           }
       }
-  }, [scheduleZoomCommit, handlePointerMove]);
+  }, [scheduleZoomCommit]);
 
   const handleTouchEnd = useCallback((e: TouchEvent) => { 
     if (touchTimeoutRef.current) {
@@ -685,9 +733,9 @@ export const Canvas: React.FC<CanvasProps> = ({
         touchTimeoutRef.current = null;
     }
     if (e.touches.length === 0) {
-        handlePointerUp(); 
+        pointerHandlersRef.current.handlePointerUp(); 
     }
-  }, [handlePointerUp]);
+  }, []);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -703,6 +751,36 @@ export const Canvas: React.FC<CanvasProps> = ({
         container.removeEventListener('touchend', handleTouchEnd);
     };
   }, [handleWheel, handleTouchStart, handleTouchMove, handleTouchEnd]);
+
+  const getPaletteForAlpha = useCallback((palette: string[], alpha: number) => {
+    let cache = paletteCacheRef.current.get(alpha);
+    if (!cache || cache.palette !== palette) {
+      const palLen = palette.length;
+      const buf = new Uint32Array(palLen);
+      for (let p = 0; p < palLen; p++) {
+        if (palette[p]) {
+          buf[p] = getPackedColor(palette[p], alpha);
+        }
+      }
+      cache = { palette, buf };
+      paletteCacheRef.current.set(alpha, cache);
+    }
+    return cache.buf;
+  }, []);
+
+  const syncTiledOverlays = useCallback((sourceCanvas: HTMLCanvasElement, width: number, height: number, tiled: boolean) => {
+    if (tiled && tileCanvasesRef.current.size > 0) {
+      tileCanvasesRef.current.forEach(tCanvas => {
+        if (tCanvas) {
+          const tCtx = tCanvas.getContext('2d');
+          if (tCtx) {
+            tCtx.clearRect(0, 0, width, height);
+            tCtx.drawImage(sourceCanvas, 0, 0);
+          }
+        }
+      });
+    }
+  }, []);
 
   // Art Rendering Effect (Double Buffered + Per-Layer Cached)
   useEffect(() => {
@@ -739,24 +817,9 @@ export const Canvas: React.FC<CanvasProps> = ({
       return ref.current;
     };
 
-    const getPaletteForAlpha = (alpha: number) => {
-      let cache = paletteCacheRef.current.get(alpha);
-      if (!cache || cache.palette !== state.palette) {
-        const palLen = state.palette.length;
-        const buf = new Uint32Array(palLen);
-        for (let p = 0; p < palLen; p++) {
-          if (state.palette[p]) {
-            buf[p] = getPackedColor(state.palette[p], alpha);
-          }
-        }
-        cache = { palette: state.palette, buf };
-        paletteCacheRef.current.set(alpha, cache);
-      }
-      return cache.buf;
-    };
-
     const totalPixels = state.width * state.height;
     const palLen = state.palette.length;
+    const parentMap = getLayerParentMap(state.layers);
 
     // 1. Draw Onion Skin to offscreen
     if (state.onionSkin && state.activeFrameIndex > 0 && state.frames[state.activeFrameIndex - 1]) {
@@ -764,7 +827,6 @@ export const Canvas: React.FC<CanvasProps> = ({
       const imgData = getReusedImageData(onionSkinImageDataRef);
       const data32 = new Uint32Array(imgData.data.buffer);
 
-      const parentMap = getLayerParentMap(state.layers);
       for (let lIdx = 0; lIdx < state.layers.length; lIdx++) {
         const layer = state.layers[lIdx];
         if (layer.type === 'group') continue;
@@ -775,7 +837,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         const alpha = Math.round((effOpacity / 100) * 80);
         if (alpha <= 0) continue;
 
-        const paletteUint32 = getPaletteForAlpha(alpha);
+        const paletteUint32 = getPaletteForAlpha(state.palette, alpha);
         const pxLen = Math.min(pixels.length, totalPixels);
         for (let i = 0; i < pxLen; i++) {
             const val = pixels[i];
@@ -788,19 +850,25 @@ export const Canvas: React.FC<CanvasProps> = ({
         }
       }
       offCtx.putImageData(imgData, 0, 0);
+      onionSkinValidRef.current = true;
     } else {
       offCtx.clearRect(0, 0, state.width, state.height);
+      onionSkinValidRef.current = false;
     }
 
     // 2. Draw Layers to offscreen with per-layer rasterization cache
-    const parentMap = getLayerParentMap(state.layers);
-    const paletteKey = state.palette.join(',');
+    const activeLive = getLiveStroke();
 
     for (let lIdx = 0; lIdx < state.layers.length; lIdx++) {
       const layer = state.layers[lIdx];
       if (layer.type === 'group') continue;
       if (!isLayerVisible(layer, state.layers, parentMap)) continue;
-      const layerPixels = currentFrame.layerData[layer.id];
+
+      const useLive = activeLive &&
+        activeLive.projectId === state.id &&
+        activeLive.frameIndex === state.activeFrameIndex &&
+        activeLive.layerId === layer.id;
+      const layerPixels = useLive ? activeLive.pixels : currentFrame.layerData[layer.id];
       if (!layerPixels) continue;
       
       const isTargetLayer = layer.id === state.activeLayerId;
@@ -825,7 +893,7 @@ export const Canvas: React.FC<CanvasProps> = ({
           lastPixels: null,
           lastOpacity: -1,
           lastVisible: true,
-          lastPaletteKey: '',
+          lastPalette: null,
           lastWidth: state.width,
           lastHeight: state.height,
         };
@@ -835,13 +903,13 @@ export const Canvas: React.FC<CanvasProps> = ({
       const isDirty = isFloatingActive ||
         layerCache.lastPixels !== layerPixels ||
         layerCache.lastOpacity !== alpha ||
-        layerCache.lastPaletteKey !== paletteKey;
+        layerCache.lastPalette !== state.palette;
 
       if (isDirty) {
         const data32 = layerCache.data32;
         data32.fill(0);
 
-        const paletteUint32 = getPaletteForAlpha(alpha);
+        const paletteUint32 = getPaletteForAlpha(state.palette, alpha);
         const pxLen = Math.min(layerPixels.length, totalPixels);
 
         if (isFloatingActive && state.selection) {
@@ -872,7 +940,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         if (!isFloatingActive) {
           layerCache.lastPixels = layerPixels;
           layerCache.lastOpacity = alpha;
-          layerCache.lastPaletteKey = paletteKey;
+          layerCache.lastPalette = state.palette;
         } else {
           layerCache.lastPixels = null; // force update when transform ends
         }
@@ -898,7 +966,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         } else if (isRotating && rotationPivot) {
             const tempGrid: PixelGrid = new Array(state.width * state.height).fill(null);
             floatingPixels.forEach((color, idx) => tempGrid[idx] = color);
-            transformedGrid = rotateSelectionPixels(state.selection, tempGrid, rotationAngle, rotationPivot, state.width, state.height, state.rotationAlgorithm);
+            transformedGrid = rotateSelectionPixels(state.selection, tempGrid, rotationAngle, rotationPivot, state.width, state.height, state.rotationAlgorithm, rotSpriteCacheRef.current);
         } else if (isMoving) {
             const tempGrid: PixelGrid = new Array(state.width * state.height).fill(null);
             floatingPixels.forEach((val, idx) => {
@@ -916,7 +984,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
         const floatImgData = getReusedImageData(layerImageDataRef);
         const floatData32 = new Uint32Array(floatImgData.data.buffer);
-        const floatPaletteUint32 = getPaletteForAlpha(255);
+        const floatPaletteUint32 = getPaletteForAlpha(state.palette, 255);
         const floatPxLen = Math.min(transformedGrid.length, totalPixels);
 
         for (let i = 0; i < floatPxLen; i++) {
@@ -937,18 +1005,154 @@ export const Canvas: React.FC<CanvasProps> = ({
     ctx.drawImage(offscreen, 0, 0);
 
     // Synchronize Tiled Overlays if active
-    if (state.tiled && tileCanvasesRef.current.size > 0) {
-      tileCanvasesRef.current.forEach(tCanvas => {
-        if (tCanvas) {
-          const tCtx = tCanvas.getContext('2d');
-          if (tCtx) {
-            tCtx.clearRect(0, 0, state.width, state.height);
-            tCtx.drawImage(canvas, 0, 0);
+    syncTiledOverlays(canvas, state.width, state.height, state.tiled);
+  }, [state.id, state.frames, state.activeFrameIndex, state.layers, state.activeLayerId, state.palette, state.width, state.height, state.onionSkin, state.selection, state.rotationAlgorithm, isMoving, isRotating, isScaling, floatingPixels, moveOffset, rotationAngle, rotationPivot, initialBox, currentBox, state.tiled, getPaletteForAlpha, syncTiledOverlays]);
+
+  // Direct Live-Stroke Dirty-Rect Subscriber (zero React re-renders during brush drag)
+  useEffect(() => {
+    const handleLiveStroke = (live: LiveStrokePayload | null) => {
+      if (!live) return;
+      const curState = stateRef.current;
+      if (live.projectId !== curState.id || live.frameIndex !== curState.activeFrameIndex) return;
+
+      const canvas = artCanvasRef.current;
+      const offscreen = offscreenCanvasRef.current;
+      if (!canvas || !offscreen) return;
+      const ctx = canvas.getContext('2d', { alpha: true });
+      const offCtx = offscreen.getContext('2d');
+      if (!ctx || !offCtx) return;
+
+      const { width, height, layers, palette, tiled } = curState;
+      if (offscreen.width !== width || offscreen.height !== height) {
+        offscreen.width = width;
+        offscreen.height = height;
+      }
+
+      const parentMap = getLayerParentMap(layers);
+      const targetLayer = layers.find(l => l.id === live.layerId);
+      if (!targetLayer || targetLayer.type === 'group' || !isLayerVisible(targetLayer, layers, parentMap)) return;
+
+      const effOpacity = getEffectiveLayerOpacity(targetLayer, layers, parentMap);
+      const alpha = Math.round((effOpacity / 100) * 255);
+      if (alpha <= 0) return;
+
+      const palLen = palette.length;
+      const paletteUint32 = getPaletteForAlpha(palette, alpha);
+      const totalPixels = width * height;
+      const pixels = live.pixels;
+
+      let layerCache = layerCanvasCacheRef.current.get(live.layerId);
+      let needsFullRaster = Boolean(live.fullRedraw || !live.dirtyRect);
+      if (!layerCache || layerCache.lastWidth !== width || layerCache.lastHeight !== height) {
+        const c = document.createElement('canvas');
+        c.width = width;
+        c.height = height;
+        const cCtx = c.getContext('2d')!;
+        const imgData = cCtx.createImageData(width, height);
+        layerCache = {
+          canvas: c,
+          ctx: cCtx,
+          imageData: imgData,
+          data32: new Uint32Array(imgData.data.buffer),
+          lastPixels: null,
+          lastOpacity: -1,
+          lastVisible: true,
+          lastPalette: null,
+          lastWidth: width,
+          lastHeight: height,
+        };
+        layerCanvasCacheRef.current.set(live.layerId, layerCache);
+        needsFullRaster = true;
+      } else if (layerCache.lastOpacity !== alpha || layerCache.lastPalette !== palette || layerCache.lastPixels === null) {
+        needsFullRaster = true;
+      }
+
+      const data32 = layerCache.data32;
+      if (!needsFullRaster && live.dirtyRect) {
+        const minX = Math.max(0, live.dirtyRect.minX);
+        const minY = Math.max(0, live.dirtyRect.minY);
+        const maxX = Math.min(width - 1, live.dirtyRect.maxX);
+        const maxY = Math.min(height - 1, live.dirtyRect.maxY);
+
+        for (let py = minY; py <= maxY; py++) {
+          const rowOff = py * width;
+          for (let px = minX; px <= maxX; px++) {
+            const idx = rowOff + px;
+            const val = pixels[idx];
+            if (val === null || val === undefined) {
+              data32[idx] = 0;
+            } else if (typeof val === 'number') {
+              data32[idx] = (val >= 0 && val < palLen) ? paletteUint32[val] : 0;
+            } else {
+              data32[idx] = getPackedColor(val, alpha);
+            }
           }
         }
-      });
-    }
-  }, [state.frames, state.activeFrameIndex, state.layers, state.activeLayerId, state.palette, state.width, state.height, state.onionSkin, isMoving, isRotating, isScaling, floatingPixels, moveOffset, rotationAngle, rotationPivot, initialBox, currentBox, state.tiled]);
+        layerCache.ctx.putImageData(
+          layerCache.imageData,
+          0,
+          0,
+          minX,
+          minY,
+          maxX - minX + 1,
+          maxY - minY + 1
+        );
+      } else {
+        data32.fill(0);
+        const pxLen = Math.min(pixels.length, totalPixels);
+        for (let i = 0; i < pxLen; i++) {
+          const val = pixels[i];
+          if (val === null || val === undefined) continue;
+          if (typeof val === 'number') {
+            if (val >= 0 && val < palLen) data32[i] = paletteUint32[val];
+          } else {
+            data32[i] = getPackedColor(val, alpha);
+          }
+        }
+        layerCache.ctx.putImageData(layerCache.imageData, 0, 0);
+      }
+
+      layerCache.lastPixels = pixels;
+      layerCache.lastOpacity = alpha;
+      layerCache.lastPalette = palette;
+
+      // Composite onion skin + cached layers to offscreen
+      if (
+        onionSkinValidRef.current &&
+        onionSkinImageDataRef.current &&
+        onionSkinImageDataRef.current.width === width &&
+        onionSkinImageDataRef.current.height === height
+      ) {
+        offCtx.putImageData(onionSkinImageDataRef.current, 0, 0);
+      } else {
+        offCtx.clearRect(0, 0, width, height);
+      }
+
+      const currentFrame = curState.frames[curState.activeFrameIndex];
+      for (let lIdx = 0; lIdx < layers.length; lIdx++) {
+        const layer = layers[lIdx];
+        if (layer.type === 'group') continue;
+        if (!isLayerVisible(layer, layers, parentMap)) continue;
+        if (layer.id !== live.layerId && !currentFrame?.layerData[layer.id]) continue;
+        const cached = layerCanvasCacheRef.current.get(layer.id);
+        if (!cached || cached.lastWidth !== width || cached.lastHeight !== height) continue;
+
+        const compositeOp: GlobalCompositeOperation = layer.blendMode === 'normal'
+          ? 'source-over'
+          : (layer.blendMode === 'addition' ? 'lighter' : (layer.blendMode === 'subtract' || layer.blendMode === 'divide' ? 'source-over' : layer.blendMode as GlobalCompositeOperation));
+
+        offCtx.globalCompositeOperation = compositeOp;
+        offCtx.drawImage(cached.canvas, 0, 0);
+        offCtx.globalCompositeOperation = 'source-over';
+      }
+
+      ctx.clearRect(0, 0, width, height);
+      ctx.drawImage(offscreen, 0, 0);
+      syncTiledOverlays(canvas, width, height, tiled);
+    };
+
+    return subscribeLiveStroke(handleLiveStroke);
+  }, [getPaletteForAlpha, syncTiledOverlays]);
 
   // UI Rendering Effect (Grid, Selection, Brush)
   const renderUI = useCallback(() => {
@@ -967,6 +1171,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     const px = pan.x;
     const py = pan.y;
     const dashOffset = (performance.now() / 30) % 8;
+    const cursorPos = cursorPosRef.current;
 
     // 1. Draw Grid (Viewport-Clipped & Half-Pixel Snapped for crisp lines & faster rendering)
     if (state.showGrid && z > 4) {
@@ -1167,7 +1372,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
 
     ctx.restore();
-  }, [containerSize, state.showGrid, state.width, state.height, state.symmetry.x, state.symmetry.y, state.tool, state.brushSize, state.brushShape, selectionSet, selectionBorderSegments, selectionBoundingBox, localZoom, pan, cursorPos, startPos, polyPoints, isMoving, isDrawing, moveOffset, isRotating, rotationAngle, rotationPivot, isScaling, currentBox]);
+  }, [containerSize, state.showGrid, state.width, state.height, state.symmetry.x, state.symmetry.y, state.tool, state.brushSize, state.brushShape, selectionSet, selectionBorderSegments, selectionBoundingBox, localZoom, pan, startPos, polyPoints, isMoving, isDrawing, moveOffset, isRotating, rotationAngle, rotationPivot, isScaling, currentBox]);
 
   const renderUIRef = useRef(renderUI);
   useLayoutEffect(() => {
@@ -1209,8 +1414,8 @@ export const Canvas: React.FC<CanvasProps> = ({
         ref={containerRef}
         className="w-full h-full flex-1 bg-[oklch(0.145_0_0)] overflow-hidden relative shadow-inner border-l border-r border-background touch-none"
         style={{ cursor: 'none' }}
-        onMouseEnter={(e) => { mousePosRef.current = { x: e.clientX, y: e.clientY }; setShowCursor(true); }}
-        onMouseLeave={() => { setShowCursor(false); setCursorPos(null); if (onMousePosUpdate) onMousePosUpdate(null); handlePointerUp(); }}
+        onMouseEnter={(e) => { refreshContainerRect(); mousePosRef.current = { x: e.clientX, y: e.clientY }; setShowCursor(true); }}
+        onMouseLeave={() => { setShowCursor(false); cursorPosRef.current = null; lastReportedCoordsRef.current = null; scheduleRenderUI(); if (onMousePosUpdate) onMousePosUpdate(null); handlePointerUp(); }}
         onMouseDown={(e) => handlePointerDown(e.clientX, e.clientY, getModifiers(e), e.button)}
         onMouseMove={(e) => handlePointerMove(e.clientX, e.clientY, getModifiers(e))}
         onMouseUp={handlePointerUp}

@@ -1270,6 +1270,27 @@ export async function parseAseprite(buffer: ArrayBuffer, filename = 'imported'):
   };
 }
 
+const FALLBACK_ASEPRITE_PALETTE = ['#000000', '#ffffff'];
+
+interface CachedEncodedCel {
+  width: number;
+  height: number;
+  pxLen: number;
+  hash: number;
+  nonNullCount: number;
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  hasIndexedValues: boolean;
+  hasStringValues: boolean;
+  compressedKey: string | null;
+  compressedPaletteRef: string[] | null;
+  compressedBytes: Uint8Array | null;
+}
+
+const ENCODED_CEL_CACHE = new WeakMap<PixelGrid, CachedEncodedCel>();
+
 /**
  * Encodes a ProjectState object into a binary Aseprite (.ase/.aseprite) Uint8Array buffer.
  */
@@ -1280,7 +1301,7 @@ export function encodeAseprite(state: ProjectState): Uint8Array {
   } = state;
   const effectivePalette = (palette && palette.length > 0) 
     ? palette 
-    : ['#000000', '#ffffff'];
+    : FALLBACK_ASEPRITE_PALETTE;
   const numFrames = frames.length;
   const isIndexed = colorMode === 'indexed';
   const colorDepth = isIndexed ? 8 : 32;
@@ -1612,6 +1633,8 @@ export function encodeAseprite(state: ProjectState): Uint8Array {
     }
 
     // --- Cel Chunks for this frame ---
+    const compressedKey = `${isIndexed ? 1 : 0}:${effectiveTransparentIndex}`;
+
     for (let lIdx = 0; lIdx < asepriteLayers.length; lIdx++) {
       const layer = asepriteLayers[lIdx];
       const px = frame.layerData[layer.id];
@@ -1623,53 +1646,90 @@ export function encodeAseprite(state: ProjectState): Uint8Array {
       let linkedFrameIdx = -1;
       let minX = width, minY = height, maxX = -1, maxY = -1;
       let hasPixels = false;
+      let cachedAnalysis: CachedEncodedCel | undefined;
 
       // O(1) fast path when a frame shares the exact same PixelGrid array reference
       const refMatch = seenGrids.get(px);
       if (refMatch !== undefined) {
         linkedFrameIdx = refMatch;
       } else {
-        // Single pass over pixels to compute both content signature hash and tight bounding box
         const pxLen = px.length;
-        let nonNullCount = 0;
-        let hash = (2166136261 ^ pxLen) | 0;
+        cachedAnalysis = ENCODED_CEL_CACHE.get(px);
+        if (
+          !cachedAnalysis ||
+          cachedAnalysis.width !== width ||
+          cachedAnalysis.height !== height ||
+          cachedAnalysis.pxLen !== pxLen
+        ) {
+          // Single pass over pixels to compute both content signature hash and tight bounding box
+          let nonNullCount = 0;
+          let hash = (2166136261 ^ pxLen) | 0;
+          let hasIndexedValues = false;
+          let hasStringValues = false;
 
-        for (let y = 0; y < height; y++) {
-          const rowOffset = y * width;
-          if (rowOffset >= pxLen) break;
-          const rowEnd = Math.min(width, pxLen - rowOffset);
-          for (let x = 0; x < rowEnd; x++) {
-            const i = rowOffset + x;
+          for (let y = 0; y < height; y++) {
+            const rowOffset = y * width;
+            if (rowOffset >= pxLen) break;
+            const rowEnd = Math.min(width, pxLen - rowOffset);
+            for (let x = 0; x < rowEnd; x++) {
+              const i = rowOffset + x;
+              const val = px[i];
+              if (val === null) continue;
+              if (val === undefined) {
+                hash = Math.imul(hash ^ Math.imul(i + 1, 0x9e3779b1), 16777619);
+                continue;
+              }
+              nonNullCount++;
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+              let vHash: number;
+              if (typeof val === 'number') {
+                hasIndexedValues = true;
+                vHash = (val + 1) | 0;
+              } else {
+                hasStringValues = true;
+                vHash = 2166136261;
+                for (let c = 0; c < val.length; c++) {
+                  vHash = Math.imul(vHash ^ val.charCodeAt(c), 16777619);
+                }
+              }
+              hash = Math.imul(hash ^ Math.imul(i + 1, 0x9e3779b1) ^ vHash, 16777619);
+            }
+          }
+
+          for (let i = width * height; i < pxLen; i++) {
             const val = px[i];
             if (val === null) continue;
-            if (val === undefined) {
-              hash = Math.imul(hash ^ Math.imul(i + 1, 0x9e3779b1), 16777619);
-              continue;
-            }
-            nonNullCount++;
-            if (x < minX) minX = x;
-            if (x > maxX) maxX = x;
-            if (y < minY) minY = y;
-            if (y > maxY) maxY = y;
-            let vHash: number;
-            if (typeof val === 'number') {
-              vHash = (val + 1) | 0;
-            } else {
-              vHash = 2166136261;
-              for (let c = 0; c < val.length; c++) {
-                vHash = Math.imul(vHash ^ val.charCodeAt(c), 16777619);
-              }
-            }
-            hash = Math.imul(hash ^ Math.imul(i + 1, 0x9e3779b1) ^ vHash, 16777619);
+            hash = Math.imul(hash ^ Math.imul(i + 1, 0x9e3779b1), 16777619);
           }
+
+          cachedAnalysis = {
+            width,
+            height,
+            pxLen,
+            hash,
+            nonNullCount,
+            minX,
+            maxX,
+            minY,
+            maxY,
+            hasIndexedValues,
+            hasStringValues,
+            compressedKey: null,
+            compressedPaletteRef: null,
+            compressedBytes: null,
+          };
+          ENCODED_CEL_CACHE.set(px, cachedAnalysis);
+        } else {
+          minX = cachedAnalysis.minX;
+          maxX = cachedAnalysis.maxX;
+          minY = cachedAnalysis.minY;
+          maxY = cachedAnalysis.maxY;
         }
 
-        for (let i = width * height; i < pxLen; i++) {
-          const val = px[i];
-          if (val === null) continue;
-          hash = Math.imul(hash ^ Math.imul(i + 1, 0x9e3779b1), 16777619);
-        }
-
+        const { hash, nonNullCount } = cachedAnalysis;
         hasPixels = nonNullCount > 0;
 
         const bucket = celBuckets.get(hash);
@@ -1734,49 +1794,69 @@ export function encodeAseprite(state: ProjectState): Uint8Array {
         if (hasPixels) {
           const celW = maxX - minX + 1;
           const celH = maxY - minY + 1;
-          const bpp = isIndexed ? 1 : 4;
-          const rawBuffer = new Uint8Array(celW * celH * bpp);
+          const needsPaletteMatch = cachedAnalysis
+            ? (isIndexed ? cachedAnalysis.hasStringValues : cachedAnalysis.hasIndexedValues)
+            : true;
+          const canReuseCompressed = Boolean(
+            cachedAnalysis &&
+            cachedAnalysis.compressedBytes &&
+            cachedAnalysis.compressedKey === compressedKey &&
+            (!needsPaletteMatch || cachedAnalysis.compressedPaletteRef === effectivePalette)
+          );
 
-          let rawOffset = 0;
-          for (let cy = 0; cy < celH; cy++) {
-            for (let cx = 0; cx < celW; cx++) {
-              const srcX = minX + cx;
-              const srcY = minY + cy;
-              const val = px[srcY * width + srcX];
+          let compressedCelBytes: Uint8Array;
+          if (canReuseCompressed && cachedAnalysis?.compressedBytes) {
+            compressedCelBytes = cachedAnalysis.compressedBytes;
+          } else {
+            const bpp = isIndexed ? 1 : 4;
+            const rawBuffer = new Uint8Array(celW * celH * bpp);
 
-              if (isIndexed) {
-                if (typeof val === 'number') {
-                  rawBuffer[rawOffset++] = val & 0xff;
-                } else if (typeof val === 'string') {
-                  const [r, g, b] = hexToRgb(val);
-                  rawBuffer[rawOffset++] = findNearestPaletteIndex(r, g, b, effectivePalette);
+            let rawOffset = 0;
+            for (let cy = 0; cy < celH; cy++) {
+              for (let cx = 0; cx < celW; cx++) {
+                const srcX = minX + cx;
+                const srcY = minY + cy;
+                const val = px[srcY * width + srcX];
+
+                if (isIndexed) {
+                  if (typeof val === 'number') {
+                    rawBuffer[rawOffset++] = val & 0xff;
+                  } else if (typeof val === 'string') {
+                    const [r, g, b] = hexToRgb(val);
+                    rawBuffer[rawOffset++] = findNearestPaletteIndex(r, g, b, effectivePalette);
+                  } else {
+                    rawBuffer[rawOffset++] = effectiveTransparentIndex;
+                  }
                 } else {
-                  rawBuffer[rawOffset++] = effectiveTransparentIndex;
-                }
-              } else {
-                if (typeof val === 'string') {
-                  const [r, g, b] = hexToRgb(val);
-                  rawBuffer[rawOffset++] = r;
-                  rawBuffer[rawOffset++] = g;
-                  rawBuffer[rawOffset++] = b;
-                  rawBuffer[rawOffset++] = 255;
-                } else if (typeof val === 'number' && effectivePalette[val]) {
-                  const [r, g, b] = hexToRgb(effectivePalette[val]);
-                  rawBuffer[rawOffset++] = r;
-                  rawBuffer[rawOffset++] = g;
-                  rawBuffer[rawOffset++] = b;
-                  rawBuffer[rawOffset++] = 255;
-                } else {
-                  rawBuffer[rawOffset++] = 0;
-                  rawBuffer[rawOffset++] = 0;
-                  rawBuffer[rawOffset++] = 0;
-                  rawBuffer[rawOffset++] = 0;
+                  if (typeof val === 'string') {
+                    const [r, g, b] = hexToRgb(val);
+                    rawBuffer[rawOffset++] = r;
+                    rawBuffer[rawOffset++] = g;
+                    rawBuffer[rawOffset++] = b;
+                    rawBuffer[rawOffset++] = 255;
+                  } else if (typeof val === 'number' && effectivePalette[val]) {
+                    const [r, g, b] = hexToRgb(effectivePalette[val]);
+                    rawBuffer[rawOffset++] = r;
+                    rawBuffer[rawOffset++] = g;
+                    rawBuffer[rawOffset++] = b;
+                    rawBuffer[rawOffset++] = 255;
+                  } else {
+                    rawBuffer[rawOffset++] = 0;
+                    rawBuffer[rawOffset++] = 0;
+                    rawBuffer[rawOffset++] = 0;
+                    rawBuffer[rawOffset++] = 0;
+                  }
                 }
               }
             }
-          }
 
-          const compressedCelBytes = deflate(rawBuffer);
+            compressedCelBytes = deflate(rawBuffer);
+            if (cachedAnalysis) {
+              cachedAnalysis.compressedKey = compressedKey;
+              cachedAnalysis.compressedPaletteRef = effectivePalette;
+              cachedAnalysis.compressedBytes = compressedCelBytes;
+            }
+          }
 
           const celWriter = new BinaryWriter(compressedCelBytes.length + 64);
           celWriter.writeDword(0);

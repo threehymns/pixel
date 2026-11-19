@@ -46,9 +46,9 @@ export default function App() {
     isOpen: false,
     initialFormat: 'gif'
   });
-  const openExportDialog = (format: ExportFormat = 'gif') => {
+  const openExportDialog = useCallback((format: ExportFormat = 'gif') => {
     setExportDialog({ isOpen: true, initialFormat: format });
-  };
+  }, []);
   const [statusMessage, setStatusMessage] = useState<{ text: string, type: 'info' | 'error' | 'success' }>({ text: '', type: 'info' });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -59,16 +59,18 @@ export default function App() {
   const layout = useLayout();
   const { state, updateState } = project;
 
-  const canvasTools = useCanvasTools(state, (newState, config) => {
+  const updateStateWithStatus = useCallback((newState: ProjectState, config?: { action: string; tool?: any }) => {
     updateState(newState, config);
     if (config?.action) {
       setStatusMessage({ text: config.action, type: 'info' });
     }
-  });
+  }, [updateState]);
+
+  const canvasTools = useCanvasTools(state, updateStateWithStatus);
   
-  const handleOpenFile = () => {
+  const handleOpenFile = useCallback(() => {
     fileInputRef.current?.click();
-  };
+  }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -227,64 +229,79 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-background text-foreground select-none overflow-hidden">
-      <CommandPalette 
-        isOpen={isCmdPaletteOpen} 
-        onClose={() => setIsCmdPaletteOpen(false)} 
-        commands={commands} 
-      />
+      {isCmdPaletteOpen && (
+        <CommandPalette 
+          isOpen={isCmdPaletteOpen} 
+          onClose={() => setIsCmdPaletteOpen(false)} 
+          commands={commands} 
+        />
+      )}
       
-      <NewProjectDialog
-        isOpen={isNewProjectDialogOpen}
-        onClose={() => setIsNewProjectDialogOpen(false)}
-        onCreate={project.createProject}
-        existingProjectCount={project.projects.length}
-      />
+      {isNewProjectDialogOpen && (
+        <NewProjectDialog
+          isOpen={isNewProjectDialogOpen}
+          onClose={() => setIsNewProjectDialogOpen(false)}
+          onCreate={project.createProject}
+          existingProjectCount={project.projects.length}
+        />
+      )}
 
-      <CanvasResizeDialog
-        isOpen={isResizeCanvasDialogOpen}
-        onClose={() => setIsResizeCanvasDialogOpen(false)}
-        currentWidth={state.width}
-        currentHeight={state.height}
-        onResize={project.resizeCanvas}
-      />
+      {isResizeCanvasDialogOpen && (
+        <CanvasResizeDialog
+          isOpen={isResizeCanvasDialogOpen}
+          onClose={() => setIsResizeCanvasDialogOpen(false)}
+          currentWidth={state.width}
+          currentHeight={state.height}
+          onResize={project.resizeCanvas}
+        />
+      )}
 
-      <ReferenceImageDialog
+      {isReferenceImageDialogOpen && (
+        <ReferenceImageDialog
           isOpen={isReferenceImageDialogOpen}
           onClose={() => setIsReferenceImageDialogOpen(false)}
           referenceImage={state.referenceImage}
           onUpdate={project.setReferenceImage}
-      />
+        />
+      )}
 
-      <ExportDialog
-        isOpen={exportDialog.isOpen}
-        onClose={() => setExportDialog(prev => ({ ...prev, isOpen: false }))}
-        state={state}
-        initialFormat={exportDialog.initialFormat}
-      />
+      {exportDialog.isOpen && (
+        <ExportDialog
+          isOpen={exportDialog.isOpen}
+          onClose={() => setExportDialog(prev => ({ ...prev, isOpen: false }))}
+          state={state}
+          initialFormat={exportDialog.initialFormat}
+        />
+      )}
 
-      <SpritePropertiesDialog
-        isOpen={isSpritePropertiesOpen}
-        onClose={() => setIsSpritePropertiesOpen(false)}
-        state={state}
-        onUpdateSpriteProperties={project.updateSpriteProperties}
-      />
+      {isSpritePropertiesOpen && (
+        <SpritePropertiesDialog
+          isOpen={isSpritePropertiesOpen}
+          onClose={() => setIsSpritePropertiesOpen(false)}
+          state={state}
+          onUpdateSpriteProperties={project.updateSpriteProperties}
+        />
+      )}
 
+      {isSlicesOpen && (
+        <SlicesDialog
+          isOpen={isSlicesOpen}
+          onClose={() => setIsSlicesOpen(false)}
+          state={state}
+          onUpdateSlices={project.updateSlices}
+        />
+      )}
 
-      <SlicesDialog
-        isOpen={isSlicesOpen}
-        onClose={() => setIsSlicesOpen(false)}
-        state={state}
-        onUpdateSlices={project.updateSlices}
-      />
-
-      <OutlineDialog
-        isOpen={isOutlineDialogOpen}
-        onClose={() => setIsOutlineDialogOpen(false)}
-        state={state}
-        onPreview={handleOutlinePreview}
-        onConfirm={handleOutlineConfirm}
-        onCancel={handleOutlineCancel}
-      />
+      {isOutlineDialogOpen && (
+        <OutlineDialog
+          isOpen={isOutlineDialogOpen}
+          onClose={() => setIsOutlineDialogOpen(false)}
+          state={state}
+          onPreview={handleOutlinePreview}
+          onConfirm={handleOutlineConfirm}
+          onCancel={handleOutlineCancel}
+        />
+      )}
 
       {isMobile ? (
         <MobileLayout 

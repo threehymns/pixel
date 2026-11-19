@@ -104,6 +104,15 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
     }
   }, [isOpen]);
 
+  useEffect(() => {
+    return () => {
+      if (!isConfirmedRef.current && hasPreviewAppliedRef.current) {
+        onCancelRef.current(originalStateRef.current);
+        hasPreviewAppliedRef.current = false;
+      }
+    };
+  }, []);
+
   const outlineOptions = useMemo<OutlineOptions>(
     () => ({
       placement,

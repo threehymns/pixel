@@ -601,6 +601,11 @@ export function getEffectiveLayerOpacity(layer: Layer, layers: Layer[], parentMa
   return Math.round(opacityMult * 100);
 }
 
+let scratchLayerCanvas: HTMLCanvasElement | null = null;
+let scratchLayerCtx: CanvasRenderingContext2D | null = null;
+let scratchLayerImgData: ImageData | null = null;
+let scratchLayerData32: Uint32Array | null = null;
+
 export const renderFrameToCanvas = (state: ProjectState, frameIndex: number): HTMLCanvasElement => {
     const canvas = document.createElement('canvas');
     canvas.width = state.width;
@@ -612,11 +617,20 @@ export const renderFrameToCanvas = (state: ProjectState, frameIndex: number): HT
     const frame = state.frames[frameIndex];
     if (!frame) return canvas;
 
-    const layerCanvas = document.createElement('canvas');
-    layerCanvas.width = state.width;
-    layerCanvas.height = state.height;
-    const layerCtx = layerCanvas.getContext('2d');
+    if (!scratchLayerCanvas) {
+      scratchLayerCanvas = document.createElement('canvas');
+      scratchLayerCtx = scratchLayerCanvas.getContext('2d');
+    }
+    const layerCanvas = scratchLayerCanvas;
+    if (layerCanvas.width !== state.width || layerCanvas.height !== state.height) {
+      layerCanvas.width = state.width;
+      layerCanvas.height = state.height;
+      scratchLayerImgData = null;
+      scratchLayerData32 = null;
+    }
+    const layerCtx = scratchLayerCtx || layerCanvas.getContext('2d');
     if (!layerCtx) return canvas;
+    scratchLayerCtx = layerCtx;
 
     const palLen = state.palette.length;
     // Cache paletteUint32 buffers by alpha
@@ -635,9 +649,13 @@ export const renderFrameToCanvas = (state: ProjectState, frameIndex: number): HT
       return buf;
     };
 
-    // Allocate layerImageData once before the layers loop and clear buffer with data32.fill(0)
-    const layerImgData = layerCtx.createImageData(state.width, state.height);
-    const data32 = new Uint32Array(layerImgData.data.buffer);
+    // Reuse scratch ImageData buffer across calls for the same canvas dimensions
+    if (!scratchLayerImgData || !scratchLayerData32 || scratchLayerImgData.width !== state.width || scratchLayerImgData.height !== state.height) {
+      scratchLayerImgData = layerCtx.createImageData(state.width, state.height);
+      scratchLayerData32 = new Uint32Array(scratchLayerImgData.data.buffer);
+    }
+    const layerImgData = scratchLayerImgData;
+    const data32 = scratchLayerData32;
     const parentMap = getLayerParentMap(state.layers);
     const totalPixels = state.width * state.height;
 
@@ -830,25 +848,69 @@ export const rgbToHex = (r: number, g: number, b: number): string => {
   }).join('');
 };
 
+interface PaletteRgbLookup {
+  len: number;
+  rgb: Uint8Array;
+  cache: Map<number, number>;
+}
+
+const PALETTE_RGB_LOOKUP_CACHE = new WeakMap<string[], PaletteRgbLookup>();
+
+const getPaletteRgbLookup = (palette: string[]): PaletteRgbLookup => {
+  const cached = PALETTE_RGB_LOOKUP_CACHE.get(palette);
+  if (cached && cached.len === palette.length) {
+    return cached;
+  }
+  const len = palette.length;
+  const rgb = new Uint8Array(len * 3);
+  for (let i = 0; i < len; i++) {
+    const hex = palette[i];
+    if (hex) {
+      const [pr, pg, pb] = hexToRgb(hex);
+      const off = i * 3;
+      rgb[off] = pr;
+      rgb[off + 1] = pg;
+      rgb[off + 2] = pb;
+    }
+  }
+  const entry: PaletteRgbLookup = { len, rgb, cache: new Map<number, number>() };
+  PALETTE_RGB_LOOKUP_CACHE.set(palette, entry);
+  return entry;
+};
+
 /**
  * Weighted RGB distance for better perceptual color matching.
  */
 export const findNearestPaletteIndex = (r: number, g: number, b: number, palette: string[]): number => {
+    const len = palette.length;
+    if (len === 0) return 0;
+
+    const lookup = getPaletteRgbLookup(palette);
+    const isIntKey = (r | 0) === r && (g | 0) === g && (b | 0) === b && r >= 0 && r <= 255 && g >= 0 && g <= 255 && b >= 0 && b <= 255;
+    const key = isIntKey ? ((r << 16) | (g << 8) | b) : -1;
+    if (key >= 0) {
+      const cachedIdx = lookup.cache.get(key);
+      if (cachedIdx !== undefined) return cachedIdx;
+    }
+
     let minDistance = Infinity;
     let nearestIndex = 0;
-    
-    const wr = 0.3;
-    const wg = 0.59;
-    const wb = 0.11;
+    const rgb = lookup.rgb;
 
-    for (let i = 0; i < palette.length; i++) {
-        const [pr, pg, pb] = hexToRgb(palette[i]);
-        const dist = wr * Math.pow(r - pr, 2) + wg * Math.pow(g - pg, 2) + wb * Math.pow(b - pb, 2);
+    for (let i = 0, off = 0; i < len; i++, off += 3) {
+        const dr = r - rgb[off];
+        const dg = g - rgb[off + 1];
+        const db = b - rgb[off + 2];
+        const dist = 0.3 * dr * dr + 0.59 * dg * dg + 0.11 * db * db;
         if (dist < minDistance) {
             minDistance = dist;
             nearestIndex = i;
+            if (dist === 0) break;
         }
-        if (dist === 0) break;
+    }
+
+    if (key >= 0 && lookup.cache.size < 4096) {
+      lookup.cache.set(key, nearestIndex);
     }
     return nearestIndex;
 };
@@ -1084,6 +1146,38 @@ const scale2xPass = (pixels: PixelGrid, width: number, height: number): { pixels
   return { pixels: newPixels, width: newWidth, height: newHeight };
 };
 
+export interface RotSpritePrecomputedBuffer {
+  pixels: PixelGrid;
+  width: number;
+  height: number;
+  box: { x: number; y: number; w: number; h: number };
+}
+
+/**
+ * Precomputes the 8x Scale2x buffer once per rotation gesture so dragging
+ * the rotation handle doesn't re-run 3 passes of Scale2x on every pointer move.
+ */
+export const prepareRotSpriteBuffer = (
+  selection: Set<number>,
+  layerPixels: PixelGrid,
+  width: number
+): RotSpritePrecomputedBuffer | null => {
+  if (!selection || selection.size === 0) return null;
+  const box = getSelectionBoundingBox(selection, width);
+  if (box.w <= 0 || box.h <= 0) return null;
+  const subGrid: PixelGrid = new Array(box.w * box.h).fill(null);
+  selection.forEach(idx => {
+    const { x, y } = getCoords(idx, width);
+    subGrid[(y - box.y) * box.w + (x - box.x)] = layerPixels[idx];
+  });
+
+  let scaled = { pixels: subGrid, width: box.w, height: box.h };
+  for (let i = 0; i < 3; i++) {
+    scaled = scale2xPass(scaled.pixels, scaled.width, scaled.height);
+  }
+  return { pixels: scaled.pixels, width: scaled.width, height: scaled.height, box };
+};
+
 // Bolt Optimization: Calculate transformed bounding box bounds of active selection rotated around pivot.
 // Reduces rotation loop iterations from O(Width * Height) to O(Rotated Bounding Box Area),
 // achieving 100x-500x speedup when moving/rotating selections on high-resolution images.
@@ -1094,7 +1188,8 @@ export const rotateSelectionPixels = (
     pivot: Position,
     width: number,
     height: number,
-    algorithm: 'nearest' | 'rotsprite'
+    algorithm: 'nearest' | 'rotsprite',
+    precomputedScale8x?: RotSpritePrecomputedBuffer | null
 ): PixelGrid => {
     const newPixels = new Array(width * height).fill(null);
     if (!selection || selection.size === 0) return newPixels;
@@ -1102,7 +1197,7 @@ export const rotateSelectionPixels = (
     const cos = Math.cos(angleRad);
     const sin = Math.sin(angleRad);
 
-    const box = getSelectionBoundingBox(selection, width);
+    const box = precomputedScale8x ? precomputedScale8x.box : getSelectionBoundingBox(selection, width);
     const corners = [
         { x: box.x, y: box.y },
         { x: box.x + box.w, y: box.y },
@@ -1130,15 +1225,20 @@ export const rotateSelectionPixels = (
     const maxY = Math.min(height - 1, Math.ceil(maxTargetY) + 1);
 
     if (algorithm === 'rotsprite') {
-        const subGrid: PixelGrid = new Array(box.w * box.h).fill(null);
-        selection.forEach(idx => {
-            const { x, y } = getCoords(idx, width);
-            subGrid[(y - box.y) * box.w + (x - box.x)] = layerPixels[idx];
-        });
+        let scaled: { pixels: PixelGrid; width: number; height: number };
+        if (precomputedScale8x) {
+            scaled = precomputedScale8x;
+        } else {
+            const subGrid: PixelGrid = new Array(box.w * box.h).fill(null);
+            selection.forEach(idx => {
+                const { x, y } = getCoords(idx, width);
+                subGrid[(y - box.y) * box.w + (x - box.x)] = layerPixels[idx];
+            });
 
-        let scaled = { pixels: subGrid, width: box.w, height: box.h };
-        for (let i = 0; i < 3; i++) {
-            scaled = scale2xPass(scaled.pixels, scaled.width, scaled.height);
+            scaled = { pixels: subGrid, width: box.w, height: box.h };
+            for (let i = 0; i < 3; i++) {
+                scaled = scale2xPass(scaled.pixels, scaled.width, scaled.height);
+            }
         }
 
         const scale = 8;
