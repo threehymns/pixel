@@ -1,5 +1,5 @@
 
-import { useMemo, useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import { Command, ProjectState, ToolType, ColorMode, FrameTag, Layer } from '../types';
 
 interface UseAppCommandsProps {
@@ -76,22 +76,24 @@ export function useAppCommands({
         openCmdPalette,
         onOpenProject,
     });
-    latestRef.current = {
-        state,
-        updateState,
-        projectActions,
-        fileSystemActions,
-        uiActions,
-        openCmdPalette,
-        onOpenProject,
-    };
+    useLayoutEffect(() => {
+        latestRef.current = {
+            state,
+            updateState,
+            projectActions,
+            fileSystemActions,
+            uiActions,
+            openCmdPalette,
+            onOpenProject,
+        };
+    });
 
     const canUndo = projectActions.canUndo;
     const canRedo = projectActions.canRedo;
     const hasSelection = Boolean(state.selection && state.selection.size > 0);
     const { showGrid, onionSkin, tiled, ditheringEnabled, colorMode } = state;
 
-    return useMemo<Command[]>(() => [
+    const commands: Command[] = [
         { 
             id: 'file.new', label: 'New Project...', category: 'File', hotkey: 'Alt+T', keys: ['Alt+t'], 
             perform: () => latestRef.current.projectActions.createProject()
@@ -446,5 +448,7 @@ export function useAppCommands({
           id: 'app.commandPalette', label: 'Command Palette', category: 'View', hotkey: 'Ctrl+K', keys: ['Control+k', 'Meta+k', 'Control+p', 'Meta+p', 'F1'],
           perform: () => latestRef.current.openCmdPalette()
         }
-    ], [canUndo, canRedo, hasSelection, showGrid, onionSkin, tiled, ditheringEnabled, colorMode]);
+    ];
+
+    return commands;
 }

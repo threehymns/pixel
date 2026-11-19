@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { ProjectState } from '../types';
 import {
   OutlineOptions,
@@ -78,14 +78,17 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
 
   const originalStateRef = useRef<ProjectState>(state);
   const onPreviewRef = useRef(onPreview);
-  onPreviewRef.current = onPreview;
   const onCancelRef = useRef(onCancel);
-  onCancelRef.current = onCancel;
   const onConfirmRef = useRef(onConfirm);
-  onConfirmRef.current = onConfirm;
   const isConfirmedRef = useRef(false);
   const hasPreviewAppliedRef = useRef(false);
   const lastPreviewHashRef = useRef<string>('');
+
+  useLayoutEffect(() => {
+    onPreviewRef.current = onPreview;
+    onCancelRef.current = onCancel;
+    onConfirmRef.current = onConfirm;
+  });
 
   useEffect(() => {
     if (isOpen) {
@@ -113,30 +116,17 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
     };
   }, []);
 
-  const outlineOptions = useMemo<OutlineOptions>(
-    () => ({
-      placement,
-      matrix,
-      thickness,
-      outlineColor,
-      bgMode,
-      bgColor: bgMode === 'color' ? bgColor : undefined,
-      scope: limitToSelection ? 'selection' : 'canvas',
-      targetLayer,
-      targetFrames,
-    }),
-    [
-      placement,
-      matrix,
-      thickness,
-      outlineColor,
-      bgMode,
-      bgColor,
-      limitToSelection,
-      targetLayer,
-      targetFrames,
-    ]
-  );
+  const outlineOptions: OutlineOptions = {
+    placement,
+    matrix,
+    thickness,
+    outlineColor,
+    bgMode,
+    bgColor: bgMode === 'color' ? bgColor : undefined,
+    scope: limitToSelection ? 'selection' : 'canvas',
+    targetLayer,
+    targetFrames,
+  };
 
   useEffect(() => {
     if (!isOpen) return;

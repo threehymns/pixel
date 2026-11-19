@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { FrameTag, Frame } from '../types';
 import {
   Trash2,
@@ -55,12 +55,13 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
   });
 
   const tagRef = useRef(tag);
-  tagRef.current = tag;
-
   const onSaveRef = useRef(onSave);
-  onSaveRef.current = onSave;
-
   const isDeletingRef = useRef(false);
+
+  useLayoutEffect(() => {
+    tagRef.current = tag;
+    onSaveRef.current = onSave;
+  });
 
   useEffect(() => {
     setTag({ ...initialTag });

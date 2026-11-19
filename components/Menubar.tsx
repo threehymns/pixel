@@ -40,7 +40,7 @@ const SEPARATOR_AFTER = new Set([
   'sprite.dithering',
 ]);
 
-export const Menubar: React.FC<MenubarProps> = React.memo(({
+export const Menubar: React.FC<MenubarProps> = ({
   commands,
   recentProjects = [],
   onOpenRecent,
@@ -207,4 +207,4 @@ export const Menubar: React.FC<MenubarProps> = React.memo(({
       })}
     </PrimitiveMenubar>
   );
-});
+};

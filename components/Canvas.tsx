@@ -114,7 +114,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   const mousePosRef = useRef<{x: number, y: number}>({ x: -100, y: -100 });
   const touchTimeoutRef = useRef<number | null>(null);
   const stateRef = useRef(state);
-  stateRef.current = state;
+  const renderUIRef = useRef<() => void>(() => {});
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
 
   const refreshContainerRect = useCallback(() => {
@@ -197,7 +197,10 @@ export const Canvas: React.FC<CanvasProps> = ({
   const lastCommittedZoomRef = useRef<number>(state.zoom);
   const prevProjectIdRef = useRef<string>(state.id);
   const onZoomRef = useRef(onZoom);
-  onZoomRef.current = onZoom;
+  useLayoutEffect(() => {
+    stateRef.current = state;
+    onZoomRef.current = onZoom;
+  });
   
   useEffect(() => {
     panRef.current = pan;
@@ -611,7 +614,9 @@ export const Canvas: React.FC<CanvasProps> = ({
   };
 
   const pointerHandlersRef = useRef({ handlePointerDown, handlePointerMove, handlePointerUp, isDrawing });
-  pointerHandlersRef.current = { handlePointerDown, handlePointerMove, handlePointerUp, isDrawing };
+  useLayoutEffect(() => {
+    pointerHandlersRef.current = { handlePointerDown, handlePointerMove, handlePointerUp, isDrawing };
+  });
 
   const handleWheel = useCallback((e: WheelEvent) => {
     e.preventDefault();
@@ -1374,7 +1379,6 @@ export const Canvas: React.FC<CanvasProps> = ({
     ctx.restore();
   }, [containerSize, state.showGrid, state.width, state.height, state.symmetry.x, state.symmetry.y, state.tool, state.brushSize, state.brushShape, selectionSet, selectionBorderSegments, selectionBoundingBox, localZoom, pan, startPos, polyPoints, isMoving, isDrawing, moveOffset, isRotating, rotationAngle, rotationPivot, isScaling, currentBox]);
 
-  const renderUIRef = useRef(renderUI);
   useLayoutEffect(() => {
     renderUIRef.current = renderUI;
   });
@@ -1508,7 +1512,24 @@ export const Canvas: React.FC<CanvasProps> = ({
       />
 
       {showCursor && (
-        <div ref={cursorRef} className="fixed top-0 left-0 pointer-events-none z-[9999] mix-blend-difference hidden md:block" style={{ width: '24px', height: '24px', marginLeft: '-12px', marginTop: '-12px', backgroundImage: `url('${CURSOR_URI}')`, backgroundSize: 'contain', backgroundRepeat: 'no-repeat', transform: `translate(${mousePosRef.current.x}px, ${mousePosRef.current.y}px)` }} />
+        <div
+          ref={(el) => {
+            cursorRef.current = el;
+            if (el) {
+              el.style.transform = `translate(${mousePosRef.current.x}px, ${mousePosRef.current.y}px)`;
+            }
+          }}
+          className="fixed top-0 left-0 pointer-events-none z-[9999] mix-blend-difference hidden md:block"
+          style={{
+            width: '24px',
+            height: '24px',
+            marginLeft: '-12px',
+            marginTop: '-12px',
+            backgroundImage: `url('${CURSOR_URI}')`,
+            backgroundSize: 'contain',
+            backgroundRepeat: 'no-repeat',
+          }}
+        />
       )}
     </div>
   );

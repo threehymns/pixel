@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { CommandPalette } from './components/CommandPalette';
 import { NewProjectDialog } from './components/NewProjectDialog';
 import { CanvasResizeDialog } from './components/CanvasResizeDialog';
@@ -46,9 +46,9 @@ export default function App() {
     isOpen: false,
     initialFormat: 'gif'
   });
-  const openExportDialog = useCallback((format: ExportFormat = 'gif') => {
+  const openExportDialog = (format: ExportFormat = 'gif') => {
     setExportDialog({ isOpen: true, initialFormat: format });
-  }, []);
+  };
   const [statusMessage, setStatusMessage] = useState<{ text: string, type: 'info' | 'error' | 'success' }>({ text: '', type: 'info' });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -59,18 +59,18 @@ export default function App() {
   const layout = useLayout();
   const { state, updateState } = project;
 
-  const updateStateWithStatus = useCallback((newState: ProjectState, config?: { action: string; tool?: any }) => {
+  const updateStateWithStatus = (newState: ProjectState, config?: { action: string; tool?: any }) => {
     updateState(newState, config);
     if (config?.action) {
       setStatusMessage({ text: config.action, type: 'info' });
     }
-  }, [updateState]);
+  };
 
   const canvasTools = useCanvasTools(state, updateStateWithStatus);
   
-  const handleOpenFile = useCallback(() => {
+  const handleOpenFile = () => {
     fileInputRef.current?.click();
-  }, []);
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -81,16 +81,16 @@ export default function App() {
     if (e.target) e.target.value = ''; 
   };
 
-  const handleOutlinePreview = useCallback((previewState: ProjectState) => {
+  const handleOutlinePreview = (previewState: ProjectState) => {
     updateState(previewState);
-  }, [updateState]);
+  };
 
-  const handleOutlineConfirm = useCallback((finalState: ProjectState, actionSummary: string) => {
+  const handleOutlineConfirm = (finalState: ProjectState, actionSummary: string) => {
     updateState(finalState, { action: actionSummary });
     setStatusMessage({ text: actionSummary, type: 'success' });
-  }, [updateState]);
+  };
 
-  const handleOutlineCancel = useCallback((originalState?: ProjectState) => {
+  const handleOutlineCancel = (originalState?: ProjectState) => {
     if (originalState) {
       updateState(originalState);
       return;
@@ -102,7 +102,7 @@ export default function App() {
         updateState(entry.state);
       }
     }
-  }, [updateState, project.projects, project.activeProjectId]);
+  };
 
   const commands = useAppCommands({
       state: state,
@@ -174,20 +174,21 @@ export default function App() {
     setStatusMessage({ text: `${state.tool.charAt(0).toUpperCase() + state.tool.slice(1).replace('-select', ' Select')} tool selected`, type: 'info' });
   }, [state.tool]);
 
-  const selectionSize = useMemo(() => {
-    if (!state.selection) return null;
+  let selectionSize: { w: number; h: number } | null = null;
+  if (state.selection) {
     const selSet = state.selection instanceof Set ? state.selection : new Set<number>(Array.from(state.selection as any));
-    if (selSet.size === 0) return null;
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    selSet.forEach(idx => {
-      const { x, y } = getCoords(idx, state.width);
-      minX = Math.min(minX, x);
-      minY = Math.min(minY, y);
-      maxX = Math.max(maxX, x);
-      maxY = Math.max(maxY, y);
-    });
-    return { w: maxX - minX + 1, h: maxY - minY + 1 };
-  }, [state.selection, state.width]);
+    if (selSet.size > 0) {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      selSet.forEach(idx => {
+        const { x, y } = getCoords(idx, state.width);
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      });
+      selectionSize = { w: maxX - minX + 1, h: maxY - minY + 1 };
+    }
+  }
 
   const sharedProps = {
       state,

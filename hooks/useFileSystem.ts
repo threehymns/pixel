@@ -1,11 +1,11 @@
 
-import { useState, useCallback } from 'react';
+import { useState } from 'react';
 import { FileSystemDirectoryHandle, FileSystemFileHandle } from '../types';
 
 export function useFileSystem() {
   const [rootHandle, setRootHandle] = useState<FileSystemDirectoryHandle | null>(null);
 
-  const openFolder = useCallback(async () => {
+  const openFolder = async () => {
     try {
       // @ts-ignore - showDirectoryPicker is experimental/modern
       const handle = await window.showDirectoryPicker();
@@ -19,11 +19,11 @@ export function useFileSystem() {
         alert("Could not open folder. This feature requires a modern browser like Chrome or Edge.");
       }
     }
-  }, []);
+  };
 
-  const getFile = useCallback(async (handle: FileSystemFileHandle): Promise<File> => {
+  const getFile = async (handle: FileSystemFileHandle): Promise<File> => {
     return await handle.getFile();
-  }, []);
+  };
 
   return {
     rootHandle,

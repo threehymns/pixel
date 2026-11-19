@@ -194,10 +194,12 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
     setIsExporting(true);
     setExportProgress(0);
 
-    try {
-      const currentBg = bgType === 'transparent' ? null : bgColor;
-      const cleanFilename = filename.trim().replace(/\.[^/.]+$/, '') || 'pixel-art';
+    const currentBg = bgType === 'transparent' ? null : bgColor;
+    const cleanFilename = filename.trim().replace(/\.[^/.]+$/, '') || 'pixel-art';
+    const cols = columns > 0 ? columns : targetFrames.length;
+    const isTransparent = bgType === 'transparent';
 
+    try {
       if (format === 'png') {
         const rendered = renderScaledFrameCanvas(state, pngFrameIndex, scale, currentBg);
         rendered.toBlob((blob) => {
@@ -208,7 +210,6 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
           onClose();
         }, 'image/png');
       } else if (format === 'spritesheet') {
-        const cols = columns > 0 ? columns : targetFrames.length;
         const sheetCanvas = renderCustomSpriteSheetCanvas({
           state,
           scale,
@@ -231,7 +232,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
           loop: gifLoop,
           frameIndices: targetFrames,
           backgroundColor: currentBg,
-          transparent: bgType === 'transparent',
+          transparent: isTransparent,
           onProgress: (pct) => setExportProgress(pct),
         });
         downloadBlob(blob, `${cleanFilename}.gif`);

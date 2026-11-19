@@ -1,5 +1,5 @@
 
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useLayoutEffect, useCallback } from 'react';
 import { ProjectState, PixelGrid, Position, ToolType, Modifiers, PixelValue } from '../types';
 import { bresenhamLine, pixelPerfectFilter, getIndex, floodFill, getCoords, bresenhamEllipse, getFilledEllipse, rotateSelectionPixels, rotateSelectionMask, applyConvolution, hexToRgb, findNearestPaletteIndex, rgbToHex, scaleSelectionPixels, scaleSelectionMask, isLayerVisible } from '../utils';
 import { publishLiveStroke, clearLiveStroke } from './useLiveStrokeStore';
@@ -15,6 +15,38 @@ const SHARPEN_KERNEL = [
   [-1, 5, -1],
   [0, -1, 0]
 ];
+
+const DITHER_OFFSETS: readonly [number, number, number][] = [
+  [1, 0, 7 / 16],
+  [-1, 1, 3 / 16],
+  [0, 1, 5 / 16],
+  [1, 1, 1 / 16],
+];
+
+function distributeDitherError(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  errR: number,
+  errG: number,
+  errB: number,
+  errorBufferR: Float32Array,
+  errorBufferG: Float32Array,
+  errorBufferB: Float32Array
+) {
+  for (let i = 0; i < DITHER_OFFSETS.length; i++) {
+    const [dx, dy, factor] = DITHER_OFFSETS[i];
+    const nx = x + dx;
+    const ny = y + dy;
+    if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+      const ni = getIndex(nx, ny, width);
+      errorBufferR[ni] += errR * factor;
+      errorBufferG[ni] += errG * factor;
+      errorBufferB[ni] += errB * factor;
+    }
+  }
+}
 
 export function useCanvasTools(
   state: ProjectState,
@@ -32,12 +64,11 @@ export function useCanvasTools(
   const lastSmudgePointRef = useRef<Position | null>(null);
   
   const stateRef = useRef(state);
-  stateRef.current = state;
   const updateStateRef = useRef(updateState);
-  updateStateRef.current = updateState;
-  useEffect(() => {
+  useLayoutEffect(() => {
     stateRef.current = state;
-  }, [state]);
+    updateStateRef.current = updateState;
+  });
 
   const resolvePixelValue = (hex: string): string | number => {
     if (stateRef.current.colorMode === 'rgba') return hex;
@@ -461,17 +492,11 @@ export function useCanvasTools(
                           const errG = targetG - pg;
                           const errB = targetB - pb;
                           
-                          const distribute = (ndx: number, ndy: number, factor: number) => {
-                              const nnx = drawX + ndx;
-                              const nny = drawY + ndy;
-                              if (nnx >= 0 && nnx < width && nny >= 0 && nny < height) {
-                                  const ni = getIndex(nnx, nny, width);
-                                  errorBufferR[ni] += errR * factor;
-                                  errorBufferG[ni] += errG * factor;
-                                  errorBufferB[ni] += errB * factor;
-                              }
-                          };
-                          distribute(1, 0, 7/16); distribute(-1, 1, 3/16); distribute(0, 1, 5/16); distribute(1, 1, 1/16);
+                          distributeDitherError(
+                              drawX, drawY, width, height,
+                              errR, errG, errB,
+                              errorBufferR, errorBufferG, errorBufferB
+                          );
                       }
                   } else if (tool === 'blur') {
                       layerPixels[idx] = applyConvolution(drawX, drawY, layerPixels, width, height, BLUR_KERNEL, palette, colorMode);

@@ -114,58 +114,62 @@ function normalizeSlot(slotData: any, defaultSlotId: 'left' | 'right' | 'bottom'
   };
 }
 
+function loadInitialSlots(): WorkspaceLayout {
+  const saved = localStorage.getItem('pixelforge_studio_layout_v3');
+  if (saved) {
+    try {
+      const parsed = JSON.parse(saved);
+      if (parsed.left || parsed.right || parsed.bottom) {
+        const left = normalizeSlot(parsed.left, 'left');
+        const right = normalizeSlot(parsed.right, 'right');
+        const bottom = normalizeSlot(parsed.bottom, 'bottom');
+
+        // Verify all core panes exist across slots
+        const allPanes = ['file-tree', 'palette', 'layers', 'history', 'timeline', 'preview'];
+        const existingPanes = [
+          ...left.groups.flatMap(g => g.panes),
+          ...right.groups.flatMap(g => g.panes),
+          ...bottom.groups.flatMap(g => g.panes)
+        ];
+        const missingPanes = allPanes.filter(p => !existingPanes.includes(p));
+
+        missingPanes.forEach(paneId => {
+          const defaultKey =
+            paneId === 'file-tree' || paneId === 'palette' ? 'left' :
+            paneId === 'layers' || paneId === 'history' ? 'right' : 'bottom';
+          const targetSlot = defaultKey === 'left' ? left : defaultKey === 'right' ? right : bottom;
+          if (targetSlot.groups.length > 0) {
+            targetSlot.groups[0].panes.push(paneId);
+          } else {
+            targetSlot.groups.push({ id: `g-${defaultKey}-1`, panes: [paneId], activePaneId: paneId });
+          }
+        });
+
+        return { left, right, bottom };
+      }
+    } catch (e) {}
+  }
+  return DEFAULT_LAYOUT;
+}
+
+function loadInitialFloatingPanes(): FloatingPane[] {
+  const saved = localStorage.getItem('pixelforge_studio_floating_panes_v3');
+  if (saved) {
+    try {
+      return JSON.parse(saved);
+    } catch (e) {}
+  }
+  return [];
+}
+
 export function useLayout() {
-  const [slots, setSlots] = useState<WorkspaceLayout>(() => {
-    const saved = localStorage.getItem('pixelforge_studio_layout_v3');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (parsed.left || parsed.right || parsed.bottom) {
-          const left = normalizeSlot(parsed.left, 'left');
-          const right = normalizeSlot(parsed.right, 'right');
-          const bottom = normalizeSlot(parsed.bottom, 'bottom');
-
-          // Verify all core panes exist across slots
-          const allPanes = ['file-tree', 'palette', 'layers', 'history', 'timeline', 'preview'];
-          const existingPanes = [
-            ...left.groups.flatMap(g => g.panes),
-            ...right.groups.flatMap(g => g.panes),
-            ...bottom.groups.flatMap(g => g.panes)
-          ];
-          const missingPanes = allPanes.filter(p => !existingPanes.includes(p));
-
-          missingPanes.forEach(paneId => {
-            const defaultKey =
-              paneId === 'file-tree' || paneId === 'palette' ? 'left' :
-              paneId === 'layers' || paneId === 'history' ? 'right' : 'bottom';
-            const targetSlot = defaultKey === 'left' ? left : defaultKey === 'right' ? right : bottom;
-            if (targetSlot.groups.length > 0) {
-              targetSlot.groups[0].panes.push(paneId);
-            } else {
-              targetSlot.groups.push({ id: `g-${defaultKey}-1`, panes: [paneId], activePaneId: paneId });
-            }
-          });
-
-          return { left, right, bottom };
-        }
-      } catch (e) {}
-    }
-    return DEFAULT_LAYOUT;
-  });
+  const [slots, setSlots] = useState<WorkspaceLayout>(loadInitialSlots);
 
   useEffect(() => {
     localStorage.setItem('pixelforge_studio_layout_v3', JSON.stringify(slots));
   }, [slots]);
 
-  const [floatingPanes, setFloatingPanes] = useState<FloatingPane[]>(() => {
-    const saved = localStorage.getItem('pixelforge_studio_floating_panes_v3');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {}
-    }
-    return [];
-  });
+  const [floatingPanes, setFloatingPanes] = useState<FloatingPane[]>(loadInitialFloatingPanes);
 
   useEffect(() => {
     localStorage.setItem('pixelforge_studio_floating_panes_v3', JSON.stringify(floatingPanes));

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { Allotment } from 'allotment';
 import { useMobile } from '../hooks/useMobile';
 import { ProjectState, FrameTag, PixelGrid } from '../types';
@@ -231,7 +231,7 @@ const hasCelContent = (pixels: PixelGrid | undefined): boolean => {
   return found;
 };
 
-export const Timeline: React.FC<TimelineProps> = React.memo(({
+export const Timeline: React.FC<TimelineProps> = ({
   state,
   onSelectFrames,
   onAddFrame,
@@ -272,14 +272,8 @@ export const Timeline: React.FC<TimelineProps> = React.memo(({
   const tagRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const tagButtonRef = useRef<HTMLButtonElement>(null);
 
-  const selectedFrameSet = useMemo(
-    () => new Set(state.selectedFrameIndices),
-    [state.selectedFrameIndices]
-  );
-  const selectedLayerSet = useMemo(
-    () => new Set(state.selectedLayerIds),
-    [state.selectedLayerIds]
-  );
+  const selectedFrameSet = new Set(state.selectedFrameIndices);
+  const selectedLayerSet = new Set(state.selectedLayerIds);
 
   useEffect(() => {
     setSidebarWidth(isMobile ? 120 : 192);
@@ -720,52 +714,51 @@ export const Timeline: React.FC<TimelineProps> = React.memo(({
   const canTween = state.selectedFrameIndices.length >= 3;
 
   const allTags = state.tags || [];
-  const { trackTags, maxTracks } = useMemo(
-    () => calculateTagTracks(allTags, resizingTagState),
-    [allTags, resizingTagState]
-  );
-  const { columns, frameXMap, totalWidth } = useMemo(
-    () => calculateColumns(state.frames.length, allTags, collapsedTagIds),
-    [state.frames.length, allTags, collapsedTagIds]
+  const { trackTags, maxTracks } = calculateTagTracks(allTags, resizingTagState);
+  const { columns, frameXMap, totalWidth } = calculateColumns(
+    state.frames.length,
+    allTags,
+    collapsedTagIds
   );
   const tagStripHeight = allTags.length > 0 ? Math.max(28, maxTracks * 26 + 6) : 0;
   const totalHeaderHeight = tagStripHeight + 32;
 
-  const parentMap = useMemo(() => getLayerParentMap(state.layers), [state.layers]);
-  const reversedLayers = useMemo(() => state.layers.slice().reverse(), [state.layers]);
-  const collapsedLayerIds = useMemo(() => {
-    const collapsed = new Set<string>();
-    const layerById = new Map(state.layers.map((l) => [l.id, l]));
-    for (const layer of state.layers) {
-      let curr: typeof layer | undefined = layer;
-      const visited = new Set<string>();
-      while (curr) {
-        if (visited.has(curr.id)) break;
-        visited.add(curr.id);
-        const parent =
-          parentMap.get(curr.id) || (curr.parentId ? layerById.get(curr.parentId) : undefined);
-        if (parent) {
-          if (parent.collapsed) {
-            collapsed.add(layer.id);
-            break;
-          }
-          curr = parent;
-        } else {
+  const parentMap = getLayerParentMap(state.layers);
+  const reversedLayers = state.layers.slice().reverse();
+  const collapsedLayerIds = new Set<string>();
+  const layerById = new Map<string, (typeof state.layers)[number]>(
+    state.layers.map((l) => [l.id, l])
+  );
+  for (const layer of state.layers) {
+    let curr: (typeof state.layers)[number] | undefined = layer;
+    const visited = new Set<string>();
+    while (curr) {
+      if (visited.has(curr.id)) break;
+      visited.add(curr.id);
+      const parent: (typeof state.layers)[number] | undefined =
+        parentMap.get(curr.id) || (curr.parentId ? layerById.get(curr.parentId) : undefined);
+      if (parent) {
+        if (parent.collapsed) {
+          collapsedLayerIds.add(layer.id);
           break;
         }
+        curr = parent;
+      } else {
+        break;
       }
     }
-    return collapsed;
-  }, [state.layers, parentMap]);
+  }
 
   const activeEditingTag = tagPopover?.isOpen ? tagPopover.tag : null;
-  const tagPopoverAnchor = activeEditingTag
-    ? {
-        getBoundingClientRect: () =>
-          (tagRefs.current.get(activeEditingTag.id) ?? tagButtonRef.current)?.getBoundingClientRect() ??
-          new DOMRect(0, 0, 0, 0),
-      }
-    : null;
+  const [tagPopoverAnchor, setTagPopoverAnchor] = useState<HTMLElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!activeEditingTag) {
+      setTagPopoverAnchor(null);
+      return;
+    }
+    setTagPopoverAnchor(tagRefs.current.get(activeEditingTag.id) ?? tagButtonRef.current ?? null);
+  }, [activeEditingTag, state.tags]);
 
   return (
     <div className="flex h-full flex-col bg-card text-sm select-none">
@@ -1684,4 +1677,4 @@ export const Timeline: React.FC<TimelineProps> = React.memo(({
       </div>
     </div>
   );
-});
+};

@@ -1,5 +1,5 @@
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { Command, ProjectState, Position, SelectionMode } from '../types';
 
 export function useKeyboard(
@@ -17,10 +17,12 @@ export function useKeyboard(
   const updateStateRef = useRef(updateState);
   const projectActionsRef = useRef(projectActions);
 
-  commandsRef.current = commands;
-  stateRef.current = state;
-  updateStateRef.current = updateState;
-  projectActionsRef.current = projectActions;
+  useLayoutEffect(() => {
+    commandsRef.current = commands;
+    stateRef.current = state;
+    updateStateRef.current = updateState;
+    projectActionsRef.current = projectActions;
+  });
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {

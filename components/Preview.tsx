@@ -26,7 +26,7 @@ interface CachedFrameRender {
   canvas: HTMLCanvasElement;
 }
 
-export const Preview: React.FC<PreviewProps> = React.memo(({ state, onClose, isFloating = true }) => {
+export const Preview: React.FC<PreviewProps> = ({ state, onClose, isFloating = true }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const frameCacheRef = useRef<WeakMap<Frame, CachedFrameRender>>(new WeakMap());
@@ -325,4 +325,4 @@ export const Preview: React.FC<PreviewProps> = React.memo(({ state, onClose, isF
       {content}
     </div>
   );
-});
+};

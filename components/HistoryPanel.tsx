@@ -35,7 +35,7 @@ interface HistoryPanelProps {
   className?: string;
 }
 
-export const HistoryPanel: React.FC<HistoryPanelProps> = React.memo(({
+export const HistoryPanel: React.FC<HistoryPanelProps> = ({
   history,
   historyIndex,
   onJumpToHistory,
@@ -245,4 +245,4 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = React.memo(({
       </div>
     </div>
   );
-});
+};

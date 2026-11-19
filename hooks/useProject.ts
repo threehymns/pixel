@@ -1,5 +1,5 @@
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { ProjectState, Frame, Layer, FrameTag, SavedPalette, PixelGrid, HistoryEntry, ToolType, RecentProject, FileSystemFileHandle, ProjectInstance, ColorMode, PixelValue, Slice } from '../types';
 import { INITIAL_STATE, DEFAULT_PALETTE, GAMEBOY_PALETTE, ENDESGA_64_PALETTE } from '../constants';
 import { parseASE, parseGPL, extractColorsFromPNG, fileToProjectState, renderFrameToCanvas, renderSpriteSheet, getCoords, getIndex, hexToRgb, rgbToHex, findNearestPaletteIndex, getSelectionBoundingBox, getLayerParentMap, isDescendant, getGroupChildren } from '../utils';
@@ -157,6 +157,99 @@ const createSpatialPointFinder = (list: PixelPoint[]): ((point: { x: number; y: 
   };
 };
 
+function getNextLayerName(layers: Layer[], prefix: string): string {
+  const existingNames = new Set(layers.map((l) => l.name));
+  let n = 1;
+  while (existingNames.has(`${prefix} ${n}`)) {
+    n++;
+  }
+  return `${prefix} ${n}`;
+}
+
+async function renderActiveFramePngBlob(state: ProjectState): Promise<Blob> {
+  const canvas = renderFrameToCanvas(state, state.activeFrameIndex);
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+  if (!blob) {
+    throw new Error('Failed to render PNG');
+  }
+  return blob;
+}
+
+async function loadAndNormalizeProjectFile(
+  file: File,
+  handle?: FileSystemFileHandle
+): Promise<ProjectState> {
+  const newState = await fileToProjectState(file);
+  newState.id = `project-${Date.now()}`;
+
+  if (handle) {
+    newState.fileHandle = handle;
+  }
+
+  if (!newState.paletteLibrary || newState.paletteLibrary.length === 0) {
+    newState.paletteLibrary = [ENDESGA_64_PALETTE, DEFAULT_PALETTE, GAMEBOY_PALETTE];
+    newState.activePaletteId = ENDESGA_64_PALETTE.id;
+  }
+
+  if (!newState.selectedLayerIds) newState.selectedLayerIds = [newState.activeLayerId];
+  if (!newState.selectedFrameIndices) newState.selectedFrameIndices = [newState.activeFrameIndex];
+
+  return newState;
+}
+
+function applyFloydSteinbergDither(
+  sourceGrid: PixelGrid,
+  targetGrid: PixelGrid,
+  width: number,
+  height: number,
+  newPalette: string[]
+): void {
+  const errorBufferR = new Float32Array(width * height);
+  const errorBufferG = new Float32Array(width * height);
+  const errorBufferB = new Float32Array(width * height);
+
+  const offsets: readonly [number, number, number][] = [
+    [1, 0, 7 / 16],
+    [-1, 1, 3 / 16],
+    [0, 1, 5 / 16],
+    [1, 1, 1 / 16],
+  ];
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = getIndex(x, y, width);
+      const val = sourceGrid[i];
+      if (val === null) continue;
+
+      const [r, g, b] = hexToRgb(typeof val === 'number' ? newPalette[val] : val);
+
+      const curR = Math.max(0, Math.min(255, r + errorBufferR[i]));
+      const curG = Math.max(0, Math.min(255, g + errorBufferG[i]));
+      const curB = Math.max(0, Math.min(255, b + errorBufferB[i]));
+
+      const paletteIndex = findNearestPaletteIndex(curR, curG, curB, newPalette);
+      targetGrid[i] = paletteIndex;
+
+      const [pr, pg, pb] = hexToRgb(newPalette[paletteIndex]);
+      const errR = curR - pr;
+      const errG = curG - pg;
+      const errB = curB - pb;
+
+      for (let k = 0; k < offsets.length; k++) {
+        const [dx, dy, factor] = offsets[k];
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+          const ni = getIndex(nx, ny, width);
+          errorBufferR[ni] += errR * factor;
+          errorBufferG[ni] += errG * factor;
+          errorBufferB[ni] += errB * factor;
+        }
+      }
+    }
+  }
+}
+
 export function useProject() {
   const [projects, setProjects] = useState<ProjectInstance[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string>('home');
@@ -187,7 +280,7 @@ export function useProject() {
     };
   }, []);
 
-  const addToRecents = useCallback((project: ProjectState) => {
+  const addToRecents = (project: ProjectState) => {
     // Asynchronously encode to compressed .aseprite binary & store in IndexedDB
     saveRecentProject(project)
       .then(newEntry => {
@@ -199,9 +292,9 @@ export function useProject() {
       .catch(err => {
         console.warn("Failed to save recent project to IndexedDB:", err);
       });
-  }, []);
+  };
 
-  const loadRecentProject = useCallback(async (recent: RecentProject) => {
+  const loadRecentProject = async (recent: RecentProject) => {
     // Check if already open by ID
     const existing = projects.find(p => p.data.id === recent.id);
     if (existing) {
@@ -209,8 +302,9 @@ export function useProject() {
       return;
     }
 
+    const initialData: ProjectState | null = recent.data || null;
     try {
-      let loadedState: ProjectState | null = recent.data || null;
+      let loadedState: ProjectState | null = initialData;
       if (!loadedState) {
         loadedState = await loadRecentProjectState(recent.id);
       }
@@ -236,12 +330,12 @@ export function useProject() {
     } catch (e) {
       console.error("Failed to load recent project", e);
     }
-  }, [projects]);
+  };
 
-  const clearRecents = useCallback(() => {
+  const clearRecents = () => {
     setRecentProjects([]);
     clearAllRecents().catch(e => console.warn("Failed to clear recents from IndexedDB", e));
-  }, []);
+  };
 
   const activeIndex = projects.findIndex(p => p.data.id === activeProjectId);
   const activeInstance = activeIndex >= 0 ? projects[activeIndex] : {
@@ -260,7 +354,9 @@ export function useProject() {
     activeIndex >= 0 &&
     Boolean(state?.id) &&
     state.id !== 'default';
-  activeProjectRef.current = isSaveableProject ? state : null;
+  useLayoutEffect(() => {
+    activeProjectRef.current = isSaveableProject ? state : null;
+  }, [isSaveableProject, state]);
 
   // Auto-save active project changes to IndexedDB (debounced) only when actual document
   // content or metadata changes — not on high-frequency UI-only changes (zoom, tool, selection, etc.).
@@ -357,7 +453,7 @@ export function useProject() {
       return merged;
   };
 
-  const createProject = useCallback((config?: { width: number, height: number, colorMode: ColorMode, title?: string, paletteId?: string }) => {
+  const createProject = (config?: { width: number, height: number, colorMode: ColorMode, title?: string, paletteId?: string }) => {
     const w = config?.width ?? INITIAL_STATE.width;
     const h = config?.height ?? INITIAL_STATE.height;
     const mode = config?.colorMode ?? INITIAL_STATE.colorMode;
@@ -399,24 +495,11 @@ export function useProject() {
     }]);
     setActiveProjectId(id);
     addToRecents(newProject);
-  }, [projects.length, addToRecents]);
+  };
 
-  const loadProjectFromFile = useCallback(async (file: File, handle?: FileSystemFileHandle) => {
+  const loadProjectFromFile = async (file: File, handle?: FileSystemFileHandle) => {
     try {
-      const newState = await fileToProjectState(file);
-      newState.id = `project-${Date.now()}`;
-      
-      if (handle) {
-          newState.fileHandle = handle;
-      }
-
-      if (!newState.paletteLibrary || newState.paletteLibrary.length === 0) {
-          newState.paletteLibrary = [ENDESGA_64_PALETTE, DEFAULT_PALETTE, GAMEBOY_PALETTE];
-          newState.activePaletteId = ENDESGA_64_PALETTE.id;
-      }
-      
-      if (!newState.selectedLayerIds) newState.selectedLayerIds = [newState.activeLayerId];
-      if (!newState.selectedFrameIndices) newState.selectedFrameIndices = [newState.activeFrameIndex];
+      const newState = await loadAndNormalizeProjectFile(file, handle);
 
       setProjects(prev => [...prev, {
         data: newState,
@@ -430,9 +513,9 @@ export function useProject() {
       console.error(e);
       alert("Failed to load project: " + e);
     }
-  }, [addToRecents]);
+  };
 
-  const updateState = useCallback((
+  const updateState = (
       newState: ProjectState, 
       historyConfig?: { action: string, tool?: ToolType }
   ) => {
@@ -479,18 +562,18 @@ export function useProject() {
         lastSavedHistoryIndex: p.lastSavedHistoryIndex
       };
     }));
-  }, [activeProjectId]);
+  };
 
-  const markSaved = useCallback(() => {
+  const markSaved = () => {
       setProjects(prev => prev.map(p => {
           if (p.data.id === activeProjectId) {
               return { ...p, lastSavedHistoryIndex: p.historyIndex };
           }
           return p;
       }));
-  }, [activeProjectId]);
+  };
 
-  const saveProjectAs = useCallback(async () => {
+  const saveProjectAs = async () => {
     if (activeProjectId === 'home') return;
 
     const isInIframe = window.self !== window.top;
@@ -516,9 +599,13 @@ export function useProject() {
       return;
     }
 
+    const suggestedName = state.title
+      ? (state.title.endsWith('.aseprite') ? state.title : `${state.title}.aseprite`)
+      : 'pixel-art.aseprite';
+
     try {
         const options = {
-            suggestedName: state.title ? (state.title.endsWith('.aseprite') ? state.title : `${state.title}.aseprite`) : 'pixel-art.aseprite',
+            suggestedName,
             types: [
                 {
                     description: 'Aseprite File (*.aseprite, *.ase)',
@@ -536,9 +623,7 @@ export function useProject() {
         const name = handle.name.toLowerCase();
         
         if (name.endsWith('.png')) {
-             const canvas = renderFrameToCanvas(state, state.activeFrameIndex);
-             const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
-             if (!blob) throw new Error("Failed to render PNG");
+             const blob = await renderActiveFramePngBlob(state);
              
              const writable = await handle.createWritable();
              await writable.write(blob);
@@ -567,9 +652,9 @@ export function useProject() {
          console.warn("showSaveFilePicker failed or restricted, falling back to standard download", e);
          performFallbackDownload();
     }
-  }, [state, activeProjectId, updateState, addToRecents, markSaved]);
+  };
 
-  const saveProject = useCallback(async () => {
+  const saveProject = async () => {
     if (activeProjectId === 'home') return;
     if (!state.fileHandle) {
         await saveProjectAs();
@@ -578,29 +663,30 @@ export function useProject() {
 
     addToRecents(state);
 
+    const fileHandle = state.fileHandle;
+    const name = fileHandle.name.toLowerCase();
+    const isImageFile = name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg');
+    const isProjectFile = name.endsWith('.aseprite') || name.endsWith('.ase') || name.endsWith('.json');
+
     try {
-        const name = state.fileHandle.name.toLowerCase();
-        
-        if (name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg')) {
-           const canvas = renderFrameToCanvas(state, state.activeFrameIndex);
-           const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
-           if (!blob) throw new Error("Failed to render PNG");
+        if (isImageFile) {
+           const blob = await renderActiveFramePngBlob(state);
            
-           const writable = await state.fileHandle.createWritable();
+           const writable = await fileHandle.createWritable();
            await writable.write(blob);
            await writable.close();
            markSaved();
-           alert(`Saved ${state.fileHandle.name}`);
+           alert(`Saved ${fileHandle.name}`);
            return;
         }
         
-        if (name.endsWith('.aseprite') || name.endsWith('.ase') || name.endsWith('.json')) {
+        if (isProjectFile) {
             const aseBytes = encodeAseprite(state);
-            const writable = await state.fileHandle.createWritable();
+            const writable = await fileHandle.createWritable();
             await writable.write(aseBytes.buffer);
             await writable.close();
             markSaved();
-            alert(`Saved ${state.fileHandle.name}`);
+            alert(`Saved ${fileHandle.name}`);
             return;
         }
         await saveProjectAs();
@@ -608,9 +694,9 @@ export function useProject() {
         console.error("Save failed", e);
         alert("Failed to save project.");
     }
-  }, [state, activeProjectId, addToRecents, saveProjectAs, markSaved]);
+  };
 
-  const closeProject = useCallback((id: string) => {
+  const closeProject = (id: string) => {
     const projToClose = projects.find(p => p.data.id === id);
     if (projToClose && projToClose.data && projToClose.data.id !== 'default') {
       saveRecentProject(projToClose.data)
@@ -636,9 +722,9 @@ export function useProject() {
     }
     setProjects(prev => prev.filter(p => p.data.id !== id));
     setActiveProjectId(nextActiveId);
-  }, [activeProjectId, projects]);
+  };
 
-  const switchTab = useCallback((direction: 'next' | 'prev') => {
+  const switchTab = (direction: 'next' | 'prev') => {
       if (activeProjectId === 'home') {
           if (projects.length > 0) {
               setActiveProjectId(direction === 'next' ? projects[0].data.id : projects[projects.length - 1].data.id);
@@ -651,9 +737,9 @@ export function useProject() {
       if (newIdx >= projects.length) newIdx = 0;
       if (newIdx < 0) newIdx = projects.length - 1;
       setActiveProjectId(projects[newIdx].data.id);
-  }, [activeProjectId, projects]);
+  };
 
-  const undo = useCallback(() => {
+  const undo = () => {
     if (activeProjectId === 'home') return;
     setProjects(prev => prev.map(p => {
         if (p.data.id !== activeProjectId) return p;
@@ -668,9 +754,9 @@ export function useProject() {
         }
         return p;
     }));
-  }, [activeProjectId]);
+  };
 
-  const redo = useCallback(() => {
+  const redo = () => {
      if (activeProjectId === 'home') return;
      setProjects(prev => prev.map(p => {
         if (p.data.id !== activeProjectId) return p;
@@ -685,9 +771,9 @@ export function useProject() {
         }
         return p;
     }));
-  }, [activeProjectId]);
+  };
 
-  const jumpToHistory = useCallback((index: number) => {
+  const jumpToHistory = (index: number) => {
     if (activeProjectId === 'home') return;
     setProjects(prev => prev.map(p => {
       if (p.data.id !== activeProjectId) return p;
@@ -701,9 +787,9 @@ export function useProject() {
       }
       return p;
     }));
-  }, [activeProjectId]);
+  };
 
-  const setColorMode = useCallback((mode: ColorMode) => {
+  const setColorMode = (mode: ColorMode) => {
     if (activeProjectId === 'home' || state.colorMode === mode) return;
 
     let newPalette = [...state.palette];
@@ -731,47 +817,7 @@ export function useProject() {
                     });
                 } else {
                     // Floyd-Steinberg
-                    const errorBufferR = new Float32Array(width * height).fill(0);
-                    const errorBufferG = new Float32Array(width * height).fill(0);
-                    const errorBufferB = new Float32Array(width * height).fill(0);
-
-                    for (let y = 0; y < height; y++) {
-                        for (let x = 0; x < width; x++) {
-                            const i = getIndex(x, y, width);
-                            const val = sourceGrid[i];
-                            if (val === null) continue;
-
-                            const [r, g, b] = hexToRgb(typeof val === 'number' ? newPalette[val] : val);
-                            
-                            const curR = Math.max(0, Math.min(255, r + errorBufferR[i]));
-                            const curG = Math.max(0, Math.min(255, g + errorBufferG[i]));
-                            const curB = Math.max(0, Math.min(255, b + errorBufferB[i]));
-
-                            const paletteIndex = findNearestPaletteIndex(curR, curG, curB, newPalette);
-                            targetGrid[i] = paletteIndex;
-
-                            const [pr, pg, pb] = hexToRgb(newPalette[paletteIndex]);
-                            const errR = curR - pr;
-                            const errG = curG - pg;
-                            const errB = curB - pb;
-
-                            const distribute = (dx: number, dy: number, factor: number) => {
-                                const nx = x + dx;
-                                const ny = y + dy;
-                                if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-                                    const ni = getIndex(nx, ny, width);
-                                    errorBufferR[ni] += errR * factor;
-                                    errorBufferG[ni] += errG * factor;
-                                    errorBufferB[ni] += errB * factor;
-                                }
-                            };
-
-                            distribute(1, 0, 7/16);
-                            distribute(-1, 1, 3/16);
-                            distribute(0, 1, 5/16);
-                            distribute(1, 1, 1/16);
-                        }
-                    }
+                    applyFloydSteinbergDither(sourceGrid, targetGrid, width, height, newPalette);
                 }
                 newLayerData[lid] = targetGrid;
             });
@@ -796,9 +842,9 @@ export function useProject() {
         { ...state, colorMode: mode, palette: newPalette, frames: newFrames },
         { action: `Switch to ${mode.toUpperCase()} mode${ditheringEnabled ? ' (Dithered)' : ''}` }
     );
-  }, [state, activeProjectId, updateState]);
+  };
 
-  const addFrame = useCallback(() => {
+  const addFrame = () => {
     if (activeProjectId === 'home') return;
     const newFrame: Frame = { id: `frame-${Date.now()}`, layerData: {} };
     state.layers.forEach(l => newFrame.layerData[l.id] = new Array(state.width * state.height).fill(null));
@@ -811,9 +857,9 @@ export function useProject() {
         }, 
         { action: 'Add Frame' }
     );
-  }, [state, updateState, activeProjectId]);
+  };
 
-  const duplicateFrame = useCallback(() => {
+  const duplicateFrame = () => {
     if (activeProjectId === 'home') return;
     const current = state.frames[state.activeFrameIndex];
     if (!current) return;
@@ -830,9 +876,9 @@ export function useProject() {
         }, 
         { action: 'Duplicate Frame' }
     );
-  }, [state, updateState, activeProjectId]);
+  };
 
-  const duplicateSelectedFrames = useCallback(() => {
+  const duplicateSelectedFrames = () => {
     if (activeProjectId === 'home') return;
     const selected = [...state.selectedFrameIndices].sort((a, b) => a - b);
     if (selected.length === 0) return;
@@ -861,18 +907,18 @@ export function useProject() {
         }, 
         { action: `Duplicate ${selected.length} Frames` }
     );
-  }, [state, updateState, activeProjectId]);
+  };
 
-  const deleteFrame = useCallback(() => {
+  const deleteFrame = () => {
     if (activeProjectId === 'home') return;
     if (state.frames.length <= 1) return; 
     updateState(
         { ...state, frames: state.frames.filter((_, i) => i !== state.activeFrameIndex), activeFrameIndex: Math.max(0, state.activeFrameIndex - 1), selectedFrameIndices: [Math.max(0, state.activeFrameIndex - 1)] }, 
         { action: 'Delete Frame' }
     );
-  }, [state, updateState, activeProjectId]);
+  };
 
-  const deleteSelectedFrames = useCallback(() => {
+  const deleteSelectedFrames = () => {
     if (activeProjectId === 'home') return;
     const selected = state.selectedFrameIndices;
     if (selected.length === 0 || selected.length === state.frames.length) return;
@@ -892,9 +938,9 @@ export function useProject() {
         { ...state, frames: newFrames, activeFrameIndex: newActiveIndex, selectedFrameIndices: [newActiveIndex] },
         { action: `Delete ${selected.length} Frames` }
     );
-  }, [state, updateState, activeProjectId]);
+  };
 
-  const insertFrame = useCallback((index: number) => {
+  const insertFrame = (index: number) => {
     if (activeProjectId === 'home') return;
     const newFrame: Frame = { id: `frame-${Date.now()}`, layerData: {} };
     state.layers.forEach(l => newFrame.layerData[l.id] = new Array(state.width * state.height).fill(null));
@@ -909,9 +955,9 @@ export function useProject() {
         }, 
         { action: 'Insert Frame' }
     );
-  }, [state, updateState, activeProjectId]);
+  };
 
-  const tweenFrames = useCallback(() => {
+  const tweenFrames = () => {
     if (activeProjectId === 'home') return;
     const selected = [...state.selectedFrameIndices].sort((a, b) => a - b);
     if (selected.length < 3) {
@@ -1010,12 +1056,12 @@ export function useProject() {
     }
 
     updateState({ ...state, frames: newFrames }, { action: 'Interpolate Frames' });
-  }, [state, activeProjectId, updateState]);
+  };
 
-  const addLayer = useCallback(() => {
+  const addLayer = () => {
     if (activeProjectId === 'home') return;
     const newId = `layer-${Date.now()}`;
-    let n = 1; while (state.layers.some(l => l.name === `Layer ${n}`)) n++;
+    const newName = getNextLayerName(state.layers, 'Layer');
     const activeL = state.layers.find(l => l.id === state.activeLayerId);
     
     let childLevel = 0;
@@ -1036,7 +1082,7 @@ export function useProject() {
       }
     }
 
-    const newLayer: Layer = { id: newId, name: `Layer ${n}`, visible: true, locked: false, opacity: 100, blendMode: 'normal', childLevel, parentId };
+    const newLayer: Layer = { id: newId, name: newName, visible: true, locked: false, opacity: 100, blendMode: 'normal', childLevel, parentId };
     const newFrames = state.frames.map(f => ({ ...f, layerData: { ...f.layerData, [newId]: new Array(state.width * state.height).fill(null) } }));
     const newLayers = [...state.layers];
     if (insertIndex >= 0 && insertIndex <= newLayers.length) {
@@ -1056,18 +1102,18 @@ export function useProject() {
         { ...state, layers: newLayers, frames: newFrames, activeLayerId: newId, selectedLayerIds: [newId] }, 
         { action: 'Add Layer' }
     );
-  }, [state, updateState, activeProjectId]);
+  };
 
-  const addGroupLayer = useCallback(() => {
+  const addGroupLayer = () => {
     if (activeProjectId === 'home') return;
     const newId = `group-${Date.now()}`;
-    let n = 1; while (state.layers.some(l => l.name === `Group ${n}`)) n++;
+    const newGroupName = getNextLayerName(state.layers, 'Group');
     const activeL = state.layers.find(l => l.id === state.activeLayerId);
     const parentId = activeL ? (activeL.parentId ?? null) : null;
     const childLevel = activeL ? (activeL.parentId ? (activeL.childLevel ?? 1) - 1 : 0) : 0;
     const newLayer: Layer = { 
       id: newId, 
-      name: `Group ${n}`, 
+      name: newGroupName, 
       visible: true, 
       locked: false, 
       opacity: 100, 
@@ -1084,9 +1130,9 @@ export function useProject() {
         { ...state, layers: newLayers, frames: newFrames, activeLayerId: newId, selectedLayerIds: [newId] }, 
         { action: 'Add Group' }
     );
-  }, [state, updateState, activeProjectId]);
+  };
 
-  const deleteLayer = useCallback((id: string) => {
+  const deleteLayer = (id: string) => {
     if (activeProjectId === 'home') return;
     if (state.layers.length <= 1) return; 
     
@@ -1106,9 +1152,9 @@ export function useProject() {
         { ...state, layers: newLayers, frames: newFrames, activeLayerId: newActiveId, selectedLayerIds: state.selectedLayerIds.filter(sid => sid !== id).length ? state.selectedLayerIds.filter(sid => sid !== id) : [newActiveId] },
         { action: 'Delete Layer' }
     );
-  }, [state, updateState, activeProjectId]);
+  };
 
-  const deleteSelectedLayers = useCallback(() => {
+  const deleteSelectedLayers = () => {
     if (activeProjectId === 'home') return;
     const selected = state.selectedLayerIds;
     if (selected.length === 0 || selected.length === state.layers.length) return;
@@ -1129,9 +1175,9 @@ export function useProject() {
         { ...state, layers: newLayers, frames: newFrames, activeLayerId: newActiveId, selectedLayerIds: [newActiveId] },
         { action: `Delete ${selected.length} Layers` }
     );
-  }, [state, updateState, activeProjectId]);
+  };
 
-  const duplicateLayer = useCallback((id: string) => {
+  const duplicateLayer = (id: string) => {
      if (activeProjectId === 'home') return;
      const layerIndex = state.layers.findIndex(l => l.id === id);
      if (layerIndex === -1) return;
@@ -1155,9 +1201,9 @@ export function useProject() {
          { ...state, layers: newLayers, frames: newFrames, activeLayerId: newId, selectedLayerIds: [newId] },
          { action: 'Duplicate Layer' }
      );
-  }, [state, updateState, activeProjectId]);
+  };
 
-  const duplicateSelectedLayers = useCallback(() => {
+  const duplicateSelectedLayers = () => {
     if (activeProjectId === 'home') return;
     const selected = [...state.selectedLayerIds];
     if (selected.length === 0) return;
@@ -1184,9 +1230,9 @@ export function useProject() {
         { ...state, layers: newLayers, frames: newFrames, activeLayerId: duplicatedIds[0], selectedLayerIds: duplicatedIds },
         { action: `Duplicate ${selected.length} Layers` }
     );
-  }, [state, updateState, activeProjectId]);
+  };
 
-  const updateLayer = useCallback((id: string, updates: Partial<Layer>) => {
+  const updateLayer = (id: string, updates: Partial<Layer>) => {
       if (activeProjectId === 'home') return;
       const newLayers = state.layers.map(l => l.id === id ? { ...l, ...updates } : l);
       const action = updates.name ? 'Rename Layer' : 'Layer Properties';
@@ -1194,9 +1240,9 @@ export function useProject() {
           { ...state, layers: newLayers },
           { action: action }
       );
-  }, [state, updateState, activeProjectId]);
+  };
 
-  const groupSelectedLayers = useCallback(() => {
+  const groupSelectedLayers = () => {
     if (activeProjectId === 'home') return;
     const selectedIds = state.selectedLayerIds.length > 0 ? state.selectedLayerIds : [state.activeLayerId];
     if (selectedIds.length === 0) return;
@@ -1209,14 +1255,14 @@ export function useProject() {
     const highestLayer = state.layers[highestIndex];
 
     const groupId = `group-${Date.now()}`;
-    let n = 1; while (state.layers.some(l => l.name === `Group ${n}`)) n++;
+    const groupName = getNextLayerName(state.layers, 'Group');
 
     const parentId = highestLayer.parentId ?? null;
     const childLevel = highestLayer.childLevel ?? 0;
 
     const groupLayer: Layer = {
       id: groupId,
-      name: `Group ${n}`,
+      name: groupName,
       type: 'group',
       visible: true,
       locked: false,
@@ -1261,9 +1307,9 @@ export function useProject() {
       { ...state, layers: newLayers, frames: newFrames, activeLayerId: groupId, selectedLayerIds: [groupId] },
       { action: `Grouped ${selectedLayers.length} Layer(s)` }
     );
-  }, [state, activeProjectId, updateState]);
+  };
 
-  const ungroupSelectedLayers = useCallback(() => {
+  const ungroupSelectedLayers = () => {
     if (activeProjectId === 'home') return;
     const selectedIds = state.selectedLayerIds.length > 0 ? state.selectedLayerIds : [state.activeLayerId];
     const groupLayersToUngroup = state.layers.filter(l => l.type === 'group' && selectedIds.includes(l.id));
@@ -1300,19 +1346,19 @@ export function useProject() {
       { ...state, layers: newLayers, frames: newFrames, activeLayerId, selectedLayerIds: [activeLayerId] },
       { action: `Ungrouped ${groupIdsToRemove.length} Group(s)` }
     );
-  }, [state, activeProjectId, updateState]);
+  };
 
-  const addLayerToGroup = useCallback((groupId: string) => {
+  const addLayerToGroup = (groupId: string) => {
     if (activeProjectId === 'home') return;
     const group = state.layers.find(l => l.id === groupId);
     if (!group) return;
 
     const newId = `layer-${Date.now()}`;
-    let n = 1; while (state.layers.some(l => l.name === `Layer ${n}`)) n++;
+    const newLayerName = getNextLayerName(state.layers, 'Layer');
 
     const newLayer: Layer = {
       id: newId,
-      name: `Layer ${n}`,
+      name: newLayerName,
       visible: true,
       locked: false,
       opacity: 100,
@@ -1338,9 +1384,9 @@ export function useProject() {
       { ...state, layers: newLayers, frames: newFrames, activeLayerId: newId, selectedLayerIds: [newId] },
       { action: `Added Layer to ${group.name}` }
     );
-  }, [state, activeProjectId, updateState]);
+  };
 
-  const toggleCollapseAllGroups = useCallback((forceCollapse?: boolean) => {
+  const toggleCollapseAllGroups = (forceCollapse?: boolean) => {
     if (activeProjectId === 'home') return;
     const groupLayers = state.layers.filter(l => l.type === 'group');
     if (groupLayers.length === 0) return;
@@ -1355,9 +1401,9 @@ export function useProject() {
       { ...state, layers: newLayers },
       { action: shouldCollapse ? 'Collapsed All Groups' : 'Expanded All Groups' }
     );
-  }, [state, activeProjectId, updateState]);
+  };
 
-  const reorderLayers = useCallback((dId: string, tId: string, pos: 'before' | 'after' | 'inside' | 'outside' | 'root-bottom') => {
+  const reorderLayers = (dId: string, tId: string, pos: 'before' | 'after' | 'inside' | 'outside' | 'root-bottom') => {
     if (activeProjectId === 'home') return;
 
     const draggedLayer = state.layers.find(l => l.id === dId);
@@ -1467,9 +1513,9 @@ export function useProject() {
       { ...state, layers: newLayers },
       { action: `Reordered ${draggedLayer.name}` }
     );
-  }, [state, activeProjectId, updateState]);
+  };
 
-  const reorderFrames = useCallback((from: number, to: number) => {
+  const reorderFrames = (from: number, to: number) => {
     if (activeProjectId === 'home') return;
     if (from === to) return;
     
@@ -1494,9 +1540,9 @@ export function useProject() {
         { ...state, frames: newFrames, activeFrameIndex: newActive, selectedFrameIndices: newSelectedIndices }, 
         { action: 'Reorder Frames' }
     );
-  }, [state, updateState, activeProjectId]);
+  };
 
-  const importPalette = useCallback(async (file: File) => {
+  const importPalette = async (file: File) => {
     if (activeProjectId === 'home') return;
     try {
       let colors: string[] = [];
@@ -1520,15 +1566,15 @@ export function useProject() {
           { action: `Import Palette: ${name}` }
       );
     } catch (e) { console.error(e); alert("Failed to import palette."); }
-  }, [state, updateState, activeProjectId]);
+  };
 
-  const selectPalette = useCallback((id: string) => {
+  const selectPalette = (id: string) => {
       if (activeProjectId === 'home') return;
       const selected = state.paletteLibrary.find(p => p.id === id);
       if (selected) updateState({ ...state, palette: selected.colors, activePaletteId: selected.id });
-  }, [state, updateState, activeProjectId]);
+  };
 
-  const resizeCanvas = useCallback((newWidth: number, newHeight: number, anchor: string = 'cc') => {
+  const resizeCanvas = (newWidth: number, newHeight: number, anchor: string = 'cc') => {
       if (activeProjectId === 'home') return;
       if (newWidth === state.width && newHeight === state.height) return;
 
@@ -1573,19 +1619,19 @@ export function useProject() {
           { ...state, width: newWidth, height: newHeight, frames: newFrames, selection: null },
           { action: `Resize Canvas to ${newWidth}x${newHeight}` }
       );
-  }, [state, updateState, activeProjectId]);
+  };
 
-  const setReferenceImage = useCallback((config: ProjectState['referenceImage']) => {
+  const setReferenceImage = (config: ProjectState['referenceImage']) => {
       if (activeProjectId === 'home') return;
       updateState({ ...state, referenceImage: config }, { action: 'Update Reference Image' });
-  }, [state, activeProjectId, updateState]);
+  };
 
-  const setTiled = useCallback((tiled: boolean) => {
+  const setTiled = (tiled: boolean) => {
       if (activeProjectId === 'home') return;
       updateState({ ...state, tiled }, { action: tiled ? 'Enable Tiled Mode' : 'Disable Tiled Mode' });
-  }, [state, activeProjectId, updateState]);
+  };
 
-  const flipPixels = useCallback((axis: 'h' | 'v') => {
+  const flipPixels = (axis: 'h' | 'v') => {
       if (activeProjectId === 'home') return;
       const { frames, width, height, activeFrameIndex, selectedLayerIds, selection } = state;
       
@@ -1644,9 +1690,9 @@ export function useProject() {
           { ...state, frames: newFrames, selection: newSelection },
           { action: `Flip ${axis === 'h' ? 'Horizontal' : 'Vertical'}` }
       );
-  }, [state, activeProjectId, updateState]);
+  };
 
-  const centerContent = useCallback(() => {
+  const centerContent = () => {
       if (activeProjectId === 'home') return;
       const { frames, width, height, activeFrameIndex, selectedLayerIds } = state;
       
@@ -1721,9 +1767,9 @@ export function useProject() {
           { ...state, frames: newFrames, selection: newSelection },
           { action: 'Center Content' }
       );
-  }, [state, activeProjectId, updateState]);
+  };
 
-  const generateOutline = useCallback(() => {
+  const generateOutline = () => {
       if (activeProjectId === 'home') return;
       const { newState, actionSummary } = applyOutlineEffect(state, {
         placement: 'outside',
@@ -1736,9 +1782,9 @@ export function useProject() {
         targetFrames: 'current'
       });
       updateState(newState, { action: actionSummary });
-  }, [state, activeProjectId, updateState]);
+  };
 
-  const strokeSelection = useCallback(() => {
+  const strokeSelection = () => {
       if (activeProjectId === 'home') return;
       const { frames, width, height, activeFrameIndex, activeLayerId, selection, primaryColor, colorMode, palette } = state;
       if (!selection || selection.size === 0) return;
@@ -1772,9 +1818,9 @@ export function useProject() {
           { ...state, frames: newFrames },
           { action: 'Stroke Selection' }
       );
-  }, [state, activeProjectId, updateState]);
+  };
 
-  const clearSelection = useCallback(() => {
+  const clearSelection = () => {
       if (activeProjectId === 'home') return;
       const { frames, width, height, activeFrameIndex, selectedLayerIds, selection } = state;
       if (!selection || selection.size === 0) return;
@@ -1794,9 +1840,9 @@ export function useProject() {
           { ...state, frames: newFrames },
           { action: `Clear Selection` }
       );
-  }, [state, activeProjectId, updateState]);
+  };
 
-  const cropCanvas = useCallback(() => {
+  const cropCanvas = () => {
       if (activeProjectId === 'home') return;
       const { frames, width, height, activeFrameIndex, selectedLayerIds, selection } = state;
       if (!selection || selection.size === 0) return;
@@ -1825,33 +1871,33 @@ export function useProject() {
           { ...state, width: box.w, height: box.h, frames: newFrames, selection: null },
           { action: `Crop Canvas` }
       );
-  }, [state, activeProjectId, updateState]);
+  };
 
-  const downloadImage = useCallback(() => {
+  const downloadImage = () => {
      if (activeProjectId === 'home') return;
      const canvas = renderFrameToCanvas(state, state.activeFrameIndex);
      const link = document.createElement('a'); 
      link.download = `${state.title}.png`; 
      link.href = canvas.toDataURL(); 
      link.click();
-  }, [state, activeProjectId]);
+  };
 
-  const downloadSpriteSheet = useCallback(() => {
+  const downloadSpriteSheet = () => {
      if (activeProjectId === 'home') return;
      const canvas = renderSpriteSheet(state);
      const link = document.createElement('a'); 
      link.download = `${state.title}_spritesheet.png`; 
      link.href = canvas.toDataURL(); 
      link.click();
-  }, [state, activeProjectId]);
+  };
 
-  const setFrameDuration = useCallback((frameIndex: number, duration: number) => {
+  const setFrameDuration = (frameIndex: number, duration: number) => {
     if (activeProjectId === 'home') return;
     const newFrames = state.frames.map((f, i) => i === frameIndex ? { ...f, duration } : f);
     updateState({ ...state, frames: newFrames }, { action: `Set Frame Duration (${duration}ms)` });
-  }, [state, activeProjectId, updateState]);
+  };
 
-  const addTag = useCallback((name: string, from: number, to: number, color?: string) => {
+  const addTag = (name: string, from: number, to: number, color?: string) => {
     if (activeProjectId === 'home') return;
     const newTag: FrameTag = {
       id: `tag-${Date.now()}`,
@@ -1863,9 +1909,9 @@ export function useProject() {
     };
     const newTags = [...(state.tags || []), newTag];
     updateState({ ...state, tags: newTags }, { action: `Add Tag: ${name}` });
-  }, [state, activeProjectId, updateState]);
+  };
 
-  const saveTag = useCallback((tag: FrameTag) => {
+  const saveTag = (tag: FrameTag) => {
     if (activeProjectId === 'home') return;
     const existingTags = state.tags || [];
     const exists = existingTags.some(t => t.id === tag.id);
@@ -1873,15 +1919,15 @@ export function useProject() {
       ? existingTags.map(t => t.id === tag.id ? tag : t)
       : [...existingTags, tag];
     updateState({ ...state, tags: newTags }, { action: `Save Tag: ${tag.name}` });
-  }, [state, activeProjectId, updateState]);
+  };
 
-  const deleteTag = useCallback((tagId: string) => {
+  const deleteTag = (tagId: string) => {
     if (activeProjectId === 'home') return;
     const newTags = (state.tags || []).filter(t => t.id !== tagId);
     updateState({ ...state, tags: newTags }, { action: 'Delete Tag' });
-  }, [state, activeProjectId, updateState]);
+  };
 
-  const updateSpriteProperties = useCallback((props: {
+  const updateSpriteProperties = (props: {
     title?: string;
     pixelRatio?: { width: number; height: number };
     transparentIndex?: number;
@@ -1897,12 +1943,12 @@ export function useProject() {
       colorMode: props.colorMode ?? state.colorMode,
       grid: props.grid ?? state.grid,
     }, { action: 'Update Sprite Properties' });
-  }, [state, activeProjectId, updateState]);
+  };
 
-  const updateSlices = useCallback((slices: Slice[]) => {
+  const updateSlices = (slices: Slice[]) => {
     if (activeProjectId === 'home') return;
     updateState({ ...state, slices }, { action: 'Update Slices' });
-  }, [state, activeProjectId, updateState]);
+  };
 
   return {
     state,

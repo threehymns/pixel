@@ -19,7 +19,7 @@ interface PaletteProps {
   onColorsSelected?: (colors: string[]) => void;
 }
 
-export const Palette: React.FC<PaletteProps> = React.memo(({
+export const Palette: React.FC<PaletteProps> = ({
   colors,
   palettes,
   activePaletteId,
@@ -264,4 +264,4 @@ export const Palette: React.FC<PaletteProps> = React.memo(({
       )}
     </div>
   );
-});
+};

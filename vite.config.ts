@@ -9,8 +9,20 @@ export default defineConfig(({ mode }) => {
       server: {
         port: 3000,
         host: '0.0.0.0',
+        allowedHosts: true,
+        hmr: process.env.DISABLE_HMR !== 'true',
       },
-      plugins: [react(), tailwindcss()],
+      optimizeDeps: {
+        include: ['react/compiler-runtime'],
+      },
+      plugins: [
+        react({
+          babel: {
+            plugins: ['babel-plugin-react-compiler'],
+          },
+        }),
+        tailwindcss(),
+      ],
       define: {
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
         'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)

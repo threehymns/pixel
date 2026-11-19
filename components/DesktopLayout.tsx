@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Allotment } from 'allotment';
 import { ProjectState, ToolType } from '../types';
 import { SELECTION_TOOLS } from '../constants';
@@ -267,44 +267,30 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
   const isPreviewFloating = floatingPanes.some((fp: any) => fp.id === 'preview');
   const isPreviewVisible = isPreviewDocked || isPreviewFloating;
 
-  const stateRef = useRef(state);
-  stateRef.current = state;
-  const updateStateRef = useRef(updateState);
-  updateStateRef.current = updateState;
-  const canvasToolsRef = useRef(canvasTools);
-  canvasToolsRef.current = canvasTools;
-  const setDragStartPosRef = useRef(setDragStartPos);
-  setDragStartPosRef.current = setDragStartPos;
+  const noop = () => {};
 
-  const noop = useCallback(() => {}, []);
+  const handlePaletteColorSelect = (c: string, isPrimary: boolean) => {
+    updateState(isPrimary ? { ...state, primaryColor: c } : { ...state, secondaryColor: c });
+  };
 
-  const handlePaletteColorSelect = useCallback((c: string, isPrimary: boolean) => {
-    const s = stateRef.current;
-    updateStateRef.current(isPrimary ? { ...s, primaryColor: c } : { ...s, secondaryColor: c });
-  }, []);
-
-  const handlePaletteAddColor = useCallback((c: string) => {
-    const s = stateRef.current;
-    const updatedLibrary = s.paletteLibrary.map((p) =>
-      p.id === s.activePaletteId ? { ...p, colors: [...p.colors, c] } : p
+  const handlePaletteAddColor = (c: string) => {
+    const updatedLibrary = state.paletteLibrary.map((p) =>
+      p.id === state.activePaletteId ? { ...p, colors: [...p.colors, c] } : p
     );
-    updateStateRef.current({ ...s, paletteLibrary: updatedLibrary, palette: [...s.palette, c] });
-  }, []);
+    updateState({ ...state, paletteLibrary: updatedLibrary, palette: [...state.palette, c] });
+  };
 
-  const handlePaletteColorsSelected = useCallback((selectedColors: string[]) => {
-    const s = stateRef.current;
-    updateStateRef.current({ ...s, shades: selectedColors, inkType: 'shading' });
-  }, []);
+  const handlePaletteColorsSelected = (selectedColors: string[]) => {
+    updateState({ ...state, shades: selectedColors, inkType: 'shading' });
+  };
 
-  const handleSelectLayers = useCallback((ids: string[], active: string) => {
-    const s = stateRef.current;
-    updateStateRef.current({ ...s, selectedLayerIds: ids, activeLayerId: active });
-  }, []);
+  const handleSelectLayers = (ids: string[], active: string) => {
+    updateState({ ...state, selectedLayerIds: ids, activeLayerId: active });
+  };
 
-  const handleSelectFrames = useCallback((indices: number[], active: number, layerId?: string) => {
-    const s = stateRef.current;
+  const handleSelectFrames = (indices: number[], active: number, layerId?: string) => {
     const nextState = {
-      ...s,
+      ...state,
       selectedFrameIndices: indices,
       activeFrameIndex: active,
     };
@@ -312,52 +298,47 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
       nextState.activeLayerId = layerId;
       nextState.selectedLayerIds = [layerId];
     }
-    updateStateRef.current(nextState);
-  }, []);
+    updateState(nextState);
+  };
 
-  const handleTimelineSelectLayer = useCallback((id: string) => {
-    const s = stateRef.current;
-    updateStateRef.current({ ...s, activeLayerId: id, selectedLayerIds: [id] });
-  }, []);
+  const handleTimelineSelectLayer = (id: string) => {
+    updateState({ ...state, activeLayerId: id, selectedLayerIds: [id] });
+  };
 
-  const handleTimelineToggleLayerVisibility = useCallback((id: string) => {
-    const s = stateRef.current;
-    updateStateRef.current({
-      ...s,
-      layers: s.layers.map((l) => (l.id === id ? { ...l, visible: !l.visible } : l)),
+  const handleTimelineToggleLayerVisibility = (id: string) => {
+    updateState({
+      ...state,
+      layers: state.layers.map((l) => (l.id === id ? { ...l, visible: !l.visible } : l)),
     });
-  }, []);
+  };
 
-  const handleTimelineToggleLayerLock = useCallback((id: string) => {
-    const s = stateRef.current;
-    updateStateRef.current({
-      ...s,
-      layers: s.layers.map((l) => (l.id === id ? { ...l, locked: !l.locked } : l)),
+  const handleTimelineToggleLayerLock = (id: string) => {
+    updateState({
+      ...state,
+      layers: state.layers.map((l) => (l.id === id ? { ...l, locked: !l.locked } : l)),
     });
-  }, []);
+  };
 
-  const handleCanvasDrawStart = useCallback((pos: any, modifiers?: any) => {
-    setDragStartPosRef.current(pos);
-    canvasToolsRef.current.handleDrawStart(
+  const handleCanvasDrawStart = (pos: any, modifiers?: any) => {
+    setDragStartPos(pos);
+    canvasTools.handleDrawStart(
       pos,
       modifiers ?? { shift: false, ctrl: false, alt: false, meta: false }
     );
-  }, []);
+  };
 
-  const handleCanvasDrawEnd = useCallback(() => {
-    setDragStartPosRef.current(null);
-    canvasToolsRef.current.handleDrawEnd();
-  }, []);
+  const handleCanvasDrawEnd = () => {
+    setDragStartPos(null);
+    canvasTools.handleDrawEnd();
+  };
 
-  const handleCanvasSelectionUpdate = useCallback((sel: Set<number> | null) => {
-    const s = stateRef.current;
-    updateStateRef.current({ ...s, selection: sel }, { action: 'Select Area', tool: s.tool });
-  }, []);
+  const handleCanvasSelectionUpdate = (sel: Set<number> | null) => {
+    updateState({ ...state, selection: sel }, { action: 'Select Area', tool: state.tool });
+  };
 
-  const handleCanvasZoom = useCallback((z: number) => {
-    const s = stateRef.current;
-    updateStateRef.current({ ...s, zoom: z });
-  }, []);
+  const handleCanvasZoom = (z: number) => {
+    updateState({ ...state, zoom: z });
+  };
 
   const renderPaneContent = (paneId: string) => {
     switch (paneId) {
@@ -464,29 +445,44 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
   };
 
   const slotTabListRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
+  const [tabDropIndicator, setTabDropIndicator] = useState<{ key: string; left: number } | null>(null);
 
-  const getIndicatorLeftPos = (slotId: 'left' | 'right' | 'bottom', groupId?: string) => {
-    if (!dragOverIndex || dragOverIndex.slotId !== slotId || dragOverZone?.position !== 'tab-bar')
-      return null;
-    if (groupId && dragOverIndex.groupId !== groupId) return null;
-    const key = `${slotId}-${groupId || ''}`;
+  useLayoutEffect(() => {
+    if (!dragOverIndex || dragOverZone?.position !== 'tab-bar') {
+      setTabDropIndicator(null);
+      return;
+    }
+    const key = `${dragOverIndex.slotId}-${dragOverIndex.groupId || ''}`;
     const container = slotTabListRefs.current[key];
-    if (!container) return null;
+    if (!container) {
+      setTabDropIndicator(null);
+      return;
+    }
 
     const tabs = Array.from(container.querySelectorAll('[data-tab-id]')) as HTMLElement[];
-    if (tabs.length === 0) return 4;
+    let left: number;
+    if (tabs.length === 0) {
+      left = 4;
+    } else {
+      const idx = dragOverIndex.index;
+      if (idx <= 0) {
+        left = tabs[0].offsetLeft;
+      } else if (idx >= tabs.length) {
+        const last = tabs[tabs.length - 1];
+        left = last.offsetLeft + last.offsetWidth;
+      } else {
+        const prev = tabs[idx - 1];
+        const curr = tabs[idx];
+        left = Math.round((prev.offsetLeft + prev.offsetWidth + curr.offsetLeft) / 2);
+      }
+    }
+    setTabDropIndicator({ key, left });
+  }, [dragOverIndex, dragOverZone, slots]);
 
-    const idx = dragOverIndex.index;
-    if (idx <= 0) {
-      return tabs[0].offsetLeft;
-    }
-    if (idx >= tabs.length) {
-      const last = tabs[tabs.length - 1];
-      return last.offsetLeft + last.offsetWidth;
-    }
-    const prev = tabs[idx - 1];
-    const curr = tabs[idx];
-    return Math.round((prev.offsetLeft + prev.offsetWidth + curr.offsetLeft) / 2);
+  const getIndicatorLeftPos = (slotId: 'left' | 'right' | 'bottom', groupId?: string) => {
+    if (!tabDropIndicator) return null;
+    const key = `${slotId}-${groupId || ''}`;
+    return tabDropIndicator.key === key ? tabDropIndicator.left : null;
   };
 
   const renderSlotContainer = (slotId: 'left' | 'right' | 'bottom') => {

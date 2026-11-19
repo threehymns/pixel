@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import { ProjectState, Position } from '../types';
 import { SELECTION_TOOLS } from '../constants';
 import { useCursorMousePos, useCursorDragStartPos, useLiveZoom } from '../hooks/useCursorStore';
@@ -21,7 +21,7 @@ interface StatusBarProps {
   selectionSize: { w: number; h: number } | null;
 }
 
-export const StatusBar: React.FC<StatusBarProps> = React.memo(({
+export const StatusBar: React.FC<StatusBarProps> = ({
   state,
   isHome,
   mousePos: mousePosProp,
@@ -35,21 +35,21 @@ export const StatusBar: React.FC<StatusBarProps> = React.memo(({
   const mousePos = mousePosProp !== undefined ? mousePosProp : storeMousePos;
   const dragStartPos = dragStartPosProp !== undefined ? dragStartPosProp : storeDragStartPos;
 
-  const dragInfo = useMemo(() => {
-    if (!dragStartPos || !mousePos) return null;
+  let dragInfo: { start: Position; end: Position; dx: number; dy: number; angle: string } | null = null;
+  if (dragStartPos && mousePos) {
     const dx = mousePos.x - dragStartPos.x;
     const dy = mousePos.y - dragStartPos.y;
     let angle = (Math.atan2(dy, dx) * 180) / Math.PI;
     if (angle < 0) angle += 360;
 
-    return {
+    dragInfo = {
       start: dragStartPos,
       end: mousePos,
       dx: Math.abs(dx),
       dy: Math.abs(dy),
       angle: angle.toFixed(1),
     };
-  }, [dragStartPos, mousePos]);
+  }
 
   if (isHome) {
     return null;
@@ -286,4 +286,4 @@ export const StatusBar: React.FC<StatusBarProps> = React.memo(({
       </div>
     </div>
   );
-});
+};

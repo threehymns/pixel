@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { ProjectState, Layer, LayerBlendMode, Frame } from '../types';
 import {
   Eye,
@@ -102,7 +102,7 @@ interface LayerThumbnailProps {
   height: number;
 }
 
-const LayerThumbnail = React.memo<LayerThumbnailProps>(({ pixels, palette, width, height }) => {
+const LayerThumbnail: React.FC<LayerThumbnailProps> = ({ pixels, palette, width, height }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const tempCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const imgDataRef = useRef<{ width: number; height: number; imageData: ImageData; data32: Uint32Array } | null>(null);
@@ -171,7 +171,7 @@ const LayerThumbnail = React.memo<LayerThumbnailProps>(({ pixels, palette, width
       <canvas ref={canvasRef} width={28} height={28} className="pixelated h-full w-full object-contain" />
     </div>
   );
-});
+};
 
 interface GroupThumbnailProps {
   groupId: string;
@@ -190,7 +190,7 @@ interface GroupChildSnapshot {
   pixels: (string | number | null)[] | undefined;
 }
 
-const GroupThumbnail = React.memo<GroupThumbnailProps>(({ groupId, layers, activeFrame, palette, width, height, collapsed }) => {
+const GroupThumbnail: React.FC<GroupThumbnailProps> = ({ groupId, layers, activeFrame, palette, width, height, collapsed }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const tempCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const layerCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -325,7 +325,7 @@ const GroupThumbnail = React.memo<GroupThumbnailProps>(({ groupId, layers, activ
       </div>
     </div>
   );
-});
+};
 
 interface LayersPanelProps {
   state: ProjectState;
@@ -358,7 +358,7 @@ interface DragState {
   position: 'before' | 'after' | 'inside' | 'outside' | 'root-bottom';
 }
 
-export const LayersPanel: React.FC<LayersPanelProps> = React.memo(({
+export const LayersPanel: React.FC<LayersPanelProps> = ({
   state,
   onSelectLayers,
   onUpdateLayer,
@@ -547,41 +547,44 @@ export const LayersPanel: React.FC<LayersPanelProps> = React.memo(({
   );
 
   const propsLayer = layerPropertiesState?.layer ?? null;
-  const propsAnchorEl = propsLayer ? (rowRefs.current.get(propsLayer.id) ?? null) : null;
+  const [propsAnchorEl, setPropsAnchorEl] = useState<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!layerPropertiesState?.isOpen || !propsLayer) {
+      setPropsAnchorEl(null);
+      return;
+    }
+    setPropsAnchorEl(rowRefs.current.get(propsLayer.id) ?? null);
+  }, [layerPropertiesState?.isOpen, propsLayer, state.layers]);
 
   const activeFrame = state.frames[state.activeFrameIndex];
-  const parentMap = useMemo(() => getLayerParentMap(state.layers), [state.layers]);
-  const collapsedLayerIds = useMemo(() => {
-    const collapsed = new Set<string>();
-    const layerById = new Map(state.layers.map((l) => [l.id, l]));
-    for (const layer of state.layers) {
-      let curr: Layer | undefined = layer;
-      const visited = new Set<string>();
-      while (curr) {
-        if (visited.has(curr.id)) break;
-        visited.add(curr.id);
-        const parent =
-          parentMap.get(curr.id) || (curr.parentId ? layerById.get(curr.parentId) : undefined);
-        if (parent) {
-          if (parent.collapsed) {
-            collapsed.add(layer.id);
-            break;
-          }
-          curr = parent;
-        } else {
+  const parentMap = getLayerParentMap(state.layers);
+  const collapsedLayerIds = new Set<string>();
+  const layerById = new Map<string, Layer>(state.layers.map((l) => [l.id, l]));
+  for (const layer of state.layers) {
+    let curr: Layer | undefined = layer;
+    const visited = new Set<string>();
+    while (curr) {
+      if (visited.has(curr.id)) break;
+      visited.add(curr.id);
+      const parent: Layer | undefined =
+        parentMap.get(curr.id) || (curr.parentId ? layerById.get(curr.parentId) : undefined);
+      if (parent) {
+        if (parent.collapsed) {
+          collapsedLayerIds.add(layer.id);
           break;
         }
+        curr = parent;
+      } else {
+        break;
       }
     }
-    return collapsed;
-  }, [state.layers, parentMap]);
+  }
 
-  const displayLayers = useMemo(() => {
-    const rev = state.layers.slice().reverse();
-    if (!searchQuery.trim()) return rev;
-    const query = searchQuery.toLowerCase();
-    return rev.filter((l) => l.name.toLowerCase().includes(query));
-  }, [state.layers, searchQuery]);
+  const revLayers = state.layers.slice().reverse();
+  const displayLayers = !searchQuery.trim()
+    ? revLayers
+    : revLayers.filter((l) => l.name.toLowerCase().includes(searchQuery.toLowerCase()));
 
   return (
     <div className={`flex flex-col bg-card select-none ${className ?? ''}`}>
@@ -1158,4 +1161,4 @@ export const LayersPanel: React.FC<LayersPanelProps> = React.memo(({
       </ContextMenu>
     </div>
   );
-});
+};

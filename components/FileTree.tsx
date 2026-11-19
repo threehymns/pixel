@@ -22,6 +22,18 @@ interface TreeNodeProps {
   onFileOpen: (file: File, handle?: FileSystemFileHandle) => void;
 }
 
+async function readDirectoryEntries(dirHandle: FileSystemDirectoryHandle): Promise<FileSystemHandle[]> {
+  const entries: FileSystemHandle[] = [];
+  for await (const entry of dirHandle.values()) {
+    entries.push(entry);
+  }
+  entries.sort((a, b) => {
+    if (a.kind === b.kind) return a.name.localeCompare(b.name);
+    return a.kind === 'directory' ? -1 : 1;
+  });
+  return entries;
+}
+
 const TreeNode: React.FC<TreeNodeProps> = ({ handle, depth, onFileOpen }) => {
   const [isExpanded, setIsExpanded] = useState(depth === 0);
   const [children, setChildren] = useState<FileSystemHandle[]>([]);
@@ -30,16 +42,8 @@ const TreeNode: React.FC<TreeNodeProps> = ({ handle, depth, onFileOpen }) => {
   const loadChildren = async () => {
     if (handle.kind !== 'directory') return;
     setIsLoading(true);
-    const dirHandle = handle as FileSystemDirectoryHandle;
-    const entries: FileSystemHandle[] = [];
     try {
-      for await (const entry of dirHandle.values()) {
-        entries.push(entry);
-      }
-      entries.sort((a, b) => {
-        if (a.kind === b.kind) return a.name.localeCompare(b.name);
-        return a.kind === 'directory' ? -1 : 1;
-      });
+      const entries = await readDirectoryEntries(handle as FileSystemDirectoryHandle);
       setChildren(entries);
     } catch (e) {
       console.error('Failed to read directory', e);
