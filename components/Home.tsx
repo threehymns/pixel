@@ -1,148 +1,164 @@
-
 import React from 'react';
-import { Plus, File, Github, FolderOpen, Image as ImageIcon, Settings, History, Trash2, Clock } from 'lucide-react';
+import { Plus, FolderOpen, ImageIcon, Trash2 } from './Icons';
 import { RecentProject } from '../types';
 
 interface HomeProps {
-    onCreateProject: () => void;
-    onImportProject: () => void;
-    recentProjects?: RecentProject[];
-    onOpenRecent?: (recent: RecentProject) => void;
-    onClearRecent?: () => void;
+  onCreateProject: () => void;
+  onImportProject: () => void;
+  onQuickCreate?: (width: number, height: number) => void;
+  recentProjects?: RecentProject[];
+  onOpenRecent?: (recent: RecentProject) => void;
+  onClearRecent?: () => void;
 }
 
-export const Home: React.FC<HomeProps> = ({ 
-    onCreateProject, 
-    onImportProject,
-    recentProjects = [],
-    onOpenRecent,
-    onClearRecent
+const QUICK_PRESETS = [
+  { label: '16×16', hint: 'Icon', w: 16, h: 16 },
+  { label: '32×32', hint: 'Sprite', w: 32, h: 32 },
+  { label: '64×64', hint: 'Tile', w: 64, h: 64 },
+];
+
+export const Home: React.FC<HomeProps> = ({
+  onCreateProject,
+  onImportProject,
+  onQuickCreate,
+  recentProjects = [],
+  onOpenRecent,
+  onClearRecent,
 }) => {
-    return (
-        <div className="flex-1 bg-background flex items-center justify-center text-foreground select-none h-full p-4 md:p-8">
-            <div className="max-w-4xl w-full flex flex-col md:flex-row bg-card border border-border rounded-2xl shadow-2xl overflow-hidden h-full md:h-[600px]">
-                {/* Left Sidebar / Branding */}
-                <div className="w-full md:w-1/3 bg-muted/30 p-6 md:p-8 flex flex-col border-b md:border-b-0 md:border-r border-border">
-                    <div className="flex items-center gap-3 mb-8 md:mb-12">
-                        <div className="w-10 h-10 bg-primary rounded-lg shadow-sm flex items-center justify-center text-primary-foreground">
-                            <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-                                <path d="M4 4h4v4H4zm4 4h4v4H8zm4 4h4v4h-4zm4 4h4v4h-4z" />
-                            </svg>
-                        </div>
-                        <div>
-                            <h1 className="text-xl font-bold tracking-tight">PixelForge</h1>
-                            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Studio</p>
-                        </div>
-                    </div>
-                    
-                    <div className="flex flex-col gap-2 mb-8 md:mb-0 md:flex-1">
-                        <button 
-                            onClick={onCreateProject}
-                            className="flex items-center gap-3 px-4 py-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors font-medium text-sm shadow-sm"
-                        >
-                            <Plus size={18} />
-                            New Project
-                        </button>
-                        <button 
-                            onClick={onImportProject}
-                            className="flex items-center gap-3 px-4 py-3 bg-transparent text-foreground hover:bg-accent rounded-lg transition-colors font-medium text-sm"
-                        >
-                            <FolderOpen size={18} />
-                            Open Project...
-                        </button>
-                    </div>
-
-                    <div className="hidden md:flex flex-col gap-2 text-sm text-muted-foreground mt-auto">
-                        <a href="#" className="flex items-center gap-3 px-4 py-2 hover:text-foreground hover:bg-accent rounded-lg transition-colors">
-                            <File size={16} /> Documentation
-                        </a>
-                        <a href="#" className="flex items-center gap-3 px-4 py-2 hover:text-foreground hover:bg-accent rounded-lg transition-colors">
-                            <Github size={16} /> GitHub
-                        </a>
-                        <a href="#" className="flex items-center gap-3 px-4 py-2 hover:text-foreground hover:bg-accent rounded-lg transition-colors">
-                            <Settings size={16} /> Settings
-                        </a>
-                    </div>
-                </div>
-
-                {/* Right Content / Recent Files */}
-                <div className="w-full md:w-2/3 p-6 md:p-8 flex flex-col bg-card flex-1 min-h-0">
-                    <div className="flex items-center justify-between gap-2 mb-4 text-muted-foreground">
-                        <div className="flex items-center gap-2">
-                            <History size={18} />
-                            <h2 className="text-sm font-semibold tracking-wide uppercase">Recent Files</h2>
-                        </div>
-                        {recentProjects.length > 0 && onClearRecent && (
-                            <button
-                                onClick={onClearRecent}
-                                className="text-xs text-muted-foreground hover:text-destructive flex items-center gap-1.5 transition-colors px-2 py-1 rounded hover:bg-destructive/10"
-                                title="Clear recent projects list"
-                            >
-                                <Trash2 size={12} />
-                                <span>Clear</span>
-                            </button>
-                        )}
-                    </div>
-                    
-                    {recentProjects.length === 0 ? (
-                        <div className="flex-1 flex flex-col items-center justify-center text-center border-2 border-dashed border-border rounded-xl bg-muted/10 p-6">
-                            <div className="w-16 h-16 bg-muted rounded-full flex items-center justify-center mb-4 text-muted-foreground">
-                                <ImageIcon size={32} opacity={0.5} />
-                            </div>
-                            <h3 className="text-lg font-medium text-foreground mb-1">No recent projects</h3>
-                            <p className="text-sm text-muted-foreground max-w-xs">
-                                Create a new project or open an existing file to get started.
-                            </p>
-                            <div className="flex gap-3 mt-6">
-                                <button 
-                                    onClick={onCreateProject}
-                                    className="px-4 py-2 bg-accent text-foreground hover:bg-accent/80 rounded-md text-sm font-medium transition-colors"
-                                >
-                                    Create New
-                                </button>
-                                <button 
-                                    onClick={onImportProject}
-                                    className="px-4 py-2 bg-accent text-foreground hover:bg-accent/80 rounded-md text-sm font-medium transition-colors"
-                                >
-                                    Browse Files
-                                </button>
-                            </div>
-                        </div>
-                    ) : (
-                        <div className="flex-1 overflow-y-auto space-y-2 pr-1">
-                            {recentProjects.map((p) => (
-                                <button
-                                    key={p.id}
-                                    onClick={() => onOpenRecent && onOpenRecent(p)}
-                                    className="w-full text-left p-3 rounded-xl border border-border/60 hover:border-primary/50 hover:bg-accent/40 active:bg-accent transition-all flex items-center justify-between group"
-                                >
-                                    <div className="flex items-center gap-3 min-w-0">
-                                        <div className="w-9 h-9 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shrink-0 group-hover:bg-primary group-hover:text-primary-foreground transition-colors">
-                                            <ImageIcon size={18} />
-                                        </div>
-                                        <div className="min-w-0">
-                                            <div className="text-sm font-semibold text-foreground truncate group-hover:text-primary transition-colors">
-                                                {p.title}
-                                            </div>
-                                            <div className="text-xs text-muted-foreground font-mono flex items-center gap-2">
-                                                <span>{p.width} × {p.height}</span>
-                                                <span>•</span>
-                                                <span className="flex items-center gap-1 font-sans">
-                                                    <Clock size={11} />
-                                                    {new Date(p.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-                                                </span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <span className="text-xs text-muted-foreground group-hover:text-foreground shrink-0 font-medium px-2 py-1 rounded bg-secondary/50 group-hover:bg-primary/20">
-                                        Open
-                                    </span>
-                                </button>
-                            ))}
-                        </div>
-                    )}
-                </div>
+  return (
+    <div className="flex h-full flex-1 items-center justify-center overflow-y-auto bg-canvas p-4 text-foreground select-none md:p-8">
+      <div className="flex w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-border-strong bg-card shadow-2xl md:h-[540px] md:flex-row">
+        {/* Left Column: Actions & Quick Start */}
+        <div className="flex w-full shrink-0 flex-col justify-between border-b border-border bg-muted/25 p-6 md:w-72 md:border-b-0 md:border-r">
+          <div>
+            <div className="mb-6 flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+                <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5" aria-hidden="true">
+                  <path d="M4 4h4v4H4zm4 4h4v4H8zm4 4h4v4h-4zm4 4h4v4h-4z" />
+                </svg>
+              </div>
+              <div>
+                <h1 className="text-base font-semibold tracking-tight text-foreground">
+                  PixelForge Studio
+                </h1>
+                <p className="text-xs text-muted-foreground">Pixel art & sprite animation</p>
+              </div>
             </div>
+
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={onCreateProject}
+                className="flex h-9 items-center gap-2.5 rounded-md bg-primary px-3.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Plus size={15} />
+                <span>New Canvas...</span>
+              </button>
+              <button
+                type="button"
+                onClick={onImportProject}
+                className="flex h-9 items-center gap-2.5 rounded-md border border-border bg-background/60 px-3.5 text-xs font-medium text-foreground transition-colors hover:border-border-strong hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <FolderOpen size={15} className="text-muted-foreground" />
+                <span>Open File...</span>
+              </button>
+            </div>
+
+            {onQuickCreate && (
+              <div className="mt-6">
+                <div className="mb-2 text-[11px] font-medium text-muted-foreground">
+                  Quick start
+                </div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {QUICK_PRESETS.map((preset) => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      onClick={() => onQuickCreate(preset.w, preset.h)}
+                      className="flex flex-col items-center rounded-md border border-border bg-background/50 px-2 py-2 text-center transition-colors hover:border-primary/50 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <span className="font-mono text-xs font-medium text-foreground tabular-nums">
+                        {preset.label}
+                      </span>
+                      <span className="text-[11px] text-muted-foreground">{preset.hint}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="hidden pt-4 text-[11px] text-muted-foreground md:block">
+            Supports <span className="font-mono text-foreground/80">.aseprite</span>,{' '}
+            <span className="font-mono text-foreground/80">.png</span>,{' '}
+            <span className="font-mono text-foreground/80">.gif</span>
+          </div>
         </div>
-    );
+
+        {/* Right Column: Recent Files */}
+        <div className="flex min-h-0 flex-1 flex-col bg-card p-6">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-xs font-semibold text-foreground">Recent Files</h2>
+            {recentProjects.length > 0 && onClearRecent && (
+              <button
+                type="button"
+                onClick={onClearRecent}
+                className="flex items-center gap-1 rounded-sm px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-destructive/15 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Trash2 size={12} />
+                <span>Clear</span>
+              </button>
+            )}
+          </div>
+
+          {recentProjects.length === 0 ? (
+            <div className="flex flex-1 flex-col items-center justify-center rounded-lg border border-dashed border-border bg-background/40 p-6 text-center">
+              <ImageIcon size={28} className="mb-2.5 text-muted-foreground/50" />
+              <p className="text-sm font-medium text-foreground">No recent projects</p>
+              <p className="mt-1 max-w-xs text-xs text-muted-foreground">
+                Create a new canvas or open an existing Aseprite or image file to begin.
+              </p>
+            </div>
+          ) : (
+            <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
+              {recentProjects.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => onOpenRecent?.(p)}
+                  className="group flex w-full items-center justify-between gap-3 rounded-lg border border-border bg-background/40 px-3 py-2.5 text-left transition-colors hover:border-border-strong hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-muted text-muted-foreground transition-colors group-hover:text-foreground">
+                      <ImageIcon size={15} />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-medium text-foreground">
+                        {p.title}
+                      </div>
+                      <div className="mt-0.5 flex items-center gap-2 font-mono text-[11px] text-muted-foreground tabular-nums">
+                        <span>
+                          {p.width}×{p.height}
+                        </span>
+                        <span>·</span>
+                        <span>
+                          {new Date(p.timestamp).toLocaleDateString(undefined, {
+                            month: 'short',
+                            day: 'numeric',
+                          })}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <span className="shrink-0 text-[11px] font-medium text-muted-foreground transition-colors group-hover:text-primary">
+                    Open
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 };

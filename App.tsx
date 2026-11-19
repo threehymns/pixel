@@ -2,7 +2,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Position } from './types';
 import { CommandPalette } from './components/CommandPalette';
-import { TooltipProvider } from './components/ui/tooltip';
 import { NewProjectDialog } from './components/NewProjectDialog';
 import { CanvasResizeDialog } from './components/CanvasResizeDialog';
 import { ReferenceImageDialog } from './components/ReferenceImageDialog';
@@ -232,79 +231,77 @@ export default function App() {
   };
 
   return (
-    <TooltipProvider>
-      <div className="flex flex-col h-screen bg-background text-foreground select-none overflow-hidden">
-        <CommandPalette 
-          isOpen={isCmdPaletteOpen} 
-          onClose={() => setIsCmdPaletteOpen(false)} 
-          commands={commands} 
-        />
-        
-        <NewProjectDialog
-          isOpen={isNewProjectDialogOpen}
-          onClose={() => setIsNewProjectDialogOpen(false)}
-          onCreate={project.createProject}
-          existingProjectCount={project.projects.length}
-        />
+    <div className="flex flex-col h-screen bg-background text-foreground select-none overflow-hidden">
+      <CommandPalette 
+        isOpen={isCmdPaletteOpen} 
+        onClose={() => setIsCmdPaletteOpen(false)} 
+        commands={commands} 
+      />
+      
+      <NewProjectDialog
+        isOpen={isNewProjectDialogOpen}
+        onClose={() => setIsNewProjectDialogOpen(false)}
+        onCreate={project.createProject}
+        existingProjectCount={project.projects.length}
+      />
 
-        <CanvasResizeDialog
-          isOpen={isResizeCanvasDialogOpen}
-          onClose={() => setIsResizeCanvasDialogOpen(false)}
-          currentWidth={state.width}
-          currentHeight={state.height}
-          onResize={project.resizeCanvas}
+      <CanvasResizeDialog
+        isOpen={isResizeCanvasDialogOpen}
+        onClose={() => setIsResizeCanvasDialogOpen(false)}
+        currentWidth={state.width}
+        currentHeight={state.height}
+        onResize={project.resizeCanvas}
+      />
+
+      <ReferenceImageDialog
+          isOpen={isReferenceImageDialogOpen}
+          onClose={() => setIsReferenceImageDialogOpen(false)}
+          referenceImage={state.referenceImage}
+          onUpdate={project.setReferenceImage}
+      />
+
+      <ExportDialog
+        isOpen={exportDialog.isOpen}
+        onClose={() => setExportDialog(prev => ({ ...prev, isOpen: false }))}
+        state={state}
+        initialFormat={exportDialog.initialFormat}
+      />
+
+      <SpritePropertiesDialog
+        isOpen={isSpritePropertiesOpen}
+        onClose={() => setIsSpritePropertiesOpen(false)}
+        state={state}
+        onUpdateSpriteProperties={project.updateSpriteProperties}
+      />
+
+
+      <SlicesDialog
+        isOpen={isSlicesOpen}
+        onClose={() => setIsSlicesOpen(false)}
+        state={state}
+        onUpdateSlices={project.updateSlices}
+      />
+
+      <OutlineDialog
+        isOpen={isOutlineDialogOpen}
+        onClose={() => setIsOutlineDialogOpen(false)}
+        state={state}
+        onPreview={handleOutlinePreview}
+        onConfirm={handleOutlineConfirm}
+        onCancel={handleOutlineCancel}
+      />
+
+      {isMobile ? (
+        <MobileLayout 
+          {...sharedProps} 
+          onScalePixels={canvasTools.handleScalePixels}
         />
-
-        <ReferenceImageDialog
-            isOpen={isReferenceImageDialogOpen}
-            onClose={() => setIsReferenceImageDialogOpen(false)}
-            referenceImage={state.referenceImage}
-            onUpdate={project.setReferenceImage}
+      ) : (
+        <DesktopLayout 
+          {...sharedProps} 
+          onScalePixels={canvasTools.handleScalePixels}
         />
-
-        <ExportDialog
-          isOpen={exportDialog.isOpen}
-          onClose={() => setExportDialog(prev => ({ ...prev, isOpen: false }))}
-          state={state}
-          initialFormat={exportDialog.initialFormat}
-        />
-
-        <SpritePropertiesDialog
-          isOpen={isSpritePropertiesOpen}
-          onClose={() => setIsSpritePropertiesOpen(false)}
-          state={state}
-          onUpdateSpriteProperties={project.updateSpriteProperties}
-        />
-
-
-        <SlicesDialog
-          isOpen={isSlicesOpen}
-          onClose={() => setIsSlicesOpen(false)}
-          state={state}
-          onUpdateSlices={project.updateSlices}
-        />
-
-        <OutlineDialog
-          isOpen={isOutlineDialogOpen}
-          onClose={() => setIsOutlineDialogOpen(false)}
-          state={state}
-          onPreview={handleOutlinePreview}
-          onConfirm={handleOutlineConfirm}
-          onCancel={handleOutlineCancel}
-        />
-
-        {isMobile ? (
-          <MobileLayout 
-            {...sharedProps} 
-            onScalePixels={canvasTools.handleScalePixels}
-          />
-        ) : (
-          <DesktopLayout 
-            {...sharedProps} 
-            onScalePixels={canvasTools.handleScalePixels}
-          />
-        )}
-      </div>
-    </TooltipProvider>
+      )}
+    </div>
   );
 }

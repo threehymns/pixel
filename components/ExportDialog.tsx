@@ -7,23 +7,28 @@ import {
   downloadBlob,
 } from '../utils/exportUtils';
 import { encodeAseprite } from '../utils/aseprite';
+import { ModalShell } from './ui/dialog';
+import { Input } from './ui/input';
 import { CustomSlider } from './ui/slider';
+import { StudioSelect } from './ui/select';
 import {
-  X,
+  SegmentedControl,
+  SegmentedControlIndicator,
+  SegmentedControlItem,
+} from './ui/segmented-control';
+import {
   Download,
   Play,
   Pause,
   SkipBack,
   SkipForward,
-  Image as ImageIcon,
+  ImageIcon,
   Film,
-  Grid as GridIcon,
-  Sparkles,
+  GridIcon,
   Loader2,
   Layers,
-  FileCode,
-  Check,
-} from 'lucide-react';
+} from './Icons';
+import { cn } from '../lib/utils';
 
 export type ExportFormat = 'png' | 'gif' | 'spritesheet' | 'aseprite';
 
@@ -40,38 +45,39 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
   state,
   initialFormat = 'gif',
 }) => {
-  if (!isOpen) return null;
-
   const [format, setFormat] = useState<ExportFormat>(initialFormat);
-  const [scale, setScale] = useState<number>(8); // Default 8x scale for crisp pixel art
+  const [scale, setScale] = useState<number>(8);
   const [filename, setFilename] = useState<string>(state.title || 'pixel-art');
 
-  // Background options
   const [bgType, setBgType] = useState<'transparent' | 'color'>('transparent');
   const [bgColor, setBgColor] = useState<string>('#ffffff');
 
-  // Single PNG options
   const [pngFrameIndex, setPngFrameIndex] = useState<number>(state.activeFrameIndex);
 
-  // GIF options
   const [fps, setFps] = useState<number>(10);
-  const [gifLoop, setGifLoop] = useState<number>(0); // 0 = infinite
+  const [gifLoop] = useState<number>(0);
   const [frameRange, setFrameRange] = useState<'all' | 'current' | 'selected'>('all');
 
-  // Sprite Sheet options
-  const [columns, setColumns] = useState<number>(0); // 0 = 1 horizontal row
+  const [columns, setColumns] = useState<number>(0);
 
-  // Preview state for GIF
   const [isPlaying, setIsPlaying] = useState<boolean>(true);
   const [previewFrame, setPreviewFrame] = useState<number>(0);
 
-  // Export progress
   const [isExporting, setIsExporting] = useState<boolean>(false);
   const [exportProgress, setExportProgress] = useState<number>(0);
 
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Target frames calculation based on frameRange
+  useEffect(() => {
+    if (!isOpen) return;
+    setFormat(initialFormat);
+    setFilename(state.title || 'pixel-art');
+    setPngFrameIndex(state.activeFrameIndex);
+    setPreviewFrame(0);
+    setIsExporting(false);
+    setExportProgress(0);
+  }, [isOpen, initialFormat, state.title, state.activeFrameIndex]);
+
   const targetFrames = useMemo(() => {
     if (frameRange === 'current') {
       return [state.activeFrameIndex];
@@ -86,30 +92,25 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
     return state.frames.map((_, i) => i);
   }, [frameRange, state.activeFrameIndex, state.selectedFrameIndices, state.frames]);
 
-  // Handle animation timer for GIF live preview
   useEffect(() => {
-    if (format !== 'gif' || !isPlaying || targetFrames.length <= 1) return;
+    if (!isOpen || format !== 'gif' || !isPlaying || targetFrames.length <= 1) return;
 
     const intervalMs = 1000 / Math.max(1, fps);
     const timer = setInterval(() => {
-      setPreviewFrame((prev) => {
-        const next = (prev + 1) % targetFrames.length;
-        return next;
-      });
+      setPreviewFrame((prev) => (prev + 1) % targetFrames.length);
     }, intervalMs);
 
     return () => clearInterval(timer);
-  }, [format, isPlaying, fps, targetFrames.length]);
+  }, [isOpen, format, isPlaying, fps, targetFrames.length]);
 
-  // Keep previewFrame in bounds if targetFrames changes
   useEffect(() => {
     if (previewFrame >= targetFrames.length) {
       setPreviewFrame(0);
     }
-  }, [targetFrames.length]);
+  }, [previewFrame, targetFrames.length]);
 
-  // Render Live Preview to preview Canvas
   useEffect(() => {
+    if (!isOpen) return;
     const canvas = previewCanvasRef.current;
     if (!canvas) return;
 
@@ -157,6 +158,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
       ctx.drawImage(rendered, 0, 0);
     }
   }, [
+    isOpen,
     format,
     scale,
     bgType,
@@ -168,17 +170,23 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
     state,
   ]);
 
-  // Dimensions display
+  const frameSelectOptions = useMemo(
+    () =>
+      state.frames.map((_, i) => ({
+        value: String(i),
+        label: `Frame ${i + 1}${i === state.activeFrameIndex ? ' (Active)' : ''}`,
+      })),
+    [state.frames, state.activeFrameIndex]
+  );
+
   const getDimensionsText = (): string => {
     const w = state.width * scale;
     const h = state.height * scale;
-
     if (format === 'spritesheet') {
       const cols = columns > 0 ? columns : targetFrames.length;
       const rows = Math.ceil(targetFrames.length / Math.max(1, cols));
-      return `${cols * w} × ${rows * h} px (${targetFrames.length} frames)`;
+      return `${cols * w} × ${rows * h} px (${targetFrames.length}f)`;
     }
-
     return `${w} × ${h} px`;
   };
 
@@ -248,482 +256,376 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
     return '.png';
   };
 
+  const formatOptions: {
+    id: ExportFormat;
+    label: string;
+    desc: string;
+    icon: React.ReactNode;
+  }[] = [
+    { id: 'gif', label: 'Animated GIF', desc: 'Looping animation', icon: <Film size={14} /> },
+    { id: 'png', label: 'Single Frame', desc: 'Crisp PNG image', icon: <ImageIcon size={14} /> },
+    { id: 'spritesheet', label: 'Sprite Sheet', desc: 'Frame grid strip', icon: <GridIcon size={14} /> },
+    { id: 'aseprite', label: 'Aseprite (.ase)', desc: 'Layers & slices', icon: <Layers size={14} /> },
+  ];
+
   return (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-xs p-3 sm:p-4 animate-in fade-in-0 duration-150"
-      onClick={(e) => {
-        if (e.target === e.currentTarget && !isExporting) onClose();
+    <ModalShell
+      open={isOpen}
+      onClose={() => {
+        if (!isExporting) onClose();
       }}
-    >
-      <div
-        className="w-full max-w-[720px] max-h-[88vh] bg-popover text-popover-foreground border border-border shadow-2xl rounded-2xl overflow-hidden flex flex-col text-xs outline-none select-none relative animate-in zoom-in-95 duration-150"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-border/60 bg-muted/20 shrink-0">
-          <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-lg bg-primary/10 flex items-center justify-center text-primary shrink-0">
-              <Download size={15} />
-            </div>
-            <div>
-              <h2 className="text-xs sm:text-sm font-semibold tracking-tight text-foreground">
-                Export Canvas Project
-              </h2>
-              <p className="text-[10px] sm:text-[11px] text-muted-foreground">
-                Export pixel art as PNG, Animated GIF, Sprite Sheet, or Aseprite file
-              </p>
-            </div>
-          </div>
+      title="Export Project"
+      subtitle="PNG, Animated GIF, Sprite Sheet, or Aseprite"
+      maxWidthClassName="max-w-2xl"
+      bodyClassName="flex flex-col gap-4"
+      footer={
+        <>
           <button
             type="button"
             onClick={onClose}
             disabled={isExporting}
-            className="w-6 h-6 flex items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:opacity-40"
+            className="h-7 rounded-md px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
           >
-            <X size={14} />
+            Cancel
           </button>
-        </div>
-
-        {/* Content Body */}
-        <div className="p-4 sm:p-5 flex flex-col gap-4 overflow-y-auto custom-scrollbar flex-1 min-h-0">
-          {/* Format Selector Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={isExporting}
+            className="flex h-7 items-center gap-1.5 rounded-md bg-primary px-3.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+          >
+            {isExporting ? (
+              <>
+                <Loader2 size={13} className="animate-spin" />
+                <span>Exporting...</span>
+              </>
+            ) : (
+              <>
+                <Download size={13} />
+                <span>Download {format.toUpperCase()}</span>
+              </>
+            )}
+          </button>
+        </>
+      }
+    >
+      {/* Format Selector */}
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {formatOptions.map((opt) => {
+          const active = format === opt.id;
+          return (
             <button
+              key={opt.id}
               type="button"
-              onClick={() => setFormat('gif')}
-              className={`flex flex-col items-start p-2.5 rounded-xl border text-left transition-all ${
-                format === 'gif'
-                  ? 'bg-primary/10 border-primary text-foreground font-semibold shadow-2xs'
-                  : 'bg-muted/20 border-border/40 text-muted-foreground hover:text-foreground hover:bg-muted/50'
-              }`}
+              onClick={() => setFormat(opt.id)}
+              className={cn(
+                'flex flex-col items-start rounded-lg border p-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                active
+                  ? 'border-primary/70 bg-primary/10 text-foreground'
+                  : 'border-border bg-background/50 text-muted-foreground hover:border-border-strong hover:text-foreground'
+              )}
             >
-              <div className="flex items-center gap-1.5 mb-1">
-                <Film size={15} className={format === 'gif' ? 'text-primary' : ''} />
-                <span className="text-xs font-semibold">Animated GIF</span>
+              <div className="mb-1 flex items-center gap-1.5">
+                <span className={active ? 'text-primary' : 'text-muted-foreground'}>
+                  {opt.icon}
+                </span>
+                <span className="text-xs font-medium text-foreground">{opt.label}</span>
               </div>
-              <span className="text-[10px] text-muted-foreground leading-tight">
-                Looping frame animation
-              </span>
+              <span className="text-[11px] leading-tight text-muted-foreground">{opt.desc}</span>
             </button>
+          );
+        })}
+      </div>
 
-            <button
-              type="button"
-              onClick={() => setFormat('png')}
-              className={`flex flex-col items-start p-2.5 rounded-xl border text-left transition-all ${
-                format === 'png'
-                  ? 'bg-primary/10 border-primary text-foreground font-semibold shadow-2xs'
-                  : 'bg-muted/20 border-border/40 text-muted-foreground hover:text-foreground hover:bg-muted/50'
-              }`}
-            >
-              <div className="flex items-center gap-1.5 mb-1">
-                <ImageIcon size={15} className={format === 'png' ? 'text-primary' : ''} />
-                <span className="text-xs font-semibold">Single Frame</span>
-              </div>
-              <span className="text-[10px] text-muted-foreground leading-tight">
-                High quality PNG image
+      {/* Settings & Live Preview */}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-12">
+        {/* Settings Column */}
+        <div className="flex flex-col gap-3 md:col-span-7">
+          {/* Scale */}
+          <div className="flex flex-col gap-2 rounded-lg border border-border bg-background/50 p-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-foreground">Export Scale</span>
+              <span className="font-mono text-[11px] font-medium text-primary tabular-nums">
+                {scale}× ({state.width * scale}×{state.height * scale} px)
               </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setFormat('spritesheet')}
-              className={`flex flex-col items-start p-2.5 rounded-xl border text-left transition-all ${
-                format === 'spritesheet'
-                  ? 'bg-primary/10 border-primary text-foreground font-semibold shadow-2xs'
-                  : 'bg-muted/20 border-border/40 text-muted-foreground hover:text-foreground hover:bg-muted/50'
-              }`}
-            >
-              <div className="flex items-center gap-1.5 mb-1">
-                <GridIcon
-                  size={15}
-                  className={format === 'spritesheet' ? 'text-primary' : ''}
-                />
-                <span className="text-xs font-semibold">Sprite Sheet</span>
-              </div>
-              <span className="text-[10px] text-muted-foreground leading-tight">
-                Grid of frame strip
-              </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setFormat('aseprite')}
-              className={`flex flex-col items-start p-2.5 rounded-xl border text-left transition-all ${
-                format === 'aseprite'
-                  ? 'bg-primary/10 border-primary text-foreground font-semibold shadow-2xs'
-                  : 'bg-muted/20 border-border/40 text-muted-foreground hover:text-foreground hover:bg-muted/50'
-              }`}
-            >
-              <div className="flex items-center gap-1.5 mb-1">
-                <Layers
-                  size={15}
-                  className={format === 'aseprite' ? 'text-primary' : ''}
-                />
-                <span className="text-xs font-semibold">Aseprite (.ase)</span>
-              </div>
-              <span className="text-[10px] text-muted-foreground leading-tight">
-                Native layer & slice data
-              </span>
-            </button>
+            </div>
+            <div className="grid grid-cols-6 gap-1">
+              {[1, 2, 4, 8, 16, 32].map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setScale(s)}
+                  className={cn(
+                    'h-7 rounded-md border font-mono text-[11px] font-medium transition-colors tabular-nums',
+                    scale === s
+                      ? 'border-primary bg-primary text-primary-foreground'
+                      : 'border-border bg-card text-muted-foreground hover:border-border-strong hover:text-foreground'
+                  )}
+                >
+                  {s}×
+                </button>
+              ))}
+            </div>
+            <CustomSlider
+              min={1}
+              max={32}
+              step={1}
+              value={scale}
+              onValueChange={setScale}
+              aria-label="Export scale"
+            />
           </div>
 
-          {/* Controls & Preview Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
-            {/* Left Column: Settings (7 cols) */}
-            <div className="md:col-span-7 flex flex-col gap-3">
-              {/* Output Resolution / Scale */}
-              <div className="p-2.5 bg-muted/30 border border-border/40 rounded-xl flex flex-col gap-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-foreground">Export Scale</span>
-                  <span className="font-mono text-primary text-[10px] bg-primary/10 px-2 py-0.5 rounded-md font-semibold">
-                    {scale}x ({state.width * scale}×{state.height * scale} px)
-                  </span>
-                </div>
-                <div className="grid grid-cols-6 gap-1">
-                  {[1, 2, 4, 8, 16, 32].map((s) => (
-                    <button
-                      key={s}
-                      type="button"
-                      onClick={() => setScale(s)}
-                      className={`py-1 text-[11px] font-mono font-medium rounded-md border transition-all ${
-                        scale === s
-                          ? 'bg-primary text-primary-foreground border-primary font-bold shadow-2xs'
-                          : 'bg-background border-border/60 text-muted-foreground hover:text-foreground'
-                      }`}
-                    >
-                      {s}x
-                    </button>
-                  ))}
-                </div>
-                <CustomSlider
-                  min={1}
-                  max={32}
-                  step={1}
-                  value={scale}
-                  onValueChange={(val) => setScale(val)}
+          {/* Background */}
+          <div className="flex flex-col gap-2 rounded-lg border border-border bg-background/50 p-3">
+            <span className="text-xs font-medium text-foreground">Background</span>
+            <SegmentedControl<'transparent' | 'color'>
+              value={bgType}
+              onValueChange={(next) => next && setBgType(next as 'transparent' | 'color')}
+              aria-label="Export background"
+            >
+              <SegmentedControlIndicator />
+              <SegmentedControlItem value="transparent">
+                <span className="checkerboard-alpha h-3 w-3 rounded-xs border border-border-strong" />
+                <span>Transparent</span>
+              </SegmentedControlItem>
+              <SegmentedControlItem value="color">
+                <span
+                  className="h-3 w-3 rounded-xs border border-border-strong"
+                  style={{ backgroundColor: bgColor }}
                 />
-              </div>
+                <span>Solid Color</span>
+              </SegmentedControlItem>
+            </SegmentedControl>
 
-              {/* Background Option */}
-              <div className="p-2.5 bg-muted/30 border border-border/40 rounded-xl flex flex-col gap-2">
-                <span className="text-xs font-medium text-foreground">Background</span>
-                <div className="grid grid-cols-2 gap-2">
+            {bgType === 'color' && (
+              <div className="flex items-center gap-1.5 pt-1">
+                {['#ffffff', '#000000', '#1e293b', '#10b981', '#3b82f6'].map((color) => (
                   <button
+                    key={color}
                     type="button"
-                    onClick={() => setBgType('transparent')}
-                    className={`flex items-center justify-center gap-2 py-1.5 px-2.5 rounded-lg border text-xs font-medium transition-all ${
-                      bgType === 'transparent'
-                        ? 'bg-primary/10 border-primary text-primary font-semibold'
-                        : 'bg-background border-border/60 text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    <div className="w-3.5 h-3.5 rounded border border-border bg-[radial-gradient(#888_1px,transparent_1px)] [background-size:5px_5px]" />
-                    <span>Transparent</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setBgType('color')}
-                    className={`flex items-center justify-center gap-2 py-1.5 px-2.5 rounded-lg border text-xs font-medium transition-all ${
-                      bgType === 'color'
-                        ? 'bg-primary/10 border-primary text-primary font-semibold'
-                        : 'bg-background border-border/60 text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    <div
-                      className="w-3.5 h-3.5 rounded border border-border shadow-2xs shrink-0"
-                      style={{ backgroundColor: bgColor }}
-                    />
-                    <span>Solid Color</span>
-                  </button>
-                </div>
-
-                {bgType === 'color' && (
-                  <div className="flex items-center gap-1.5 pt-1 animate-in fade-in duration-150">
-                    {['#ffffff', '#000000', '#1e293b', '#10b981', '#3b82f6'].map((color) => (
-                      <button
-                        key={color}
-                        type="button"
-                        onClick={() => setBgColor(color)}
-                        className={`w-5 h-5 rounded-md border shadow-2xs transition-transform active:scale-95 ${
-                          bgColor === color
-                            ? 'ring-2 ring-primary ring-offset-1 scale-105'
-                            : 'border-border/60'
-                        }`}
-                        style={{ backgroundColor: color }}
-                      />
-                    ))}
-                    <div className="flex items-center gap-1 bg-background border border-border rounded-md px-1.5 py-0.5 ml-auto">
-                      <input
-                        type="color"
-                        value={bgColor}
-                        onChange={(e) => setBgColor(e.target.value)}
-                        className="w-4 h-4 rounded cursor-pointer border-0 bg-transparent p-0"
-                        title="Custom Color"
-                      />
-                      <span className="text-[10px] font-mono text-muted-foreground uppercase">
-                        {bgColor}
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Format-Specific Options */}
-              {format === 'gif' && (
-                <div className="p-2.5 bg-muted/30 border border-border/40 rounded-xl flex flex-col gap-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-medium text-foreground">Frame Rate</span>
-                    <span className="font-mono text-[10px] text-muted-foreground">
-                      {fps} FPS ({Math.round(1000 / fps)}ms)
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-5 gap-1">
-                    {[1, 6, 10, 12, 24].map((f) => (
-                      <button
-                        key={f}
-                        type="button"
-                        onClick={() => setFps(f)}
-                        className={`py-1 text-[10px] font-mono font-medium rounded-md border transition-all ${
-                          fps === f
-                            ? 'bg-primary text-primary-foreground border-primary font-bold shadow-2xs'
-                            : 'bg-background border-border/60 text-muted-foreground hover:text-foreground'
-                        }`}
-                      >
-                        {f} FPS
-                      </button>
-                    ))}
-                  </div>
-                  <CustomSlider
-                    min={1}
-                    max={30}
-                    step={1}
-                    value={fps}
-                    onValueChange={(val) => setFps(val)}
-                  />
-
-                  <div className="flex flex-col gap-1 pt-1.5 border-t border-border/40">
-                    <span className="text-[11px] font-medium text-muted-foreground">
-                      Frame Range
-                    </span>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setFrameRange('all')}
-                        className={`py-1 px-2 rounded-md border text-center text-xs font-medium transition-all ${
-                          frameRange === 'all'
-                            ? 'bg-primary/10 border-primary text-primary font-semibold'
-                            : 'bg-background border-border/60 text-muted-foreground hover:text-foreground'
-                        }`}
-                      >
-                        All Frames ({state.frames.length})
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setFrameRange('current')}
-                        className={`py-1 px-2 rounded-md border text-center text-xs font-medium transition-all ${
-                          frameRange === 'current'
-                            ? 'bg-primary/10 border-primary text-primary font-semibold'
-                            : 'bg-background border-border/60 text-muted-foreground hover:text-foreground'
-                        }`}
-                      >
-                        Active Frame (# {state.activeFrameIndex + 1})
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {format === 'png' && (
-                <div className="p-2.5 bg-muted/30 border border-border/40 rounded-xl flex flex-col gap-1.5">
-                  <span className="text-xs font-medium text-foreground">Frame Selection</span>
-                  <select
-                    value={pngFrameIndex}
-                    onChange={(e) => setPngFrameIndex(Number(e.target.value))}
-                    className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-xs font-medium text-foreground outline-none focus:ring-1 focus:ring-primary"
-                  >
-                    {state.frames.map((_, i) => (
-                      <option key={i} value={i}>
-                        Frame {i + 1}{' '}
-                        {i === state.activeFrameIndex ? '(Current Active)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              {format === 'spritesheet' && (
-                <div className="p-2.5 bg-muted/30 border border-border/40 rounded-xl flex flex-col gap-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-medium text-foreground">Layout Columns</span>
-                    <span className="font-mono text-[10px] text-muted-foreground">
-                      {columns === 0 ? 'Horizontal Strip' : `${columns} Cols`}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-4 gap-1">
-                    {[0, 2, 4, 8].map((c) => (
-                      <button
-                        key={c}
-                        type="button"
-                        onClick={() => setColumns(c)}
-                        className={`py-1 text-[10px] font-mono font-medium rounded-md border transition-all ${
-                          columns === c
-                            ? 'bg-primary text-primary-foreground border-primary font-bold shadow-2xs'
-                            : 'bg-background border-border/60 text-muted-foreground hover:text-foreground'
-                        }`}
-                      >
-                        {c === 0 ? 'Strip' : `${c} Cols`}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* File Name */}
-              <div className="flex flex-col gap-1">
-                <label className="text-[11px] font-medium text-muted-foreground">
-                  File Name
-                </label>
-                <div className="flex items-center bg-background border border-border rounded-md px-2.5 py-1 text-xs">
-                  <input
-                    type="text"
-                    value={filename}
-                    onChange={(e) => setFilename(e.target.value)}
-                    className="flex-1 bg-transparent text-foreground outline-none font-medium text-xs"
-                    placeholder="pixel-art"
-                  />
-                  <span className="text-muted-foreground/70 font-mono text-[10px] font-semibold ml-1.5">
-                    {getExtension()}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Right Column: Live Interactive Preview (5 cols) */}
-            <div className="md:col-span-5 flex flex-col bg-muted/20 border border-border/40 rounded-xl p-3 relative min-h-[220px]">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                  Live Preview
-                </span>
-                <span className="text-[10px] font-mono text-primary bg-primary/10 px-1.5 py-0.5 rounded font-medium">
-                  {getDimensionsText()}
-                </span>
-              </div>
-
-              {/* Canvas Box */}
-              <div className="flex-1 min-h-[160px] flex items-center justify-center relative rounded-lg border border-border/50 overflow-hidden bg-[radial-gradient(#444_1px,transparent_1px)] [background-size:10px_10px] bg-background/50 p-2">
-                <canvas
-                  ref={previewCanvasRef}
-                  className="max-w-full max-h-[170px] object-contain shadow-md rounded"
-                  style={{ imageRendering: 'pixelated' }}
-                />
-
-                {isExporting && (
-                  <div className="absolute inset-0 bg-background/85 backdrop-blur-xs flex flex-col items-center justify-center p-3 z-20 space-y-2 animate-in fade-in-0">
-                    <Loader2 size={24} className="animate-spin text-primary" />
-                    <span className="text-xs font-semibold text-foreground">
-                      Generating {format.toUpperCase()}...
-                    </span>
-                    {format === 'gif' && (
-                      <div className="w-3/4 bg-muted rounded-full h-1.5 overflow-hidden border border-border/40">
-                        <div
-                          className="bg-primary h-full transition-all duration-100"
-                          style={{ width: `${exportProgress}%` }}
-                        />
-                      </div>
+                    aria-label={`Background color ${color}`}
+                    onClick={() => setBgColor(color)}
+                    className={cn(
+                      'h-5 w-5 rounded-md border transition-transform active:scale-95',
+                      bgColor === color
+                        ? 'scale-105 border-foreground ring-2 ring-primary ring-offset-1 ring-offset-background'
+                        : 'border-border-strong'
                     )}
-                    <span className="text-[10px] font-mono text-muted-foreground">
-                      {exportProgress}% Completed
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              {/* Animation Playback Controls for GIF */}
-              {format === 'gif' && targetFrames.length > 1 && (
-                <div className="flex items-center justify-between mt-2 pt-2 border-t border-border/40">
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setPreviewFrame(
-                          (prev) => (prev - 1 + targetFrames.length) % targetFrames.length
-                        )
-                      }
-                      className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                      title="Previous Frame"
-                    >
-                      <SkipBack size={13} />
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setIsPlaying(!isPlaying)}
-                      className="p-1 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 shadow-2xs transition-colors"
-                      title={isPlaying ? 'Pause Preview' : 'Play Preview'}
-                    >
-                      {isPlaying ? <Pause size={13} /> : <Play size={13} />}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setPreviewFrame((prev) => (prev + 1) % targetFrames.length)
-                      }
-                      className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                      title="Next Frame"
-                    >
-                      <SkipForward size={13} />
-                    </button>
-                  </div>
-
-                  <span className="text-[10px] font-mono text-muted-foreground">
-                    Frame {previewFrame + 1} / {targetFrames.length}
+                    style={{ backgroundColor: color }}
+                  />
+                ))}
+                <label className="ml-auto flex cursor-pointer items-center gap-1.5 rounded-md border border-border bg-card px-2 py-0.5">
+                  <input
+                    type="color"
+                    value={bgColor}
+                    onChange={(e) => setBgColor(e.target.value)}
+                    aria-label="Custom background color"
+                    className="h-4 w-4 cursor-pointer border-0 bg-transparent p-0"
+                  />
+                  <span className="font-mono text-[11px] uppercase text-muted-foreground">
+                    {bgColor}
                   </span>
-                </div>
-              )}
+                </label>
+              </div>
+            )}
+          </div>
+
+          {/* GIF Options */}
+          {format === 'gif' && (
+            <div className="flex flex-col gap-2 rounded-lg border border-border bg-background/50 p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-foreground">Frame Rate</span>
+                <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+                  {fps} FPS ({Math.round(1000 / fps)}ms)
+                </span>
+              </div>
+              <div className="grid grid-cols-5 gap-1">
+                {[1, 6, 10, 12, 24].map((f) => (
+                  <button
+                    key={f}
+                    type="button"
+                    onClick={() => setFps(f)}
+                    className={cn(
+                      'h-7 rounded-md border font-mono text-[11px] font-medium transition-colors tabular-nums',
+                      fps === f
+                        ? 'border-primary bg-primary text-primary-foreground'
+                        : 'border-border bg-card text-muted-foreground hover:border-border-strong hover:text-foreground'
+                    )}
+                  >
+                    {f} FPS
+                  </button>
+                ))}
+              </div>
+              <CustomSlider
+                min={1}
+                max={30}
+                step={1}
+                value={fps}
+                onValueChange={setFps}
+                aria-label="GIF frame rate"
+              />
+
+              <div className="flex flex-col gap-1.5 border-t border-border pt-2">
+                <span className="text-[11px] font-medium text-muted-foreground">Frame Range</span>
+                <SegmentedControl<'all' | 'current'>
+                  value={frameRange === 'current' ? 'current' : 'all'}
+                  onValueChange={(next) => next && setFrameRange(next as 'all' | 'current')}
+                  aria-label="GIF frame range"
+                >
+                  <SegmentedControlIndicator />
+                  <SegmentedControlItem value="all">
+                    All ({state.frames.length})
+                  </SegmentedControlItem>
+                  <SegmentedControlItem value="current">
+                    Active (#{state.activeFrameIndex + 1})
+                  </SegmentedControlItem>
+                </SegmentedControl>
+              </div>
+            </div>
+          )}
+
+          {/* PNG Options */}
+          {format === 'png' && (
+            <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-background/50 p-3">
+              <span className="text-xs font-medium text-foreground">Frame Selection</span>
+              <StudioSelect
+                value={String(pngFrameIndex)}
+                options={frameSelectOptions}
+                onValueChange={(val) => setPngFrameIndex(Number(val))}
+                aria-label="Select frame to export"
+              />
+            </div>
+          )}
+
+          {/* Sprite Sheet Options */}
+          {format === 'spritesheet' && (
+            <div className="flex flex-col gap-2 rounded-lg border border-border bg-background/50 p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-foreground">Layout Columns</span>
+                <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+                  {columns === 0 ? 'Horizontal Strip' : `${columns} Cols`}
+                </span>
+              </div>
+              <div className="grid grid-cols-4 gap-1">
+                {[0, 2, 4, 8].map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setColumns(c)}
+                    className={cn(
+                      'h-7 rounded-md border font-mono text-[11px] font-medium transition-colors tabular-nums',
+                      columns === c
+                        ? 'border-primary bg-primary text-primary-foreground'
+                        : 'border-border bg-card text-muted-foreground hover:border-border-strong hover:text-foreground'
+                    )}
+                  >
+                    {c === 0 ? 'Strip' : `${c} Cols`}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* File Name */}
+          <div className="flex flex-col gap-1">
+            <label
+              htmlFor="export-filename-input"
+              className="text-[11px] font-medium text-muted-foreground"
+            >
+              File Name
+            </label>
+            <div className="flex h-8 items-center rounded-md border border-border bg-background px-2.5 focus-within:border-primary focus-within:ring-2 focus-within:ring-ring/40">
+              <Input
+                id="export-filename-input"
+                type="text"
+                value={filename}
+                onChange={(e) => setFilename(e.target.value)}
+                placeholder="pixel-art"
+                className="h-full border-0 bg-transparent px-0 focus-visible:ring-0"
+              />
+              <span className="ml-1.5 font-mono text-[11px] font-medium text-muted-foreground">
+                {getExtension()}
+              </span>
             </div>
           </div>
         </div>
 
-        {/* Footer */}
-        <div className="flex items-center justify-between px-4 sm:px-5 py-2.5 border-t border-border/60 bg-muted/20 shrink-0">
-          <div className="hidden sm:flex items-center gap-1.5 text-[10px] text-muted-foreground">
-            <Sparkles size={12} className="text-primary shrink-0" />
-            <span>Preserves visible layers, blend modes, and pixel scale</span>
+        {/* Live Preview Column */}
+        <div className="relative flex min-h-[220px] flex-col rounded-lg border border-border bg-background/50 p-3 md:col-span-5">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-[11px] font-medium text-muted-foreground">Live Preview</span>
+            <span className="font-mono text-[11px] text-primary tabular-nums">
+              {getDimensionsText()}
+            </span>
           </div>
 
-          <div className="flex items-center gap-2 ml-auto">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={isExporting}
-              className="px-3 py-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground transition-colors font-medium text-xs disabled:opacity-40"
-            >
-              Cancel
-            </button>
+          <div className="checkerboard-alpha relative flex min-h-[160px] flex-1 items-center justify-center overflow-hidden rounded-md border border-border p-3">
+            <canvas
+              ref={previewCanvasRef}
+              className="pixelated max-h-[170px] max-w-full object-contain shadow-md"
+            />
 
-            <button
-              type="button"
-              onClick={handleExport}
-              disabled={isExporting}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-primary text-primary-foreground font-medium rounded-lg shadow-xs hover:bg-primary/90 transition-colors text-xs disabled:opacity-50"
-            >
-              {isExporting ? (
-                <>
-                  <Loader2 size={13} className="animate-spin" />
-                  <span>Exporting...</span>
-                </>
-              ) : (
-                <>
-                  <Download size={13} />
-                  <span>Download {format.toUpperCase()}</span>
-                </>
-              )}
-            </button>
+            {isExporting && (
+              <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-background/90 p-3">
+                <Loader2 size={22} className="animate-spin text-primary" />
+                <span className="text-xs font-medium text-foreground">
+                  Generating {format.toUpperCase()}...
+                </span>
+                {format === 'gif' && (
+                  <div className="h-1.5 w-3/4 overflow-hidden rounded-full border border-border bg-muted">
+                    <div
+                      className="h-full bg-primary transition-all duration-100"
+                      style={{ width: `${exportProgress}%` }}
+                    />
+                  </div>
+                )}
+                <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+                  {exportProgress}%
+                </span>
+              </div>
+            )}
           </div>
+
+          {format === 'gif' && targetFrames.length > 1 && (
+            <div className="mt-2 flex items-center justify-between border-t border-border pt-2">
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPreviewFrame(
+                      (prev) => (prev - 1 + targetFrames.length) % targetFrames.length
+                    )
+                  }
+                  aria-label="Previous frame"
+                  className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <SkipBack size={13} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsPlaying(!isPlaying)}
+                  aria-label={isPlaying ? 'Pause preview' : 'Play preview'}
+                  className="flex h-6 w-6 items-center justify-center rounded-sm bg-primary text-primary-foreground transition-colors hover:bg-primary/90"
+                >
+                  {isPlaying ? <Pause size={13} /> : <Play size={13} />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewFrame((prev) => (prev + 1) % targetFrames.length)}
+                  aria-label="Next frame"
+                  className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <SkipForward size={13} />
+                </button>
+              </div>
+              <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+                {previewFrame + 1} / {targetFrames.length}
+              </span>
+            </div>
+          )}
         </div>
       </div>
-    </div>
+    </ModalShell>
   );
 };

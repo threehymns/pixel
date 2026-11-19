@@ -1,12 +1,37 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ProjectState, Layer, LayerBlendMode } from '../types';
-import { 
-  Eye, EyeOff, Lock, Unlock, Plus, Copy, Trash2, GripVertical, Settings, 
-  ChevronDown, ChevronRight, Folder, FolderOpen, FolderPlus, FolderOutput,
-  Layers as LayersIcon, Search, Sliders, ChevronsUpDown, X, Tag
-} from 'lucide-react';
-import { hexToRgb, getLayerParentMap, isLayerVisible, getGroupChildren, getGroupChildCount, isDescendant } from '../utils';
+import {
+  Eye,
+  EyeOff,
+  Lock,
+  Unlock,
+  Plus,
+  Copy,
+  Trash2,
+  GripVertical,
+  Settings,
+  ChevronDown,
+  ChevronRight,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  FolderOutput,
+  Search,
+  Sliders,
+  ChevronsUpDown,
+  X,
+  Tag,
+} from './Icons';
+import {
+  hexToRgb,
+  getLayerParentMap,
+  isLayerVisible,
+  getGroupChildren,
+  isDescendant,
+} from '../utils';
 import { CustomSlider } from './ui/slider';
+import { StudioSelect } from './ui/select';
+import { Input } from './ui/input';
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 import {
   ContextMenu,
@@ -16,26 +41,42 @@ import {
   ContextMenuTrigger,
   ContextMenuSub,
   ContextMenuSubTrigger,
-  ContextMenuSubContent
-} from "./ui/context-menu";
-import { Popover, PopoverAnchor, PopoverContent } from "./ui/popover";
-import { LayerPropertiesDialog } from "./LayerPropertiesDialog";
+  ContextMenuSubContent,
+} from './ui/context-menu';
+import { Popover, PopoverArrow, PopoverContent } from './ui/popover';
+import { LayerPropertiesDialog } from './LayerPropertiesDialog';
 
-const BLEND_MODES: LayerBlendMode[] = [
-  'normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 
-  'color-dodge', 'color-burn', 'hard-light', 'soft-light', 'difference', 
-  'exclusion', 'hue', 'saturation', 'color', 'luminosity', 'addition', 'subtract', 'divide'
+const BLEND_MODE_OPTIONS: { value: LayerBlendMode; label: string }[] = [
+  { value: 'normal', label: 'Normal' },
+  { value: 'multiply', label: 'Multiply' },
+  { value: 'screen', label: 'Screen' },
+  { value: 'overlay', label: 'Overlay' },
+  { value: 'darken', label: 'Darken' },
+  { value: 'lighten', label: 'Lighten' },
+  { value: 'color-dodge', label: 'Color Dodge' },
+  { value: 'color-burn', label: 'Color Burn' },
+  { value: 'hard-light', label: 'Hard Light' },
+  { value: 'soft-light', label: 'Soft Light' },
+  { value: 'difference', label: 'Difference' },
+  { value: 'exclusion', label: 'Exclusion' },
+  { value: 'hue', label: 'Hue' },
+  { value: 'saturation', label: 'Saturation' },
+  { value: 'color', label: 'Color' },
+  { value: 'luminosity', label: 'Luminosity' },
+  { value: 'addition', label: 'Addition' },
+  { value: 'subtract', label: 'Subtract' },
+  { value: 'divide', label: 'Divide' },
 ];
 
 const COLOR_TAGS = [
-  { id: 'red', label: 'Red', hex: '#ef4444', class: 'bg-red-500' },
-  { id: 'orange', label: 'Orange', hex: '#f97316', class: 'bg-orange-500' },
-  { id: 'yellow', label: 'Yellow', hex: '#eab308', class: 'bg-yellow-500' },
-  { id: 'green', label: 'Green', hex: '#22c55e', class: 'bg-green-500' },
-  { id: 'blue', label: 'Blue', hex: '#3b82f6', class: 'bg-blue-500' },
-  { id: 'purple', label: 'Purple', hex: '#a855f7', class: 'bg-purple-500' },
-  { id: 'pink', label: 'Pink', hex: '#ec4899', class: 'bg-pink-500' },
-  { id: 'gray', label: 'Gray', hex: '#6b7280', class: 'bg-gray-500' },
+  { id: 'red', label: 'Red', class: 'bg-red-500' },
+  { id: 'orange', label: 'Orange', class: 'bg-orange-500' },
+  { id: 'yellow', label: 'Yellow', class: 'bg-yellow-500' },
+  { id: 'green', label: 'Green', class: 'bg-green-500' },
+  { id: 'blue', label: 'Blue', class: 'bg-blue-500' },
+  { id: 'purple', label: 'Purple', class: 'bg-purple-500' },
+  { id: 'pink', label: 'Pink', class: 'bg-pink-500' },
+  { id: 'gray', label: 'Gray', class: 'bg-zinc-500' },
 ];
 
 interface LayerThumbnailProps {
@@ -98,24 +139,22 @@ const LayerThumbnail = React.memo<LayerThumbnailProps>(({ pixels, palette, width
       }
       if (packed) data32[i] = packed;
     }
-    
-    tempCtx.putImageData(imgData, 0, 0);
 
+    tempCtx.putImageData(imgData, 0, 0);
     ctx.imageSmoothingEnabled = false;
-    
+
     const scale = Math.min(canvas.width / width, canvas.height / height);
     const w = width * scale;
     const h = height * scale;
     const x = (canvas.width - w) / 2;
     const y = (canvas.height - h) / 2;
-    
-    ctx.drawImage(tempCanvas, 0, 0, width, height, x, y, w, h);
 
+    ctx.drawImage(tempCanvas, 0, 0, width, height, x, y, w, h);
   }, [pixels, palette, width, height]);
 
   return (
-    <div className="w-7 h-7 rounded bg-card border border-border/80 overflow-hidden shrink-0 relative flex items-center justify-center shadow-2xs" style={{ backgroundImage: 'conic-gradient(#18181b 90deg, #27272a 90deg 180deg, #18181b 180deg 270deg, #27272a 270deg)', backgroundSize: '8px 8px' }}>
-      <canvas ref={canvasRef} width={28} height={28} className="w-full h-full object-contain" />
+    <div className="checkerboard-alpha relative flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-sm border border-border">
+      <canvas ref={canvasRef} width={28} height={28} className="pixelated h-full w-full object-contain" />
     </div>
   );
 });
@@ -137,7 +176,7 @@ const GroupThumbnail: React.FC<GroupThumbnailProps> = ({ groupId, state, collaps
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    const children = getGroupChildren(groupId, state.layers).filter(l => l.type !== 'group');
+    const children = getGroupChildren(groupId, state.layers).filter((l) => l.type !== 'group');
     if (children.length === 0) return;
 
     const activeFrame = state.frames[state.activeFrameIndex];
@@ -149,7 +188,7 @@ const GroupThumbnail: React.FC<GroupThumbnailProps> = ({ groupId, state, collaps
     const tempCtx = tempCanvas.getContext('2d');
     if (!tempCtx) return;
 
-    children.forEach(child => {
+    children.forEach((child) => {
       if (!child.visible) return;
       const pixels = activeFrame.layerData[child.id];
       if (!pixels) return;
@@ -165,7 +204,7 @@ const GroupThumbnail: React.FC<GroupThumbnailProps> = ({ groupId, state, collaps
         const [r, g, b] = hexToRgb(color);
         data32[i] = (255 << 24) | (b << 16) | (g << 8) | r;
       }
-      
+
       const layerCanvas = document.createElement('canvas');
       layerCanvas.width = state.width;
       layerCanvas.height = state.height;
@@ -188,10 +227,9 @@ const GroupThumbnail: React.FC<GroupThumbnailProps> = ({ groupId, state, collaps
   }, [groupId, state]);
 
   return (
-    <div className="w-7 h-7 rounded bg-card/80 border border-primary/20 overflow-hidden shrink-0 relative flex items-center justify-center shadow-2xs">
-      <div className="absolute inset-0" style={{ backgroundImage: 'conic-gradient(#18181b 90deg, #27272a 90deg 180deg, #18181b 180deg 270deg, #27272a 270deg)', backgroundSize: '8px 8px', opacity: 0.3 }} />
-      <canvas ref={canvasRef} width={28} height={28} className="w-full h-full object-contain relative z-10" />
-      <div className="absolute top-0 right-0 p-0.5 bg-primary/90 text-primary-foreground rounded-bl z-20">
+    <div className="checkerboard-alpha relative flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-sm border border-primary/40">
+      <canvas ref={canvasRef} width={28} height={28} className="pixelated relative z-10 h-full w-full object-contain" />
+      <div className="absolute top-0 right-0 z-20 rounded-bl bg-primary/90 p-0.5 text-primary-foreground">
         {collapsed ? <Folder size={8} /> : <FolderOpen size={8} />}
       </div>
     </div>
@@ -212,7 +250,11 @@ interface LayersPanelProps {
   onDeleteLayer: (id: string) => void;
   onDuplicateSelectedLayers: () => void;
   onDeleteSelectedLayers: () => void;
-  onReorderLayers: (draggedId: string, targetId: string, position: 'before' | 'after' | 'inside' | 'outside' | 'root-bottom') => void;
+  onReorderLayers: (
+    draggedId: string,
+    targetId: string,
+    position: 'before' | 'after' | 'inside' | 'outside' | 'root-bottom'
+  ) => void;
   onOpenLayerProperties?: (layer: Layer) => void;
   layerPropertiesState?: { isOpen: boolean; layer: Layer | null };
   onCloseLayerProperties?: () => void;
@@ -243,20 +285,21 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   onOpenLayerProperties,
   layerPropertiesState,
   onCloseLayerProperties,
-  className
+  className,
 }) => {
   const [dragState, setDragState] = useState<DragState | null>(null);
   const dragStateRef = useRef<DragState | null>(null);
-  
+  const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const editInputRef = useRef<HTMLInputElement>(null);
-  
+
   const [showOpacity, setShowOpacity] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
-  const activeLayer = state.layers.find(l => l.id === state.activeLayerId);
+  const activeLayer = state.layers.find((l) => l.id === state.activeLayerId);
 
   const startEditing = (layer: Layer) => {
     setEditingId(layer.id);
@@ -273,63 +316,65 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
 
   const handleLayerClick = (e: React.MouseEvent, id: string) => {
     let newSelection = [...state.selectedLayerIds];
-    
+
     if (e.shiftKey) {
-        const allIds = state.layers.map(l => l.id).reverse();
-        const startIdx = allIds.indexOf(state.activeLayerId);
-        const endIdx = allIds.indexOf(id);
-        const range = allIds.slice(Math.min(startIdx, endIdx), Math.max(startIdx, endIdx) + 1);
-        newSelection = Array.from(new Set([...newSelection, ...range]));
+      const allIds = state.layers.map((l) => l.id).reverse();
+      const startIdx = allIds.indexOf(state.activeLayerId);
+      const endIdx = allIds.indexOf(id);
+      const range = allIds.slice(Math.min(startIdx, endIdx), Math.max(startIdx, endIdx) + 1);
+      newSelection = Array.from(new Set([...newSelection, ...range]));
     } else if (e.ctrlKey || e.metaKey) {
-        if (newSelection.includes(id)) {
-            if (newSelection.length > 1) {
-                newSelection = newSelection.filter(sid => sid !== id);
-            }
-        } else {
-            newSelection.push(id);
+      if (newSelection.includes(id)) {
+        if (newSelection.length > 1) {
+          newSelection = newSelection.filter((sid) => sid !== id);
         }
+      } else {
+        newSelection.push(id);
+      }
     } else {
-        newSelection = [id];
+      newSelection = [id];
     }
-    
+
     onSelectLayers(newSelection, id);
   };
 
-  const getDropTarget = (hoveredLayer: Layer, clientY: number, clientX: number, rect: DOMRect): DragState | null => {
-      if (!dragStateRef.current) return null;
-      const draggedId = dragStateRef.current.id;
-      const hoveredId = hoveredLayer.id;
+  const getDropTarget = (
+    hoveredLayer: Layer,
+    clientY: number,
+    clientX: number,
+    rect: DOMRect
+  ): DragState | null => {
+    if (!dragStateRef.current) return null;
+    const draggedId = dragStateRef.current.id;
+    const hoveredId = hoveredLayer.id;
 
-      if (hoveredId === draggedId || isDescendant(hoveredId, draggedId, state.layers)) {
-        return null;
-      }
+    if (hoveredId === draggedId || isDescendant(hoveredId, draggedId, state.layers)) {
+      return null;
+    }
 
-      const height = rect.height;
-      const relativeY = clientY - rect.top;
-      const relativeX = clientX - rect.left;
+    const height = rect.height;
+    const relativeY = clientY - rect.top;
+    const relativeX = clientX - rect.left;
+    const childLevel = hoveredLayer.childLevel ?? 0;
 
-      const childLevel = hoveredLayer.childLevel ?? 0;
+    if (hoveredLayer.parentId && relativeX < Math.max(22, childLevel * 14)) {
+      return { id: draggedId, overId: hoveredId, position: 'outside' };
+    }
 
-      // Un-nesting check: if item is inside a group and mouse is dragged towards the un-indented left margin
-      if (hoveredLayer.parentId && relativeX < Math.max(22, childLevel * 14)) {
-        return { id: draggedId, overId: hoveredId, position: 'outside' };
-      }
-
-      if (hoveredLayer.type === 'group') {
-        if (relativeY < height * 0.25) {
-          return { id: draggedId, overId: hoveredId, position: 'before' };
-        } else if (relativeY > height * 0.75) {
-          return { id: draggedId, overId: hoveredId, position: 'after' };
-        } else {
-          return { id: draggedId, overId: hoveredId, position: 'inside' };
-        }
-      }
-
-      if (relativeY < height * 0.5) {
+    if (hoveredLayer.type === 'group') {
+      if (relativeY < height * 0.25) {
         return { id: draggedId, overId: hoveredId, position: 'before' };
-      } else {
+      } else if (relativeY > height * 0.75) {
         return { id: draggedId, overId: hoveredId, position: 'after' };
+      } else {
+        return { id: draggedId, overId: hoveredId, position: 'inside' };
       }
+    }
+
+    if (relativeY < height * 0.5) {
+      return { id: draggedId, overId: hoveredId, position: 'before' };
+    }
+    return { id: draggedId, overId: hoveredId, position: 'after' };
   };
 
   const handleDragStart = (e: React.DragEvent, id: string) => {
@@ -355,18 +400,25 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
       }
       return;
     }
-    if (dragStateRef.current.overId !== newState.overId || dragStateRef.current.position !== newState.position) {
+    if (
+      dragStateRef.current.overId !== newState.overId ||
+      dragStateRef.current.position !== newState.position
+    ) {
       setDragState(newState);
       dragStateRef.current = newState;
     }
   };
 
-  const handleDrop = (e: React.DragEvent, targetLayer: Layer) => {
+  const handleDrop = (e: React.DragEvent) => {
     if (!dragStateRef.current) return;
     e.preventDefault();
     e.stopPropagation();
     if (dragStateRef.current.overId && dragStateRef.current.id !== dragStateRef.current.overId) {
-        onReorderLayers(dragStateRef.current.id, dragStateRef.current.overId, dragStateRef.current.position);
+      onReorderLayers(
+        dragStateRef.current.id,
+        dragStateRef.current.overId,
+        dragStateRef.current.position
+      );
     }
     setDragState(null);
     dragStateRef.current = null;
@@ -377,7 +429,11 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
     e.preventDefault();
     e.stopPropagation();
     if (dragStateRef.current.overId !== 'root-bottom') {
-      const newState: DragState = { id: dragStateRef.current.id, overId: 'root-bottom', position: 'root-bottom' };
+      const newState: DragState = {
+        id: dragStateRef.current.id,
+        overId: 'root-bottom',
+        position: 'root-bottom',
+      };
       setDragState(newState);
       dragStateRef.current = newState;
     }
@@ -395,472 +451,612 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   };
 
   const isMultiLayer = state.selectedLayerIds.length > 1;
-  const selectedHasGroup = state.selectedLayerIds.some(id => state.layers.find(l => l.id === id)?.type === 'group');
+  const selectedHasGroup = state.selectedLayerIds.some(
+    (id) => state.layers.find((l) => l.id === id)?.type === 'group'
+  );
+
+  const propsLayer = layerPropertiesState?.layer ?? null;
+  const propsAnchorEl = propsLayer ? (rowRefs.current.get(propsLayer.id) ?? null) : null;
 
   return (
-    <div className={`flex flex-col bg-background/50 select-none ${className}`}>
-      {/* Figma/Affinity Pro Header Toolbar */}
-      <div className="px-2.5 py-1.5 flex justify-between items-center border-b border-border/40 bg-card/50 shrink-0">
-        <div className="flex items-center gap-1.5">
-        </div>
+    <div className={`flex flex-col bg-card select-none ${className ?? ''}`}>
+      <div className="flex h-8 shrink-0 items-center justify-between border-b border-border bg-background/50 px-2.5">
+        <span className="font-mono text-[11px] font-medium text-muted-foreground tabular-nums">
+          {isMultiLayer
+            ? `${state.selectedLayerIds.length} selected`
+            : `${state.layers.length} ${state.layers.length === 1 ? 'layer' : 'layers'}`}
+        </span>
 
         <div className="flex items-center gap-0.5">
-            {/* Filter Toggle */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button 
-                  onClick={() => setShowSearch(!showSearch)} 
-                  className={`p-1 rounded transition-colors ${showSearch ? 'text-primary bg-primary/10' : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'}`}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label="Filter Layers"
+                  onClick={() => setShowSearch(!showSearch)}
+                  className={`flex h-6 w-6 items-center justify-center rounded-sm transition-colors ${
+                    showSearch
+                      ? 'bg-primary/15 text-primary'
+                      : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                  }`}
                 >
-                  <Search size={13} />
+                  <Search size={12} />
                 </button>
-              </TooltipTrigger>
-              <TooltipContent side="top">Filter Layers</TooltipContent>
-            </Tooltip>
+              }
+            />
+            <TooltipContent side="top">Filter Layers</TooltipContent>
+          </Tooltip>
 
-            {/* Expand / Collapse All */}
-            {onToggleCollapseAllGroups && state.layers.some(l => l.type === 'group') && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button 
-                    onClick={() => onToggleCollapseAllGroups()} 
-                    className="p-1 text-muted-foreground hover:text-foreground hover:bg-accent/60 rounded transition-colors"
+          {onToggleCollapseAllGroups && state.layers.some((l) => l.type === 'group') && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label="Expand or Collapse All Groups"
+                    onClick={() => onToggleCollapseAllGroups()}
+                    className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                   >
-                    <ChevronsUpDown size={13} />
+                    <ChevronsUpDown size={12} />
                   </button>
-                </TooltipTrigger>
-                <TooltipContent side="top">Expand / Collapse All Groups</TooltipContent>
-              </Tooltip>
-            )}
+                }
+              />
+              <TooltipContent side="top">Expand / Collapse Groups</TooltipContent>
+            </Tooltip>
+          )}
 
-            {/* Group Selected Layers */}
-            {onGroupSelectedLayers && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button 
-                    onClick={onGroupSelectedLayers} 
-                    className="p-1 text-muted-foreground hover:text-foreground hover:bg-accent/60 rounded transition-colors"
+          {onGroupSelectedLayers && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label={isMultiLayer ? 'Group Selected' : 'New Group'}
+                    onClick={onGroupSelectedLayers}
+                    className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                   >
-                    <FolderPlus size={13} />
+                    <FolderPlus size={12} />
                   </button>
-                </TooltipTrigger>
-                <TooltipContent side="top">{isMultiLayer ? "Group Selected (Ctrl+G)" : "New Group"}</TooltipContent>
-              </Tooltip>
-            )}
+                }
+              />
+              <TooltipContent side="top">
+                {isMultiLayer ? 'Group Selected (Ctrl+G)' : 'New Group'}
+              </TooltipContent>
+            </Tooltip>
+          )}
 
-            {/* Ungroup Selected */}
-            {onUngroupSelectedLayers && selectedHasGroup && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button 
-                    onClick={onUngroupSelectedLayers} 
-                    className="p-1 text-muted-foreground hover:text-foreground hover:bg-accent/60 rounded transition-colors"
+          {onUngroupSelectedLayers && selectedHasGroup && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label="Ungroup Selected"
+                    onClick={onUngroupSelectedLayers}
+                    className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                   >
-                    <FolderOutput size={13} />
+                    <FolderOutput size={12} />
                   </button>
-                </TooltipTrigger>
-                <TooltipContent side="top">Ungroup Selected (Ctrl+Shift+G)</TooltipContent>
-              </Tooltip>
-            )}
-
-            {/* Opacity & Blend Toggle */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button 
-                    onClick={() => setShowOpacity(!showOpacity)} 
-                    className={`p-1 transition-colors rounded ${showOpacity ? 'text-primary bg-primary/10' : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'}`}
-                >
-                    <Sliders size={13} />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="top">Blend Mode & Opacity</TooltipContent>
+                }
+              />
+              <TooltipContent side="top">Ungroup Selected (Ctrl+Shift+G)</TooltipContent>
             </Tooltip>
+          )}
 
-            {/* Duplicate */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button 
-                    onClick={() => isMultiLayer ? onDuplicateSelectedLayers() : onDuplicateLayer(state.activeLayerId)} 
-                    className="p-1 text-muted-foreground hover:text-foreground hover:bg-accent/60 rounded transition-colors"
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label="Blend Mode and Opacity"
+                  onClick={() => setShowOpacity(!showOpacity)}
+                  className={`flex h-6 w-6 items-center justify-center rounded-sm transition-colors ${
+                    showOpacity
+                      ? 'bg-primary/15 text-primary'
+                      : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                  }`}
                 >
-                    <Copy size={13} />
+                  <Sliders size={12} />
                 </button>
-              </TooltipTrigger>
-              <TooltipContent side="top">Duplicate Selected</TooltipContent>
-            </Tooltip>
+              }
+            />
+            <TooltipContent side="top">Blend Mode &amp; Opacity</TooltipContent>
+          </Tooltip>
 
-            {/* Delete */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button 
-                    onClick={() => isMultiLayer ? onDeleteSelectedLayers() : onDeleteLayer(state.activeLayerId)} 
-                    className="p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors"
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label="Duplicate Selected Layer"
+                  onClick={() =>
+                    isMultiLayer ? onDuplicateSelectedLayers() : onDuplicateLayer(state.activeLayerId)
+                  }
+                  className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 >
-                    <Trash2 size={13} />
+                  <Copy size={12} />
                 </button>
-              </TooltipTrigger>
-              <TooltipContent side="top">Delete Selected</TooltipContent>
-            </Tooltip>
+              }
+            />
+            <TooltipContent side="top">Duplicate Layer</TooltipContent>
+          </Tooltip>
 
-            {/* Add Layer */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button onClick={onAddLayer} className="p-1 text-primary hover:bg-primary/10 rounded transition-colors">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label="Delete Selected Layer"
+                  onClick={() =>
+                    isMultiLayer ? onDeleteSelectedLayers() : onDeleteLayer(state.activeLayerId)
+                  }
+                  className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-destructive/15 hover:text-destructive"
+                >
+                  <Trash2 size={12} />
+                </button>
+              }
+            />
+            <TooltipContent side="top">Delete Layer</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label="Add New Layer"
+                  onClick={onAddLayer}
+                  className="flex h-6 w-6 items-center justify-center rounded-sm text-primary transition-colors hover:bg-primary/15"
+                >
                   <Plus size={14} />
                 </button>
-              </TooltipTrigger>
-              <TooltipContent side="top">Add New Layer</TooltipContent>
-            </Tooltip>
+              }
+            />
+            <TooltipContent side="top">New Layer</TooltipContent>
+          </Tooltip>
         </div>
       </div>
 
-      {/* Filter / Search Input Bar */}
       {showSearch && (
-        <div className="px-2 py-1.5 border-b border-border/40 bg-accent/20 flex items-center gap-1.5 animate-in slide-in-from-top-1 duration-150">
-          <Search size={12} className="text-muted-foreground shrink-0" />
-          <input
+        <div className="flex items-center gap-1.5 border-b border-border bg-background/40 px-2 py-1.5">
+          <Search size={12} className="shrink-0 text-muted-foreground" />
+          <Input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Filter layers by name..."
-            className="w-full bg-background/80 text-foreground px-2 py-0.5 text-[10px] rounded border border-border/60 outline-none focus:ring-1 focus:ring-primary font-medium"
+            placeholder="Filter layers..."
             autoFocus
+            className="h-6 flex-1 px-2 text-[11px]"
           />
           {searchQuery && (
-            <button onClick={() => setSearchQuery('')} className="text-muted-foreground hover:text-foreground p-0.5">
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              aria-label="Clear filter"
+              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
               <X size={12} />
             </button>
           )}
         </div>
       )}
 
-      {/* Opacity & Blend Mode Foldable Toolbar */}
       {showOpacity && activeLayer && (
-        <div className="px-2.5 py-2 border-b border-border/40 bg-card/30 flex flex-col gap-2 animate-in slide-in-from-top-1 duration-200">
-            <div className="flex flex-col gap-1.5">
-                <div className="flex justify-between items-center">
-                    <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider">Blend Mode</span>
-                    <select 
-                        value={activeLayer.blendMode}
-                        onChange={(e) => onUpdateLayer(activeLayer.id, { blendMode: e.target.value as LayerBlendMode })}
-                        className="bg-background border border-border/80 rounded px-1.5 py-0.5 text-[10px] outline-none focus:ring-1 focus:ring-primary h-5 capitalize font-medium text-foreground"
-                    >
-                        {BLEND_MODES.map(m => <option key={m} value={m}>{m.replace('-', ' ')}</option>)}
-                    </select>
-                </div>
-                
-                <div className="flex justify-between items-center">
-                    <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider">Opacity</span>
-                    <span className="text-[9px] font-mono font-medium text-primary">{activeLayer.opacity}%</span>
-                </div>
-                <CustomSlider
-                    value={activeLayer.opacity}
-                    onValueChange={(val) => onUpdateLayer(activeLayer.id, { opacity: val })}
-                    min={0}
-                    max={100}
-                    className="h-4"
-                />
+        <div className="flex flex-col gap-2 border-b border-border bg-background/40 px-2.5 py-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-medium text-muted-foreground">Blend</span>
+            <StudioSelect<LayerBlendMode>
+              value={activeLayer.blendMode || 'normal'}
+              options={BLEND_MODE_OPTIONS}
+              onValueChange={(mode) => onUpdateLayer(activeLayer.id, { blendMode: mode })}
+              className="h-6 w-36 text-[11px]"
+              aria-label="Active layer blend mode"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-medium text-muted-foreground">Opacity</span>
+              <span className="font-mono text-[11px] font-medium text-foreground tabular-nums">
+                {activeLayer.opacity}%
+              </span>
             </div>
+            <CustomSlider
+              value={activeLayer.opacity}
+              onValueChange={(val) => onUpdateLayer(activeLayer.id, { opacity: val })}
+              min={0}
+              max={100}
+              aria-label="Active layer opacity"
+              className="h-4"
+            />
+          </div>
         </div>
       )}
 
-      {/* Layer Tree List Container */}
+      {/* Single Shared Popover for Layer Properties */}
+      <Popover
+        open={!!(layerPropertiesState?.isOpen && propsLayer && propsAnchorEl)}
+        onOpenChange={(open) => {
+          if (!open && onCloseLayerProperties) onCloseLayerProperties();
+        }}
+      >
+        <PopoverContent
+          anchor={propsAnchorEl}
+          align="center"
+          side="left"
+          sideOffset={10}
+          collisionPadding={16}
+          initialFocus="none"
+          className="w-auto p-3.5"
+        >
+          <PopoverArrow />
+          {propsLayer && (
+            <LayerPropertiesDialog
+              isOpen={true}
+              onClose={() => onCloseLayerProperties?.()}
+              layer={propsLayer}
+              onUpdateLayer={onUpdateLayer}
+              isEmbedded
+            />
+          )}
+        </PopoverContent>
+      </Popover>
+
       <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <div 
-            onDragOver={handleContainerDragOver}
-            onDrop={handleContainerDrop}
-            className="flex-1 overflow-y-auto custom-scrollbar p-1.5 space-y-0.5"
-          >
-            {(() => {
-              const activeFrame = state.frames[state.activeFrameIndex];
-              const parentMap = getLayerParentMap(state.layers);
+        <ContextMenuTrigger
+          render={
+            <div
+              onDragOver={handleContainerDragOver}
+              onDrop={handleContainerDrop}
+              tabIndex={0}
+              className="flex-1 space-y-0.5 overflow-y-auto p-1.5 outline-none"
+            >
+              {(() => {
+                const activeFrame = state.frames[state.activeFrameIndex];
+                const parentMap = getLayerParentMap(state.layers);
 
-              const isCollapsed = (layer: Layer) => {
-                let curr: Layer | undefined = layer;
-                const visited = new Set<string>();
-                while (curr) {
-                  if (visited.has(curr.id)) break;
-                  visited.add(curr.id);
-                  const parent = parentMap.get(curr.id) || (curr.parentId ? state.layers.find(l => l.id === curr?.parentId) : undefined);
-                  if (parent) {
-                    if (parent.collapsed) return true;
-                    curr = parent;
-                  } else {
-                    break;
+                const isCollapsed = (layer: Layer) => {
+                  let curr: Layer | undefined = layer;
+                  const visited = new Set<string>();
+                  while (curr) {
+                    if (visited.has(curr.id)) break;
+                    visited.add(curr.id);
+                    const parent =
+                      parentMap.get(curr.id) ||
+                      (curr.parentId ? state.layers.find((l) => l.id === curr?.parentId) : undefined);
+                    if (parent) {
+                      if (parent.collapsed) return true;
+                      curr = parent;
+                    } else {
+                      break;
+                    }
                   }
+                  return false;
+                };
+
+                let displayLayers = state.layers.slice().reverse();
+                if (searchQuery.trim()) {
+                  const query = searchQuery.toLowerCase();
+                  displayLayers = displayLayers.filter((l) => l.name.toLowerCase().includes(query));
                 }
-                return false;
-              };
 
-              let displayLayers = state.layers.slice().reverse();
+                return (
+                  <>
+                    {displayLayers.map((layer) => {
+                      if (!searchQuery && isCollapsed(layer)) return null;
 
-              if (searchQuery.trim()) {
-                const query = searchQuery.toLowerCase();
-                displayLayers = displayLayers.filter(l => l.name.toLowerCase().includes(query));
-              }
+                      const isDragging = dragState?.id === layer.id;
+                      const isOver = dragState?.overId === layer.id;
+                      const isActive = state.activeLayerId === layer.id;
+                      const isSelected = state.selectedLayerIds.includes(layer.id);
+                      const effectiveVis = isLayerVisible(layer, state.layers, parentMap);
+                      const childLevel = Math.min(layer.childLevel ?? 0, 5);
+                      const isGroup = layer.type === 'group';
+                      const colorTagObj = COLOR_TAGS.find((t) => t.id === layer.colorTag);
+                      const showUtilityActions = isActive || isSelected || layer.locked;
 
-              return (
-                <>
-                  {displayLayers.map((layer) => {
-                    if (!searchQuery && isCollapsed(layer)) return null;
-
-                    const isDragging = dragState?.id === layer.id;
-                    const isOver = dragState?.overId === layer.id;
-                    const isActive = state.activeLayerId === layer.id;
-                    const isSelected = state.selectedLayerIds.includes(layer.id);
-                    const effectiveVis = isLayerVisible(layer, state.layers, parentMap);
-                    const childLevel = Math.min(layer.childLevel ?? 0, 5);
-                    const isGroup = layer.type === 'group';
-                    const childCount = isGroup ? getGroupChildCount(layer.id, state.layers) : 0;
-                    const colorTagObj = COLOR_TAGS.find(t => t.id === layer.colorTag);
-
-                    const isPopoverOpen = !!(layerPropertiesState?.isOpen && layerPropertiesState?.layer?.id === layer.id);
-
-                    return (
-                      <Popover
-                        key={layer.id}
-                        open={isPopoverOpen}
-                        onOpenChange={(open) => {
-                          if (!open && onCloseLayerProperties) onCloseLayerProperties();
-                        }}
-                      >
-                        <ContextMenu>
-                          <ContextMenuTrigger asChild>
-                            <PopoverAnchor asChild>
-                              <div 
-                                  draggable={!editingId}
-                            onDragStart={(e) => handleDragStart(e, layer.id)}
-                            onDragOver={(e) => { e.stopPropagation(); handleDragOver(e, layer); }}
-                            onDrop={(e) => { e.stopPropagation(); handleDrop(e, layer); }}
-                            onDragEnd={() => { setDragState(null); dragStateRef.current = null; }}
-                            onClick={(e) => handleLayerClick(e, layer.id)}
-                            onDoubleClick={() => startEditing(layer)}
-                            className={`
-                                flex items-center h-8 gap-1.5 px-2 rounded-md relative transition-all cursor-default group/item
-                                ${isGroup ? 'font-semibold text-foreground/90' : 'text-foreground/80'}
-                                ${isActive ? 'bg-primary/15 shadow-2xs border border-primary/40 text-foreground font-semibold' : isSelected ? 'bg-secondary/60 border border-border/50' : 'bg-transparent border border-transparent hover:bg-accent/40'}
-                                ${isDragging ? 'opacity-30' : ''}
-                            `}
-                            style={{ marginLeft: `${childLevel * 14}px` }}
-                        >
-                            {/* Color Tag Strip */}
-                            {colorTagObj && (
-                              <div className={`absolute left-0 top-1 bottom-1 w-1 rounded-r ${colorTagObj.class}`} />
-                            )}
-
-                            {/* Tree Guideline for Indented Children */}
-                            {childLevel > 0 && (
-                              <div className="absolute left-0 top-0 bottom-0 pointer-events-none -ml-2.5 flex items-center">
-                                <div className="w-[1px] h-full bg-border/40" />
-                              </div>
-                            )}
-
-                            {/* Drop Target Lines (Figma Style) */}
-                            {isOver && dragState?.position === 'before' && (
-                                <div className="absolute top-0 left-0 right-0 h-[2px] bg-primary z-50 pointer-events-none rounded-full flex items-center">
-                                  <div className="w-1.5 h-1.5 rounded-full bg-primary -ml-1" />
-                                </div>
-                            )}
-                            {isOver && dragState?.position === 'after' && (
-                                <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-primary z-50 pointer-events-none rounded-full flex items-center">
-                                  <div className="w-1.5 h-1.5 rounded-full bg-primary -ml-1" />
-                                </div>
-                            )}
-                            {isOver && dragState?.position === 'inside' && (
-                                <div className="absolute inset-0 border-2 border-primary/80 bg-primary/10 rounded-md pointer-events-none z-50 flex items-center justify-end pr-2 shadow-xs">
-                                  <span className="text-[9px] font-bold text-primary-foreground bg-primary px-1.5 py-0.5 rounded">
-                                    Nest inside Group
-                                  </span>
-                                </div>
-                            )}
-                            {isOver && dragState?.position === 'outside' && (
-                                <div 
-                                  className="absolute bottom-0 h-[2px] bg-primary z-50 pointer-events-none rounded-full flex items-center shadow-xs"
-                                  style={{ left: `-${childLevel * 14}px`, right: 0 }}
-                                >
-                                  <div className="w-1.5 h-1.5 rounded-full bg-primary -ml-1" />
-                                  <span className="absolute right-1 bottom-1 text-[8.5px] font-bold text-primary bg-background border border-primary/40 px-1 py-0.2 rounded shadow-2xs">
-                                    Move Outside Group
-                                  </span>
-                                </div>
-                            )}
-
-                            {/* Collapse/Expand chevron for groups */}
-                            {isGroup ? (
-                                <button
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        onUpdateLayer(layer.id, { collapsed: !layer.collapsed });
-                                    }}
-                                    className="p-0.5 text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-all shrink-0"
-                                >
-                                    {layer.collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
-                                </button>
-                            ) : (
-                              <div className="w-3.5 shrink-0" />
-                            )}
-
-                            {/* Vis Toggle */}
-                            <button 
-                                onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { visible: !layer.visible }); }}
-                                className={`p-0.5 rounded transition-colors shrink-0 ${!layer.visible ? 'text-muted-foreground/30 hover:text-muted-foreground hover:bg-accent' : !effectiveVis ? 'text-muted-foreground/30 hover:text-muted-foreground hover:bg-accent' : isActive ? 'text-primary hover:bg-primary/20' : 'text-muted-foreground hover:text-foreground hover:bg-accent'}`}
-                                title={layer.visible && !effectiveVis ? "Hidden by parent group" : undefined}
-                            >
-                                {layer.visible && effectiveVis ? <Eye size={13} /> : <EyeOff size={13} />}
-                            </button>
-
-                            {/* Thumbnail or Group Icon */}
-                            {isGroup ? (
-                                <GroupThumbnail groupId={layer.id} state={state} collapsed={!!layer.collapsed} />
-                            ) : (
-                                <LayerThumbnail 
-                                    pixels={activeFrame?.layerData[layer.id]} 
-                                    palette={state.palette} 
-                                    width={state.width} 
-                                    height={state.height} 
-                                />
-                            )}
-
-                            <div className="flex-1 min-w-0 flex items-center gap-1.5">
-                                {editingId === layer.id ? (
-                                    <input
-                                        ref={editInputRef}
-                                        value={editName}
-                                        autoFocus
-                                        onChange={(e) => setEditName(e.target.value)}
-                                        onBlur={saveEditing}
-                                        onKeyDown={(e) => { if (e.key === 'Enter') saveEditing(); if (e.key === 'Escape') setEditingId(null); }}
-                                        className="w-full bg-background text-foreground px-1 py-0 text-[10px] rounded outline-none border border-primary focus:ring-0 font-medium"
-                                        onClick={(e) => e.stopPropagation()}
-                                    />
-                                ) : (
-                                    <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                                      <span className={`truncate text-[10.5px] ${isGroup ? 'font-semibold text-foreground' : isActive ? 'text-foreground font-semibold' : 'text-foreground/80 group-hover/item:text-foreground transition-colors'}`}>
-                                          {layer.name}
-                                      </span>
-
-                                    </div>
-                                )}
-                            </div>
-
-                            {/* Lock Toggle */}
-                            <button 
-                                onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { locked: !layer.locked }); }}
-                                className={`p-0.5 rounded transition-colors ${!layer.locked ? 'text-muted-foreground/40 hover:text-foreground hover:bg-accent opacity-0 group-hover/item:opacity-100' : 'text-primary hover:bg-primary/20 opacity-100'}`}
-                                title={layer.locked ? "Unlock Layer" : "Lock Layer"}
-                            >
-                                {layer.locked ? <Lock size={11} /> : <Unlock size={11} />}
-                            </button>
-
-                            {/* Settings / Layer Properties button */}
-                            {onOpenLayerProperties && (
-                              <button
-                                onClick={(e) => { e.stopPropagation(); onOpenLayerProperties(layer); }}
-                                className="p-0.5 rounded transition-colors text-muted-foreground/40 hover:text-foreground hover:bg-accent opacity-0 group-hover/item:opacity-100"
-                                title="Layer Properties"
+                      return (
+                        <ContextMenu key={layer.id}>
+                          <ContextMenuTrigger
+                            render={
+                              <div
+                                ref={(el) => {
+                                  if (el) rowRefs.current.set(layer.id, el);
+                                  else rowRefs.current.delete(layer.id);
+                                }}
+                                draggable={!editingId}
+                                onDragStart={(e) => handleDragStart(e, layer.id)}
+                                onDragOver={(e) => {
+                                  e.stopPropagation();
+                                  handleDragOver(e, layer);
+                                }}
+                                onDrop={(e) => {
+                                  e.stopPropagation();
+                                  handleDrop(e);
+                                }}
+                                onDragEnd={() => {
+                                  setDragState(null);
+                                  dragStateRef.current = null;
+                                }}
+                                onClick={(e) => handleLayerClick(e, layer.id)}
+                                onDoubleClick={() => startEditing(layer)}
+                                className={`group/item relative flex h-9 cursor-default items-center gap-1.5 rounded-md border px-2 transition-colors ${
+                                  isGroup ? 'font-medium text-foreground' : 'text-foreground/85'
+                                } ${
+                                  isActive
+                                    ? 'border-primary/45 bg-primary/15 text-foreground'
+                                    : isSelected
+                                      ? 'border-border bg-secondary/70 text-foreground'
+                                      : 'border-transparent hover:bg-accent/50'
+                                } ${isDragging ? 'opacity-35' : ''}`}
+                                style={{ marginLeft: `${childLevel * 14}px` }}
                               >
-                                <Settings size={11} />
-                              </button>
+                                {colorTagObj && (
+                                  <div
+                                    className={`absolute top-1.5 bottom-1.5 left-0 w-1 rounded-r ${colorTagObj.class}`}
+                                  />
+                                )}
+
+                                {childLevel > 0 && (
+                                  <div className="pointer-events-none absolute top-0 bottom-0 left-0 -ml-2.5 flex items-center">
+                                    <div className="h-full w-px bg-border" />
+                                  </div>
+                                )}
+
+                                {isOver && dragState?.position === 'before' && (
+                                  <div className="pointer-events-none absolute top-0 right-0 left-0 z-50 flex h-0.5 items-center rounded-full bg-primary">
+                                    <div className="-ml-1 h-1.5 w-1.5 rounded-full bg-primary" />
+                                  </div>
+                                )}
+                                {isOver && dragState?.position === 'after' && (
+                                  <div className="pointer-events-none absolute right-0 bottom-0 left-0 z-50 flex h-0.5 items-center rounded-full bg-primary">
+                                    <div className="-ml-1 h-1.5 w-1.5 rounded-full bg-primary" />
+                                  </div>
+                                )}
+                                {isOver && dragState?.position === 'inside' && (
+                                  <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-end rounded-md border-2 border-primary bg-primary/15 pr-2">
+                                    <span className="rounded-xs bg-primary px-1.5 py-0.5 text-[11px] font-medium text-primary-foreground">
+                                      Nest in Group
+                                    </span>
+                                  </div>
+                                )}
+                                {isOver && dragState?.position === 'outside' && (
+                                  <div
+                                    className="pointer-events-none absolute bottom-0 z-50 flex h-0.5 items-center rounded-full bg-primary"
+                                    style={{ left: `-${childLevel * 14}px`, right: 0 }}
+                                  >
+                                    <div className="-ml-1 h-1.5 w-1.5 rounded-full bg-primary" />
+                                  </div>
+                                )}
+
+                                {isGroup ? (
+                                  <button
+                                    type="button"
+                                    aria-label={layer.collapsed ? 'Expand group' : 'Collapse group'}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onUpdateLayer(layer.id, { collapsed: !layer.collapsed });
+                                    }}
+                                    className="shrink-0 rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                                  >
+                                    {layer.collapsed ? (
+                                      <ChevronRight size={13} />
+                                    ) : (
+                                      <ChevronDown size={13} />
+                                    )}
+                                  </button>
+                                ) : (
+                                  <div className="w-3.5 shrink-0" />
+                                )}
+
+                                <button
+                                  type="button"
+                                  aria-label={
+                                    layer.visible && effectiveVis ? 'Hide layer' : 'Show layer'
+                                  }
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onUpdateLayer(layer.id, { visible: !layer.visible });
+                                  }}
+                                  className={`shrink-0 rounded-sm p-1 transition-colors ${
+                                    !layer.visible || !effectiveVis
+                                      ? 'text-muted-foreground/35 hover:bg-accent hover:text-muted-foreground'
+                                      : isActive
+                                        ? 'text-primary hover:bg-primary/20'
+                                        : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                                  }`}
+                                  title={
+                                    layer.visible && !effectiveVis
+                                      ? 'Hidden by parent group'
+                                      : undefined
+                                  }
+                                >
+                                  {layer.visible && effectiveVis ? (
+                                    <Eye size={13} />
+                                  ) : (
+                                    <EyeOff size={13} />
+                                  )}
+                                </button>
+
+                                {isGroup ? (
+                                  <GroupThumbnail
+                                    groupId={layer.id}
+                                    state={state}
+                                    collapsed={!!layer.collapsed}
+                                  />
+                                ) : (
+                                  <LayerThumbnail
+                                    pixels={activeFrame?.layerData[layer.id]}
+                                    palette={state.palette}
+                                    width={state.width}
+                                    height={state.height}
+                                  />
+                                )}
+
+                                <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                                  {editingId === layer.id ? (
+                                    <input
+                                      ref={editInputRef}
+                                      value={editName}
+                                      autoFocus
+                                      onChange={(e) => setEditName(e.target.value)}
+                                      onBlur={saveEditing}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') saveEditing();
+                                        if (e.key === 'Escape') setEditingId(null);
+                                      }}
+                                      className="w-full rounded-sm border border-primary bg-background px-1.5 py-0.5 text-[11px] font-medium text-foreground outline-none"
+                                      onClick={(e) => e.stopPropagation()}
+                                    />
+                                  ) : (
+                                    <span
+                                      className={`truncate text-[11px] ${
+                                        isGroup || isActive
+                                          ? 'font-semibold text-foreground'
+                                          : 'text-foreground/85 group-hover/item:text-foreground'
+                                      }`}
+                                    >
+                                      {layer.name}
+                                    </span>
+                                  )}
+                                </div>
+
+                                <button
+                                  type="button"
+                                  aria-label={layer.locked ? 'Unlock Layer' : 'Lock Layer'}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onUpdateLayer(layer.id, { locked: !layer.locked });
+                                  }}
+                                  className={`rounded-sm p-1 transition-opacity ${
+                                    layer.locked
+                                      ? 'text-primary opacity-100 hover:bg-primary/20'
+                                      : showUtilityActions
+                                        ? 'text-muted-foreground/70 opacity-100 hover:bg-accent hover:text-foreground'
+                                        : 'text-muted-foreground/70 opacity-0 group-hover/item:opacity-100 focus-visible:opacity-100 hover:bg-accent hover:text-foreground'
+                                  }`}
+                                >
+                                  {layer.locked ? <Lock size={12} /> : <Unlock size={12} />}
+                                </button>
+
+                                {onOpenLayerProperties && (
+                                  <button
+                                    type="button"
+                                    aria-label="Layer Properties"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onOpenLayerProperties(layer);
+                                    }}
+                                    className={`rounded-sm p-1 text-muted-foreground/70 transition-opacity hover:bg-accent hover:text-foreground ${
+                                      showUtilityActions
+                                        ? 'opacity-100'
+                                        : 'opacity-0 group-hover/item:opacity-100 focus-visible:opacity-100'
+                                    }`}
+                                  >
+                                    <Settings size={12} />
+                                  </button>
+                                )}
+
+                                <div
+                                  className="cursor-grab p-0.5 text-muted-foreground/40 opacity-0 transition-opacity group-hover/item:opacity-100 hover:text-foreground"
+                                  aria-hidden="true"
+                                >
+                                  <GripVertical size={12} />
+                                </div>
+                              </div>
+                            }
+                          />
+
+                          <ContextMenuContent>
+                            {isGroup && onAddLayerToGroup && (
+                              <ContextMenuItem onSelect={() => onAddLayerToGroup(layer.id)}>
+                                <Plus size={12} className="text-primary" /> Add Layer Inside Group
+                              </ContextMenuItem>
+                            )}
+                            {onGroupSelectedLayers && (
+                              <ContextMenuItem onSelect={onGroupSelectedLayers}>
+                                <FolderPlus size={12} className="text-primary" /> Group Selected
+                                (Ctrl+G)
+                              </ContextMenuItem>
+                            )}
+                            {isGroup && onUngroupSelectedLayers && (
+                              <ContextMenuItem onSelect={onUngroupSelectedLayers}>
+                                <FolderOutput size={12} /> Ungroup (Ctrl+Shift+G)
+                              </ContextMenuItem>
                             )}
 
-                            {/* Dragger */}
-                            <div className="cursor-grab text-muted-foreground/40 hover:text-foreground p-0.5 opacity-0 group-hover/item:opacity-100 transition-opacity">
-                                <GripVertical size={11} />
-                            </div>
-                        </div>
-                      </PopoverAnchor>
-                    </ContextMenuTrigger>
-                      <ContextMenuContent>
-                        {isGroup && onAddLayerToGroup && (
-                          <ContextMenuItem onClick={() => onAddLayerToGroup(layer.id)}>
-                            <Plus size={12} className="mr-1.5 text-primary" /> Add Layer Inside Group
-                          </ContextMenuItem>
-                        )}
-                        {onGroupSelectedLayers && (
-                          <ContextMenuItem onClick={onGroupSelectedLayers}>
-                            <FolderPlus size={12} className="mr-1.5 text-primary" /> Group Selected (Ctrl+G)
-                          </ContextMenuItem>
-                        )}
-                        {isGroup && onUngroupSelectedLayers && (
-                          <ContextMenuItem onClick={onUngroupSelectedLayers}>
-                            <FolderOutput size={12} className="mr-1.5 text-foreground" /> Ungroup (Ctrl+Shift+G)
-                          </ContextMenuItem>
-                        )}
-                        
-                        <ContextMenuSeparator />
+                            <ContextMenuSeparator />
 
-                        {/* Color Tag Submenu */}
-                        <ContextMenuSub>
-                          <ContextMenuSubTrigger>
-                            <Tag size={12} className="mr-1.5 text-primary" /> Color Tag
-                          </ContextMenuSubTrigger>
-                          <ContextMenuSubContent className="w-36">
-                            <ContextMenuItem onClick={() => onUpdateLayer(layer.id, { colorTag: undefined })}>
-                              <span className="w-2.5 h-2.5 rounded-full border border-border mr-2 bg-transparent" /> None
-                            </ContextMenuItem>
-                            {COLOR_TAGS.map(tag => (
-                              <ContextMenuItem key={tag.id} onClick={() => onUpdateLayer(layer.id, { colorTag: tag.id })}>
-                                <span className={`w-2.5 h-2.5 rounded-full mr-2 ${tag.class}`} /> {tag.label}
+                            <ContextMenuSub>
+                              <ContextMenuSubTrigger>
+                                <Tag size={12} className="text-primary" /> Color Tag
+                              </ContextMenuSubTrigger>
+                              <ContextMenuSubContent className="w-36">
+                                <ContextMenuItem
+                                  onSelect={() => onUpdateLayer(layer.id, { colorTag: undefined })}
+                                >
+                                  <span className="h-2.5 w-2.5 rounded-full border border-border bg-transparent" />
+                                  None
+                                </ContextMenuItem>
+                                {COLOR_TAGS.map((tag) => (
+                                  <ContextMenuItem
+                                    key={tag.id}
+                                    onSelect={() => onUpdateLayer(layer.id, { colorTag: tag.id })}
+                                  >
+                                    <span className={`h-2.5 w-2.5 rounded-full ${tag.class}`} />
+                                    {tag.label}
+                                  </ContextMenuItem>
+                                ))}
+                              </ContextMenuSubContent>
+                            </ContextMenuSub>
+
+                            <ContextMenuSeparator />
+
+                            {onOpenLayerProperties && (
+                              <ContextMenuItem onSelect={() => onOpenLayerProperties(layer)}>
+                                <Settings size={12} className="text-muted-foreground" /> Layer
+                                Properties...
                               </ContextMenuItem>
-                            ))}
-                          </ContextMenuSubContent>
-                        </ContextMenuSub>
+                            )}
+                            <ContextMenuItem onSelect={() => startEditing(layer)}>Rename</ContextMenuItem>
+                            <ContextMenuItem onSelect={() => onDuplicateLayer(layer.id)}>
+                              Duplicate
+                            </ContextMenuItem>
+                            <ContextMenuSeparator />
+                            <ContextMenuItem
+                              destructive
+                              onSelect={() => onDeleteLayer(layer.id)}
+                            >
+                              Delete
+                            </ContextMenuItem>
+                          </ContextMenuContent>
+                        </ContextMenu>
+                      );
+                    })}
 
-                        <ContextMenuSeparator />
-
-                        {onOpenLayerProperties && (
-                          <ContextMenuItem onClick={() => onOpenLayerProperties(layer)}>
-                            <Settings size={12} className="mr-1.5 text-muted-foreground" /> Layer Properties...
-                          </ContextMenuItem>
-                        )}
-                        <ContextMenuItem onClick={() => startEditing(layer)}>Rename</ContextMenuItem>
-                        <ContextMenuItem onClick={() => onDuplicateLayer(layer.id)}>Duplicate</ContextMenuItem>
-                        <ContextMenuSeparator />
-                        <ContextMenuItem onClick={() => onDeleteLayer(layer.id)} className="text-destructive focus:text-destructive">Delete</ContextMenuItem>
-                      </ContextMenuContent>
-                    </ContextMenu>
-
-                    {isPopoverOpen && (
-                      <PopoverContent
-                        align="center"
-                        side="left"
-                        sideOffset={12}
-                        collisionPadding={16}
-                        className="p-0 border-none bg-transparent shadow-none outline-none z-[100]"
-                        onOpenAutoFocus={(e) => e.preventDefault()}
-                      >
-                      <LayerPropertiesDialog
-                        isOpen={true}
-                        onClose={() => {
-                          if (onCloseLayerProperties) onCloseLayerProperties();
-                        }}
-                        layer={layer}
-                        onUpdateLayer={onUpdateLayer}
-                        isEmbedded
-                      />
-                    </PopoverContent>
-                  )}
-                </Popover>
-              );
-              })}
-
-              {/* Insertion line at root bottom when dragging past the last item */}
-              {dragState?.overId === 'root-bottom' && (
-                <div className="h-[2px] bg-primary w-full my-1.5 rounded-full relative flex items-center shadow-xs">
-                  <div className="w-1.5 h-1.5 rounded-full bg-primary -ml-1" />
-                </div>
-              )}
-            </>
-          );
-        })()}
-          </div>
-        </ContextMenuTrigger>
+                    {dragState?.overId === 'root-bottom' && (
+                      <div className="relative my-1.5 flex h-0.5 w-full items-center rounded-full bg-primary">
+                        <div className="-ml-1 h-1.5 w-1.5 rounded-full bg-primary" />
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+          }
+        />
         <ContextMenuContent>
-          <ContextMenuItem onClick={onAddLayer}>New Layer</ContextMenuItem>
-          {onAddGroupLayer && <ContextMenuItem onClick={onAddGroupLayer}>New Group</ContextMenuItem>}
-          {onGroupSelectedLayers && <ContextMenuItem onClick={onGroupSelectedLayers}>Group Selected (Ctrl+G)</ContextMenuItem>}
-          {onToggleCollapseAllGroups && <ContextMenuItem onClick={() => onToggleCollapseAllGroups()}>Collapse / Expand All Groups</ContextMenuItem>}
+          <ContextMenuItem onSelect={onAddLayer}>New Layer</ContextMenuItem>
+          {onAddGroupLayer && <ContextMenuItem onSelect={onAddGroupLayer}>New Group</ContextMenuItem>}
+          {onGroupSelectedLayers && (
+            <ContextMenuItem onSelect={onGroupSelectedLayers}>Group Selected (Ctrl+G)</ContextMenuItem>
+          )}
+          {onToggleCollapseAllGroups && (
+            <ContextMenuItem onSelect={() => onToggleCollapseAllGroups()}>
+              Collapse / Expand All Groups
+            </ContextMenuItem>
+          )}
         </ContextMenuContent>
       </ContextMenu>
     </div>

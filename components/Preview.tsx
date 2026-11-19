@@ -1,8 +1,7 @@
-
 import React, { useEffect, useRef, useState } from 'react';
 import { ProjectState } from '../types';
 import { renderFrameToCanvas } from '../utils';
-import { Play, Pause, X } from 'lucide-react';
+import { Play, Pause, X } from './Icons';
 import { CustomSlider } from './ui/slider';
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 import {
@@ -10,10 +9,10 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuTrigger,
-} from "./ui/context-menu";
+} from './ui/context-menu';
 
 interface PreviewProps {
-  width: number; // Ignored
+  width: number;
   state: ProjectState;
   onClose?: () => void;
   isFloating?: boolean;
@@ -31,9 +30,9 @@ export const Preview: React.FC<PreviewProps> = ({ state, onClose, isFloating = t
     if (saved) {
       try {
         return JSON.parse(saved);
-      } catch (e) {}
+      } catch {}
     }
-    return { width: 192, height: 192 };
+    return { width: 204, height: 224 };
   });
 
   const [position, setPosition] = useState(() => {
@@ -41,22 +40,23 @@ export const Preview: React.FC<PreviewProps> = ({ state, onClose, isFloating = t
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        // We don't have access to size yet, so we use a fallback or the parsed size if we can get it
         const savedSize = localStorage.getItem('preview_size');
-        let w = 192, h = 192;
+        let w = 204;
+        let h = 224;
         if (savedSize) {
-            try {
-                const ps = JSON.parse(savedSize);
-                w = ps.width; h = ps.height;
-            } catch(e) {}
+          try {
+            const ps = JSON.parse(savedSize);
+            w = ps.width;
+            h = ps.height;
+          } catch {}
         }
         return {
-            x: Math.max(0, Math.min(parsed.x, window.innerWidth - w)),
-            y: Math.max(0, Math.min(parsed.y, window.innerHeight - h))
+          x: Math.max(0, Math.min(parsed.x, window.innerWidth - w)),
+          y: Math.max(0, Math.min(parsed.y, window.innerHeight - h)),
         };
-      } catch (e) {}
+      } catch {}
     }
-    return { x: window.innerWidth - 210, y: window.innerHeight - 210 };
+    return { x: Math.max(16, window.innerWidth - 224), y: Math.max(16, window.innerHeight - 252) };
   });
 
   const [isDragging, setIsDragging] = useState(false);
@@ -73,16 +73,16 @@ export const Preview: React.FC<PreviewProps> = ({ state, onClose, isFloating = t
 
   useEffect(() => {
     if (!isFloating || !windowRef.current) return;
-    
+
     const observer = new ResizeObserver(() => {
       if (windowRef.current) {
-        setSize({ 
-          width: windowRef.current.offsetWidth, 
-          height: windowRef.current.offsetHeight 
+        setSize({
+          width: windowRef.current.offsetWidth,
+          height: windowRef.current.offsetHeight,
         });
       }
     });
-    
+
     observer.observe(windowRef.current);
     return () => observer.disconnect();
   }, [isFloating]);
@@ -95,7 +95,7 @@ export const Preview: React.FC<PreviewProps> = ({ state, onClose, isFloating = t
       x: e.clientX,
       y: e.clientY,
       posX: position.x,
-      posY: position.y
+      posY: position.y,
     };
     e.preventDefault();
   };
@@ -106,14 +106,10 @@ export const Preview: React.FC<PreviewProps> = ({ state, onClose, isFloating = t
     const handlePointerMove = (e: PointerEvent) => {
       const dx = e.clientX - dragStartRef.current.x;
       const dy = e.clientY - dragStartRef.current.y;
-      
-      let newX = dragStartRef.current.posX + dx;
-      let newY = dragStartRef.current.posY + dy;
-      
-      // Clamp to window bounds
-      newX = Math.max(0, Math.min(newX, window.innerWidth - size.width));
-      newY = Math.max(0, Math.min(newY, window.innerHeight - size.height));
-      
+
+      const newX = Math.max(0, Math.min(dragStartRef.current.posX + dx, window.innerWidth - size.width));
+      const newY = Math.max(0, Math.min(dragStartRef.current.posY + dy, window.innerHeight - size.height));
+
       setPosition({ x: newX, y: newY });
     };
 
@@ -130,21 +126,21 @@ export const Preview: React.FC<PreviewProps> = ({ state, onClose, isFloating = t
     };
   }, [isDragging, size]);
 
-  // Animation Loop
   useEffect(() => {
-    let interval: number;
+    let interval: number | undefined;
     if (isPlaying && state.frames.length > 1) {
       interval = window.setInterval(() => {
-        setPreviewFrame(curr => (curr + 1) % state.frames.length);
+        setPreviewFrame((curr) => (curr + 1) % state.frames.length);
       }, 1000 / fps);
     } else {
       setPreviewFrame(state.activeFrameIndex);
     }
 
-    return () => clearInterval(interval);
+    return () => {
+      if (interval !== undefined) clearInterval(interval);
+    };
   }, [isPlaying, fps, state.frames.length, state.activeFrameIndex]);
 
-  // Render logic
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -154,109 +150,142 @@ export const Preview: React.FC<PreviewProps> = ({ state, onClose, isFloating = t
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Checkerboard
-    const scale = canvas.width / state.width;
-    ctx.fillStyle = '#262626';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    
-    // Draw content
     const frameIndex = isPlaying ? previewFrame : state.activeFrameIndex;
     if (state.frames[frameIndex]) {
       const frameCanvas = renderFrameToCanvas(state, frameIndex);
       ctx.drawImage(frameCanvas, 0, 0, canvas.width, canvas.height);
     }
-
   }, [state, previewFrame, isPlaying]);
 
+  const currentFrameNumber = (isPlaying ? previewFrame : state.activeFrameIndex) + 1;
+
   const innerContent = (
-    <div className="flex flex-col w-full h-full">
-      <div 
-        className="bg-secondary/20 px-2 py-1 flex justify-between items-center border-b border-border/40 select-none"
+    <div className="flex h-full w-full flex-col bg-card select-none">
+      <div
+        className={`flex h-8 shrink-0 items-center justify-between border-b border-border bg-background/50 px-2.5 ${
+          isFloating ? 'cursor-move active:cursor-grabbing' : ''
+        }`}
         onPointerDown={handlePointerDown}
       >
-        <span className="text-[10px] font-semibold text-muted-foreground tracking-wide uppercase">{isFloating ? "Preview" : ""}</span>
-        <div className="flex gap-1 no-drag">
+        <div className="flex items-center gap-2">
+          {isFloating && (
+            <span className="text-[11px] font-semibold tracking-tight text-foreground">Preview</span>
+          )}
+          <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+            F{currentFrameNumber}/{state.frames.length}
+          </span>
+        </div>
+
+        <div className="no-drag flex items-center gap-1">
           <Tooltip>
-            <TooltipTrigger asChild>
-              <button onClick={() => setIsPlaying(!isPlaying)} className="p-0.5 text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors">
-                {isPlaying ? <Pause size={12} /> : <Play size={12} />}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top">{isPlaying ? "Pause Animation" : "Play Animation"}</TooltipContent>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  onClick={() => setIsPlaying(!isPlaying)}
+                  aria-label={isPlaying ? 'Pause Animation' : 'Play Animation'}
+                  className={`flex h-6 w-6 items-center justify-center rounded-sm transition-colors ${
+                    isPlaying
+                      ? 'bg-primary/15 text-primary'
+                      : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                  }`}
+                >
+                  {isPlaying ? <Pause size={12} /> : <Play size={12} />}
+                </button>
+              }
+            />
+            <TooltipContent side="top">
+              {isPlaying ? 'Pause Animation' : 'Play Animation'}
+            </TooltipContent>
           </Tooltip>
+
           {isFloating && onClose && (
             <Tooltip>
-              <TooltipTrigger asChild>
-                <button onClick={onClose} className="p-0.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors">
-                  <X size={12} />
-                </button>
-              </TooltipTrigger>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    aria-label="Close Preview"
+                    className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-destructive/15 hover:text-destructive"
+                  >
+                    <X size={12} />
+                  </button>
+                }
+              />
               <TooltipContent side="top">Close Preview</TooltipContent>
             </Tooltip>
           )}
         </div>
       </div>
-      
-      <div className="p-2 flex items-center justify-center bg-muted/20 flex-1 min-h-[120px] overflow-hidden" ref={containerRef}>
+
+      <div
+        ref={containerRef}
+        className="flex min-h-[110px] flex-1 items-center justify-center overflow-hidden bg-canvas p-2.5"
+      >
         <canvas
           ref={canvasRef}
-          width={160}
-          height={160}
-          className="bg-muted-foreground/10 pixelated border border-border shadow-sm w-full h-full object-contain"
+          width={Math.max(64, state.width)}
+          height={Math.max(64, state.height)}
+          className="checkerboard-alpha pixelated h-full w-full max-h-full max-w-full rounded-sm border border-border object-contain shadow-sm"
         />
       </div>
 
-      <div className="px-2 py-1.5 flex items-center gap-2 border-t border-border bg-card shrink-0">
-         <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">FPS:</span>
-         <CustomSlider
-          min={1} 
-          max={60} 
-          value={fps} 
+      <div className="flex h-8 shrink-0 items-center gap-2 border-t border-border bg-card px-2.5">
+        <span className="text-[11px] font-medium text-muted-foreground">FPS</span>
+        <CustomSlider
+          min={1}
+          max={60}
+          value={fps}
           onValueChange={setFps}
+          aria-label="Preview framerate"
           className="flex-1"
-         />
-         <span className="text-[10px] text-foreground w-4 text-right font-mono">{fps}</span>
+        />
+        <span className="w-6 text-right font-mono text-[11px] text-foreground tabular-nums">
+          {fps}
+        </span>
       </div>
     </div>
   );
 
   const content = isFloating ? (
     <ContextMenu>
-      <ContextMenuTrigger asChild>
-        {innerContent}
-      </ContextMenuTrigger>
+      <ContextMenuTrigger render={innerContent} />
       <ContextMenuContent>
-        <ContextMenuItem onClick={() => {
-          setPosition({ x: window.innerWidth - 210, y: window.innerHeight - 210 });
-          setSize({ width: 192, height: 192 });
-        }}>
-          Reset Position & Size
+        <ContextMenuItem
+          onSelect={() => {
+            setPosition({
+              x: Math.max(16, window.innerWidth - 224),
+              y: Math.max(16, window.innerHeight - 252),
+            });
+            setSize({ width: 204, height: 224 });
+          }}
+        >
+          Reset Position &amp; Size
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
-  ) : innerContent;
+  ) : (
+    innerContent
+  );
 
   if (!isFloating) {
-    return (
-      <div className="flex flex-col w-full h-full bg-card">
-        {content}
-      </div>
-    );
+    return <div className="flex h-full w-full flex-col bg-card">{content}</div>;
   }
 
   return (
-    <div 
-        ref={windowRef}
-        className="fixed z-[100] bg-card border border-border shadow-2xl flex flex-col rounded-lg overflow-hidden"
-        style={{ 
-          left: position.x, 
-          top: position.y, 
-          width: size.width,
-          height: size.height,
-          resize: 'both', 
-          minWidth: 150, 
-          minHeight: 150 
-        }}
+    <div
+      ref={windowRef}
+      className="fixed z-40 flex flex-col overflow-hidden rounded-lg border border-border-strong bg-card shadow-2xl"
+      style={{
+        left: position.x,
+        top: position.y,
+        width: size.width,
+        height: size.height,
+        resize: 'both',
+        minWidth: 164,
+        minHeight: 164,
+      }}
     >
       {content}
     </div>

@@ -1,44 +1,86 @@
 import * as React from "react";
-import * as PopoverPrimitive from "@radix-ui/react-popover";
+import {
+  Popover as PrimitivePopover,
+  PopoverArrow as PrimitivePopoverArrow,
+  PopoverClose as PrimitivePopoverClose,
+  PopoverContent as PrimitivePopoverContent,
+  PopoverDescription as PrimitivePopoverDescription,
+  PopoverShortcut as PrimitivePopoverShortcut,
+  PopoverTitle as PrimitivePopoverTitle,
+  PopoverTrigger as PrimitivePopoverTrigger,
+  createPopoverController,
+} from "@ui-sdk/react/popover";
+import { cn } from "../../lib/utils";
 
-const Popover = PopoverPrimitive.Root;
-
-const PopoverTrigger = PopoverPrimitive.Trigger;
-
-const PopoverAnchor = PopoverPrimitive.Anchor;
-
-const PopoverClose = PopoverPrimitive.Close;
+const Popover: React.FC<React.ComponentPropsWithoutRef<typeof PrimitivePopover>> = (props) => (
+  <PrimitivePopover {...props} />
+);
+const PopoverTrigger = PrimitivePopoverTrigger;
+const PopoverClose = PrimitivePopoverClose;
+const PopoverShortcut = PrimitivePopoverShortcut;
 
 const PopoverContent = React.forwardRef<
-  React.ElementRef<typeof PopoverPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
->(({ className, align = "center", sideOffset = 4, ...props }, ref) => (
-  <PopoverPrimitive.Portal>
-    <PopoverPrimitive.Content
-      ref={ref}
-      align={align}
-      sideOffset={sideOffset}
-      className={`z-50 w-80 rounded-xl border border-border bg-card p-3.5 text-card-foreground shadow-2xl outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 ${
-        className || ""
-      }`}
-      {...props}
-    />
-  </PopoverPrimitive.Portal>
-));
-PopoverContent.displayName = PopoverPrimitive.Content.displayName;
-
-const PopoverArrow = React.forwardRef<
-  React.ElementRef<typeof PopoverPrimitive.Arrow>,
-  React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Arrow>
->(({ className, ...props }, ref) => (
-  <PopoverPrimitive.Arrow
+  HTMLDivElement,
+  React.ComponentPropsWithoutRef<typeof PrimitivePopoverContent>
+>(({ className, align = "center" as const, sideOffset = 6, collisionPadding = 8, ...props }, ref) => (
+  <PrimitivePopoverContent
     ref={ref}
-    className={`fill-popover stroke-border ${className || ""}`}
-    width={10}
-    height={5}
+    align={align}
+    sideOffset={sideOffset}
+    collisionPadding={collisionPadding}
+    className={cn(
+      "z-50 w-80 rounded-lg border border-border-strong bg-popover p-3.5 text-popover-foreground shadow-2xl outline-none",
+      className
+    )}
     {...props}
   />
 ));
-PopoverArrow.displayName = PopoverPrimitive.Arrow.displayName;
+PopoverContent.displayName = "PopoverContent";
 
-export { Popover, PopoverTrigger, PopoverContent, PopoverAnchor, PopoverClose, PopoverArrow };
+const PopoverTitle = React.forwardRef<
+  HTMLHeadingElement,
+  React.ComponentPropsWithoutRef<typeof PrimitivePopoverTitle>
+>(({ className, ...props }, ref) => (
+  <PrimitivePopoverTitle
+    ref={ref}
+    className={cn("text-xs font-semibold text-foreground", className)}
+    {...props}
+  />
+));
+PopoverTitle.displayName = "PopoverTitle";
+
+const PopoverDescription = React.forwardRef<
+  HTMLParagraphElement,
+  React.ComponentPropsWithoutRef<typeof PrimitivePopoverDescription>
+>(({ className, ...props }, ref) => (
+  <PrimitivePopoverDescription
+    ref={ref}
+    className={cn("text-[11px] text-muted-foreground", className)}
+    {...props}
+  />
+));
+PopoverDescription.displayName = "PopoverDescription";
+
+const PopoverArrow = React.forwardRef<
+  HTMLDivElement,
+  React.ComponentPropsWithoutRef<typeof PrimitivePopoverArrow>
+>(({ className, ...props }, ref) => (
+  <PrimitivePopoverArrow
+    ref={ref}
+    className={cn("h-2.5 w-2.5 rotate-45 border border-border-strong bg-popover", className)}
+    {...props}
+  />
+));
+PopoverArrow.displayName = "PopoverArrow";
+
+export {
+  Popover,
+  PopoverArrow,
+  PopoverClose,
+  PopoverContent,
+  PopoverDescription,
+  PopoverShortcut,
+  PopoverTitle,
+  PopoverTrigger,
+  createPopoverController,
+};

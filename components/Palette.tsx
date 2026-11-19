@@ -1,7 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Plus, Upload, ChevronDown, Check, Palette as PaletteIcon } from './Icons';
+import { Plus, Upload, ChevronDown, Check } from './Icons';
 import { SavedPalette } from '../types';
-import { Popover, PopoverTrigger, PopoverContent, PopoverClose } from './Popover';
+import { Popover, PopoverTrigger, PopoverContent, PopoverClose } from './ui/popover';
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 
 interface PaletteProps {
@@ -33,56 +33,56 @@ export const Palette: React.FC<PaletteProps> = ({
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [target, setTarget] = useState<'primary' | 'secondary'>('primary');
-  
+
   const [selectionStart, setSelectionStart] = useState<number | null>(null);
   const [selectionEnd, setSelectionEnd] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
-  const activePalette = palettes.find(p => p.id === activePaletteId);
+  const activePalette = palettes.find((p) => p.id === activePaletteId);
 
   useEffect(() => {
-      const handleGlobalPointerUp = () => {
-          if (isDragging) {
-              setIsDragging(false);
-              if (selectionStart !== null && selectionEnd !== null && selectionStart !== selectionEnd) {
-                  const start = Math.min(selectionStart, selectionEnd);
-                  const end = Math.max(selectionStart, selectionEnd);
-                  if (onColorsSelected) {
-                      onColorsSelected(colors.slice(start, end + 1));
-                  }
-              }
+    const handleGlobalPointerUp = () => {
+      if (isDragging) {
+        setIsDragging(false);
+        if (selectionStart !== null && selectionEnd !== null && selectionStart !== selectionEnd) {
+          const start = Math.min(selectionStart, selectionEnd);
+          const end = Math.max(selectionStart, selectionEnd);
+          if (onColorsSelected) {
+            onColorsSelected(colors.slice(start, end + 1));
           }
-      };
-      window.addEventListener('pointerup', handleGlobalPointerUp);
-      return () => window.removeEventListener('pointerup', handleGlobalPointerUp);
+        }
+      }
+    };
+    window.addEventListener('pointerup', handleGlobalPointerUp);
+    return () => window.removeEventListener('pointerup', handleGlobalPointerUp);
   }, [isDragging, selectionStart, selectionEnd, colors, onColorsSelected]);
 
   const handlePointerDown = (idx: number, e: React.PointerEvent) => {
-      if (e.button === 0) { // Left click
-          if (e.shiftKey && selectionStart !== null) {
-              setSelectionEnd(idx);
-              const start = Math.min(selectionStart, idx);
-              const end = Math.max(selectionStart, idx);
-              if (onColorsSelected && end > start) {
-                  onColorsSelected(colors.slice(start, end + 1));
-              }
-          } else {
-              setSelectionStart(idx);
-              setSelectionEnd(idx);
-              setIsDragging(true);
-              onColorSelect(colors[idx], true);
-              setTarget('primary');
-          }
-      } else if (e.button === 2) { // Right click
-          onColorSelect(colors[idx], false);
-          setTarget('secondary');
+    if (e.button === 0) {
+      if (e.shiftKey && selectionStart !== null) {
+        setSelectionEnd(idx);
+        const start = Math.min(selectionStart, idx);
+        const end = Math.max(selectionStart, idx);
+        if (onColorsSelected && end > start) {
+          onColorsSelected(colors.slice(start, end + 1));
+        }
+      } else {
+        setSelectionStart(idx);
+        setSelectionEnd(idx);
+        setIsDragging(true);
+        onColorSelect(colors[idx], true);
+        setTarget('primary');
       }
+    } else if (e.button === 2) {
+      onColorSelect(colors[idx], false);
+      setTarget('secondary');
+    }
   };
 
   const handlePointerEnter = (idx: number) => {
-      if (isDragging && selectionStart !== null) {
-          setSelectionEnd(idx);
-      }
+    if (isDragging && selectionStart !== null) {
+      setSelectionEnd(idx);
+    }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -93,132 +93,156 @@ export const Palette: React.FC<PaletteProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-full w-full bg-card border-r border-background select-none overflow-hidden font-sans">
-      {/* 1. Header: Palette Selector */}
-      <div className="p-1 border-b border-background bg-secondary/30 flex items-center gap-0.5 shrink-0">
+    <div className="flex h-full w-full flex-col overflow-hidden bg-card font-sans select-none">
+      <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border bg-background/50 px-2">
         <Popover>
-            <PopoverTrigger asChild>
-                <button 
-                    className="flex-1 min-w-0 bg-background/40 text-[9px] font-bold text-muted-foreground hover:text-foreground border border-border/30 rounded-sm px-1.5 py-0.5 flex items-center justify-between hover:bg-secondary/40 transition-colors focus:outline-none"
-                >
-                    <span className="truncate uppercase tracking-tight">{activePalette?.name || 'Palette'}</span>
-                    <ChevronDown size={8} className="ml-1 shrink-0 opacity-40" />
-                </button>
-            </PopoverTrigger>
-            <PopoverContent align="start" className="w-44 p-1 flex flex-col gap-0.5 max-h-[300px] overflow-y-auto z-50 shadow-2xl bg-card border border-border/30">
-                {palettes.map((p) => (
-                    <PopoverClose key={p.id} asChild>
-                        <button
-                            onClick={() => onSelectPalette(p.id)}
-                            className={`w-full text-left p-1 rounded group border border-transparent transition-all ${
-                                activePaletteId === p.id 
-                                ? 'bg-primary/10 border-primary/20' 
-                                : 'hover:bg-accent'
-                            }`}
-                        >
-                            <div className="flex items-center justify-between mb-0.5 px-1">
-                                <span className={`text-[9px] font-bold truncate ${activePaletteId === p.id ? 'text-primary' : 'text-muted-foreground'}`}>
-                                    {p.name}
-                                </span>
-                                {activePaletteId === p.id && <Check size={8} className="text-primary" />}
-                            </div>
-                            <div className="h-1 w-full flex rounded-full overflow-hidden bg-background">
-                                {p.colors.slice(0, 10).map((c, i) => (
-                                    <div key={i} style={{ backgroundColor: c }} className="flex-1 h-full" />
-                                ))}
-                            </div>
-                        </button>
-                    </PopoverClose>
-                ))}
-            </PopoverContent>
+          <PopoverTrigger
+            render={
+              <button
+                type="button"
+                className="flex h-6 min-w-0 flex-1 items-center justify-between rounded-sm border border-border bg-background px-2 text-[11px] font-medium text-foreground transition-colors hover:border-border-strong hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <span className="truncate">{activePalette?.name || 'Palette'}</span>
+                <ChevronDown size={11} className="ml-1 shrink-0 text-muted-foreground" />
+              </button>
+            }
+          />
+          <PopoverContent align="start" className="flex max-h-[300px] w-52 flex-col gap-1 overflow-y-auto p-1.5">
+            {palettes.map((p) => (
+              <PopoverClose
+                key={p.id}
+                render={
+                  <button
+                    type="button"
+                    onClick={() => onSelectPalette(p.id)}
+                    className={`group w-full rounded-sm border p-1.5 text-left transition-colors ${
+                      activePaletteId === p.id
+                        ? 'border-primary/40 bg-primary/15'
+                        : 'border-transparent hover:bg-accent'
+                    }`}
+                  >
+                    <div className="mb-1 flex items-center justify-between px-0.5">
+                      <span
+                        className={`truncate text-[11px] font-medium ${
+                          activePaletteId === p.id ? 'text-primary' : 'text-foreground'
+                        }`}
+                      >
+                        {p.name}
+                      </span>
+                      {activePaletteId === p.id && <Check size={11} className="shrink-0 text-primary" />}
+                    </div>
+                    <div className="flex h-1.5 w-full overflow-hidden rounded-xs bg-background">
+                      {p.colors.slice(0, 12).map((c, i) => (
+                        <div key={i} style={{ backgroundColor: c }} className="h-full flex-1" />
+                      ))}
+                    </div>
+                  </button>
+                }
+              />
+            ))}
+          </PopoverContent>
         </Popover>
 
         <Tooltip>
-          <TooltipTrigger asChild>
-            <button 
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                aria-label="Add Primary Color to Palette"
                 onClick={() => onAddColor(primaryColor)}
-                className="p-1 text-muted-foreground hover:text-foreground transition-all"
-            >
-                <Plus size={10} />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="top">Add Primary Color to Palette</TooltipContent>
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <Plus size={12} />
+              </button>
+            }
+          />
+          <TooltipContent side="top">Add Primary Color</TooltipContent>
         </Tooltip>
 
         <Tooltip>
-          <TooltipTrigger asChild>
-            <button 
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                aria-label="Import Palette"
                 onClick={() => fileInputRef.current?.click()}
-                className="p-1 text-muted-foreground hover:text-foreground transition-all"
-            >
-                <Upload size={10} />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="top">Import Palette</TooltipContent>
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <Upload size={12} />
+              </button>
+            }
+          />
+          <TooltipContent side="top">Import Palette (.gpl, .ase, .png)</TooltipContent>
         </Tooltip>
-        <input 
-            type="file" 
-            ref={fileInputRef} 
-            className="hidden" 
-            accept=".png,.gpl,.ase"
-            onChange={handleFileChange}
+
+        <input
+          type="file"
+          ref={fileInputRef}
+          className="hidden"
+          accept=".png,.gpl,.ase"
+          onChange={handleFileChange}
         />
       </div>
 
-      {/* 2. Swatches Grid*/}
-      <div className="flex-1 overflow-y-auto custom-scrollbar p-1 bg-background/5 min-h-0">
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(18px,1fr))] gap-0.5 content-start">
-              {colors.map((color, idx) => {
-                  const isPrimary = primaryColor.toLowerCase() === color.toLowerCase();
-                  const isSecondary = secondaryColor.toLowerCase() === color.toLowerCase();
-                  
-                  let inSelection = false;
-                  if (selectionStart !== null && selectionEnd !== null) {
-                      const start = Math.min(selectionStart, selectionEnd);
-                      const end = Math.max(selectionStart, selectionEnd);
-                      inSelection = idx >= start && idx <= end;
+      <div className="min-h-0 flex-1 overflow-y-auto bg-canvas/40 p-1.5">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(20px,1fr))] content-start gap-0.5">
+          {colors.map((color, idx) => {
+            const isPrimary = primaryColor.toLowerCase() === color.toLowerCase();
+            const isSecondary = secondaryColor.toLowerCase() === color.toLowerCase();
+
+            let inSelection = false;
+            if (selectionStart !== null && selectionEnd !== null) {
+              const start = Math.min(selectionStart, selectionEnd);
+              const end = Math.max(selectionStart, selectionEnd);
+              inSelection = idx >= start && idx <= end;
+            }
+
+            return (
+              <Tooltip key={`${color}-${idx}`}>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label={`Color ${color.toUpperCase()}`}
+                      className={`group relative aspect-square overflow-hidden rounded-[2px] border border-white/10 transition-transform active:scale-95 ${
+                        inSelection
+                          ? 'z-20 scale-110 ring-2 ring-primary shadow-md'
+                          : isPrimary || isSecondary
+                            ? 'z-10 ring-1 ring-white/80 ring-inset'
+                            : 'hover:z-10 hover:ring-1 hover:ring-white/50'
+                      }`}
+                      style={{ backgroundColor: color }}
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        handlePointerDown(idx, e);
+                      }}
+                      onPointerEnter={() => handlePointerEnter(idx)}
+                      onContextMenu={(e) => e.preventDefault()}
+                    >
+                      {isPrimary && (
+                        <div className="absolute top-0 left-0 h-0 w-0 border-t-[8px] border-r-[8px] border-t-primary border-r-transparent" />
+                      )}
+                      {isSecondary && (
+                        <div className="absolute right-0 bottom-0 h-0 w-0 border-b-[8px] border-l-[8px] border-b-white border-l-transparent" />
+                      )}
+                      {((target === 'primary' && isPrimary) || (target === 'secondary' && isSecondary)) && (
+                        <div className="absolute inset-0 m-auto h-1 w-1 rounded-full bg-white mix-blend-difference" />
+                      )}
+                    </button>
                   }
-                  
-                  return (
-                      <Tooltip key={`${color}-${idx}`}>
-                        <TooltipTrigger asChild>
-                          <button
-                              className={`
-                                  aspect-square rounded-[1px] transition-all active:scale-90 relative overflow-hidden group
-                                  ${inSelection ? 'ring-2 ring-primary z-20 scale-110 shadow-lg' : (isPrimary || isSecondary) ? 'z-10 ring-1 ring-border ring-inset' : 'hover:z-10 hover:ring-1 hover:ring-border/50'}
-                              `}
-                              style={{ backgroundColor: color }}
-                              onPointerDown={(e) => {
-                                  e.preventDefault();
-                                  handlePointerDown(idx, e);
-                              }}
-                              onPointerEnter={() => handlePointerEnter(idx)}
-                              onContextMenu={(e) => e.preventDefault()}
-                          >
-                              {/* Aseprite-style triangular indicators */}
-                              {isPrimary && (
-                                  <div className="absolute top-0 left-0 w-0 h-0 border-t-[8px] border-r-[8px] border-t-primary border-r-transparent drop-shadow-sm"></div>
-                              )}
-                              {isSecondary && (
-                                  <div className="absolute bottom-0 right-0 w-0 h-0 border-b-[8px] border-l-[8px] border-b-foreground border-l-transparent drop-shadow-sm"></div>
-                              )}
-                              
-                              {/* Center dot for the active target color to match Aseprite's "current entry" */}
-                              {((target === 'primary' && isPrimary) || (target === 'secondary' && isSecondary)) && (
-                                  <div className="absolute inset-0 m-auto w-1 h-1 bg-background rounded-full shadow-sm mix-blend-difference"></div>
-                              )}
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="normal-case tracking-normal font-normal">
-                          <div className="flex flex-col items-center gap-0.5 px-0.5">
-                            <span className="font-mono text-xs font-bold text-foreground tracking-wider">{color.toUpperCase()}</span>
-                            <span className="text-[9px] text-muted-foreground whitespace-nowrap">L-Click: Primary • R-Click: Secondary</span>
-                          </div>
-                        </TooltipContent>
-                      </Tooltip>
-                  );
-              })}
-          </div>
+                />
+                <TooltipContent side="top" className="flex-col items-center gap-0.5">
+                  <span className="font-mono text-[11px] font-semibold text-foreground tabular-nums">
+                    {color.toUpperCase()}
+                  </span>
+                  <span className="text-[11px] whitespace-nowrap text-muted-foreground">
+                    L: Primary · R: Secondary
+                  </span>
+                </TooltipContent>
+              </Tooltip>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from "react";
-import { Allotment } from "allotment";
-import { useMobile } from "../hooks/useMobile";
-import { ProjectState, FrameTag } from "../types";
+import React, { useState, useEffect, useRef } from 'react';
+import { Allotment } from 'allotment';
+import { useMobile } from '../hooks/useMobile';
+import { ProjectState, FrameTag } from '../types';
 import {
   Eye,
   EyeOff,
@@ -10,56 +10,34 @@ import {
   Plus,
   Copy,
   Trash2,
-  FilePlus,
   Sparkles,
   Folder,
   FolderOpen,
   ChevronRight,
   ChevronDown,
-} from "./Icons";
-import {
   Tag,
-  Check,
-  Minus,
-  X,
   ArrowRight,
   ArrowLeft,
   ArrowLeftRight,
   ArrowRightLeft,
   ChevronsRightLeft,
   ChevronsLeftRight,
-  Settings,
-} from "lucide-react";
-import {
-  getLayerParentMap,
-  isLayerVisible,
-  getGroupChildCount,
-} from "../utils";
-import { Tooltip, TooltipTrigger, TooltipContent } from "./ui/tooltip";
-import {
-  Popover,
-  PopoverTrigger,
-  PopoverContent,
-  PopoverAnchor,
-} from "./ui/popover";
-import { AnimationTagPopover } from "./AnimationTagPopover";
+} from './Icons';
+import { getLayerParentMap, isLayerVisible } from '../utils';
+import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
+import { Popover, PopoverContent } from './ui/popover';
+import { AnimationTagPopover } from './AnimationTagPopover';
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
-} from "./ui/context-menu";
-
-
+} from './ui/context-menu';
 
 interface TimelineProps {
   state: ProjectState;
-  onSelectFrames: (
-    indices: number[],
-    activeIndex: number,
-    layerId?: string,
-  ) => void;
+  onSelectFrames: (indices: number[], activeIndex: number, layerId?: string) => void;
   onAddFrame: () => void;
   onDuplicateFrame: () => void;
   onDeleteFrame: () => void;
@@ -83,16 +61,16 @@ interface TimelineProps {
   onReorderLayers: (
     draggedId: string,
     targetId: string,
-    position: "before" | "after" | "inside" | "outside" | "root-bottom",
+    position: 'before' | 'after' | 'inside' | 'outside' | 'root-bottom'
   ) => void;
   onReorderFrames: (fromIndex: number, toIndex: number) => void;
 }
 
 interface DragState {
-  type: "layer" | "frame";
+  type: 'layer' | 'frame';
   id: string;
   overId: string | null;
-  position: "before" | "after" | "inside" | "outside" | "root-bottom";
+  position: 'before' | 'after' | 'inside' | 'outside' | 'root-bottom';
 }
 
 interface TagRange {
@@ -102,7 +80,7 @@ interface TagRange {
 
 interface ResizingTagState {
   draggedTagId: string;
-  mode: "resize-left" | "resize-right" | "move";
+  mode: 'resize-left' | 'resize-right' | 'move';
   startX: number;
   hasMoved: boolean;
   initialStates: Record<string, TagRange>;
@@ -110,14 +88,14 @@ interface ResizingTagState {
 }
 
 interface FrameColumn {
-  type: "frame";
+  type: 'frame';
   frameIndex: number;
   x: number;
   width: number;
 }
 
 interface CollapsedColumn {
-  type: "collapsed";
+  type: 'collapsed';
   tag: FrameTag;
   from: number;
   to: number;
@@ -132,28 +110,16 @@ interface TrackTag extends FrameTag {
   trackIndex: number;
 }
 
-/**
- * Calculates multi-track assignment so overlapping tags stack on separate vertical tracks.
- */
 const calculateTagTracks = (
   tagsList: FrameTag[],
-  resizingState: ResizingTagState | null,
+  resizingState: ResizingTagState | null
 ): { trackTags: TrackTag[]; maxTracks: number } => {
-  if (!tagsList || tagsList.length === 0)
-    return { trackTags: [], maxTracks: 0 };
+  if (!tagsList || tagsList.length === 0) return { trackTags: [], maxTracks: 0 };
 
   const activeTags = tagsList.map((t) => {
-    if (
-      resizingState &&
-      resizingState.hasMoved &&
-      resizingState.currentStates[t.id]
-    ) {
+    if (resizingState && resizingState.hasMoved && resizingState.currentStates[t.id]) {
       const updated = resizingState.currentStates[t.id];
-      return {
-        ...t,
-        from: updated.from,
-        to: updated.to,
-      };
+      return { ...t, from: updated.from, to: updated.to };
     }
     return t;
   });
@@ -169,9 +135,7 @@ const calculateTagTracks = (
   for (const tag of sorted) {
     let assignedTrack = -1;
     for (let t = 0; t < tracks.length; t++) {
-      const overlap = tracks[t].some(
-        (r) => !(tag.to < r.from || tag.from > r.to),
-      );
+      const overlap = tracks[t].some((r) => !(tag.to < r.from || tag.from > r.to));
       if (!overlap) {
         assignedTrack = t;
         tracks[t].push({ from: tag.from, to: tag.to });
@@ -188,43 +152,33 @@ const calculateTagTracks = (
   return { trackTags, maxTracks: tracks.length };
 };
 
-/**
- * Calculates timeline column layout including visible frames and folded/collapsed tag pillars.
- */
 const calculateColumns = (
   totalFrames: number,
   tagsList: FrameTag[],
-  collapsedTagIds: Set<string>,
+  collapsedTagIds: Set<string>
 ): {
   columns: TimelineColumn[];
   frameXMap: Record<number, { x: number; width: number; isHidden: boolean }>;
   totalWidth: number;
 } => {
   const collapsedTagsList = tagsList.filter((t) => collapsedTagIds.has(t.id));
-  const sortedCollapsed = collapsedTagsList
-    .slice()
-    .sort((a, b) => a.from - b.from);
+  const sortedCollapsed = collapsedTagsList.slice().sort((a, b) => a.from - b.from);
 
   const columns: TimelineColumn[] = [];
-  const frameXMap: Record<
-    number,
-    { x: number; width: number; isHidden: boolean }
-  > = {};
+  const frameXMap: Record<number, { x: number; width: number; isHidden: boolean }> = {};
 
   let currentX = 0;
   let frameIdx = 0;
 
   while (frameIdx < totalFrames) {
-    const colTag = sortedCollapsed.find(
-      (t) => frameIdx >= t.from && frameIdx <= t.to,
-    );
+    const colTag = sortedCollapsed.find((t) => frameIdx >= t.from && frameIdx <= t.to);
 
     if (colTag && frameIdx === colTag.from) {
       const count = colTag.to - colTag.from + 1;
       const pillarWidth = 36;
 
       columns.push({
-        type: "collapsed",
+        type: 'collapsed',
         tag: colTag,
         from: colTag.from,
         to: colTag.to,
@@ -245,7 +199,7 @@ const calculateColumns = (
     } else {
       const frameWidth = 40;
       columns.push({
-        type: "frame",
+        type: 'frame',
         frameIndex: frameIdx,
         x: currentX,
         width: frameWidth,
@@ -270,11 +224,9 @@ export const Timeline: React.FC<TimelineProps> = ({
   onDeleteSelectedFrames,
   onInsertFrame,
   onTweenFrames,
-  onSetFrameDuration,
   onAddTag,
   onSaveTag,
   onDeleteTag,
-  onOpenTagProperties,
   activeTagPopover,
   onCloseTagPopover,
   onSelectLayer,
@@ -282,7 +234,6 @@ export const Timeline: React.FC<TimelineProps> = ({
   onToggleLayerLock,
   onUpdateLayer,
   onAddLayer,
-  onAddGroupLayer,
   onReorderLayers,
   onReorderFrames,
 }) => {
@@ -293,25 +244,25 @@ export const Timeline: React.FC<TimelineProps> = ({
     isNew: boolean;
   } | null>(null);
 
-  const [resizingTagState, setResizingTagState] =
-    useState<ResizingTagState | null>(null);
-  const [collapsedTagIds, setCollapsedTagIds] = useState<Set<string>>(
-    new Set(),
-  );
+  const [resizingTagState, setResizingTagState] = useState<ResizingTagState | null>(null);
+  const [collapsedTagIds, setCollapsedTagIds] = useState<Set<string>>(new Set());
   const isMobile = useMobile();
   const [selectedTagIds, setSelectedTagIds] = useState<Set<string>>(new Set());
-  const [sidebarWidth, setSidebarWidth] = useState<number>(() => 
-    typeof window !== "undefined" && window.innerWidth < 768 ? 120 : 192
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() =>
+    typeof window !== 'undefined' && window.innerWidth < 768 ? 120 : 192
   );
+
+  const tagRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const tagButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     setSidebarWidth(isMobile ? 120 : 192);
   }, [isMobile]);
 
-  const framesScrollRef = React.useRef<HTMLDivElement>(null);
-  const layersScrollRef = React.useRef<HTMLDivElement>(null);
-  const headerHorizontalScrollRef = React.useRef<HTMLDivElement>(null);
-  const isSyncingScrollRef = React.useRef<boolean>(false);
+  const framesScrollRef = useRef<HTMLDivElement>(null);
+  const layersScrollRef = useRef<HTMLDivElement>(null);
+  const headerHorizontalScrollRef = useRef<HTMLDivElement>(null);
+  const isSyncingScrollRef = useRef<boolean>(false);
 
   const handleLayersScroll = (e: React.UIEvent<HTMLDivElement>) => {
     if (isSyncingScrollRef.current) return;
@@ -338,23 +289,17 @@ export const Timeline: React.FC<TimelineProps> = ({
     });
   };
 
-  // Delete key handler for deleting selected tags
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (
         target &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.isContentEditable)
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
       ) {
         return;
       }
 
-      if (
-        (e.key === "Delete" || e.key === "Backspace") &&
-        selectedTagIds.size > 0
-      ) {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedTagIds.size > 0) {
         if (onDeleteTag) {
           e.preventDefault();
           selectedTagIds.forEach((id) => {
@@ -365,15 +310,14 @@ export const Timeline: React.FC<TimelineProps> = ({
       }
     };
 
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedTagIds, onDeleteTag]);
 
-  // Mouse drag handler for resizing tag handles or moving tags
   const handleTagMouseDown = (
     e: React.MouseEvent,
     tag: FrameTag,
-    mode: "resize-left" | "resize-right" | "move",
+    mode: 'resize-left' | 'resize-right' | 'move'
   ) => {
     e.stopPropagation();
     e.preventDefault();
@@ -422,35 +366,26 @@ export const Timeline: React.FC<TimelineProps> = ({
 
       const nextCurrentStates: Record<string, TagRange> = {};
 
-      (
-        Object.entries(resizingTagState.initialStates) as [string, TagRange][]
-      ).forEach(([tId, initial]) => {
-        let newFrom = initial.from;
-        let newTo = initial.to;
+      (Object.entries(resizingTagState.initialStates) as [string, TagRange][]).forEach(
+        ([tId, initial]) => {
+          let newFrom = initial.from;
+          let newTo = initial.to;
 
-        if (resizingTagState.mode === "resize-left") {
-          newFrom = Math.max(
-            0,
-            Math.min(initial.to, initial.from + deltaFrames),
-          );
-          newTo = initial.to;
-        } else if (resizingTagState.mode === "resize-right") {
-          newTo = Math.max(
-            initial.from,
-            Math.min(totalFrames - 1, initial.to + deltaFrames),
-          );
-          newFrom = initial.from;
-        } else if (resizingTagState.mode === "move") {
-          const span = initial.to - initial.from;
-          newFrom = Math.max(
-            0,
-            Math.min(totalFrames - 1 - span, initial.from + deltaFrames),
-          );
-          newTo = newFrom + span;
+          if (resizingTagState.mode === 'resize-left') {
+            newFrom = Math.max(0, Math.min(initial.to, initial.from + deltaFrames));
+            newTo = initial.to;
+          } else if (resizingTagState.mode === 'resize-right') {
+            newTo = Math.max(initial.from, Math.min(totalFrames - 1, initial.to + deltaFrames));
+            newFrom = initial.from;
+          } else if (resizingTagState.mode === 'move') {
+            const span = initial.to - initial.from;
+            newFrom = Math.max(0, Math.min(totalFrames - 1 - span, initial.from + deltaFrames));
+            newTo = newFrom + span;
+          }
+
+          nextCurrentStates[tId] = { from: newFrom, to: newTo };
         }
-
-        nextCurrentStates[tId] = { from: newFrom, to: newTo };
-      });
+      );
 
       setResizingTagState((prev) =>
         prev
@@ -459,46 +394,39 @@ export const Timeline: React.FC<TimelineProps> = ({
               hasMoved: prev.hasMoved || isPastThreshold || deltaFrames !== 0,
               currentStates: nextCurrentStates,
             }
-          : null,
+          : null
       );
     };
 
     const handleMouseUp = (e: MouseEvent) => {
       if (resizingTagState) {
         if (resizingTagState.hasMoved) {
-          (
-            Object.entries(resizingTagState.currentStates) as [
-              string,
-              TagRange,
-            ][]
-          ).forEach(([tId, updated]) => {
-            const targetTag = (state.tags || []).find((t) => t.id === tId);
-            if (
-              targetTag &&
-              (updated.from !== targetTag.from || updated.to !== targetTag.to)
-            ) {
-              if (onSaveTag) {
-                onSaveTag({
-                  ...targetTag,
-                  from: updated.from,
-                  to: updated.to,
-                });
+          (Object.entries(resizingTagState.currentStates) as [string, TagRange][]).forEach(
+            ([tId, updated]) => {
+              const targetTag = (state.tags || []).find((t) => t.id === tId);
+              if (
+                targetTag &&
+                (updated.from !== targetTag.from || updated.to !== targetTag.to)
+              ) {
+                if (onSaveTag) {
+                  onSaveTag({
+                    ...targetTag,
+                    from: updated.from,
+                    to: updated.to,
+                  });
+                }
               }
             }
-          });
+          );
         } else {
-          // Pure click without dragging
           const clickedId = resizingTagState.draggedTagId;
           const isModifier = e.shiftKey || e.ctrlKey || e.metaKey;
 
           if (isModifier) {
             setSelectedTagIds((prev) => {
               const next = new Set<string>(prev);
-              if (next.has(clickedId)) {
-                next.delete(clickedId);
-              } else {
-                next.add(clickedId);
-              }
+              if (next.has(clickedId)) next.delete(clickedId);
+              else next.add(clickedId);
               return next;
             });
           } else {
@@ -509,11 +437,11 @@ export const Timeline: React.FC<TimelineProps> = ({
       setResizingTagState(null);
     };
 
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
     return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [resizingTagState, state.frames.length, state.tags, onSaveTag]);
 
@@ -521,11 +449,8 @@ export const Timeline: React.FC<TimelineProps> = ({
     if (e) e.stopPropagation();
     setCollapsedTagIds((prev) => {
       const next = new Set(prev);
-      if (next.has(tagId)) {
-        next.delete(tagId);
-      } else {
-        next.add(tagId);
-      }
+      if (next.has(tagId)) next.delete(tagId);
+      else next.add(tagId);
       return next;
     });
   };
@@ -544,11 +469,11 @@ export const Timeline: React.FC<TimelineProps> = ({
         ? { ...activeTagPopover.tag }
         : {
             id: `tag-${Date.now()}`,
-            name: "New Tag",
+            name: 'New Tag',
             from,
             to,
-            color: "#3b82f6",
-            direction: "forward",
+            color: '#3b82f6',
+            direction: 'forward',
             repeat: 0,
           };
       setTagPopover({
@@ -559,11 +484,10 @@ export const Timeline: React.FC<TimelineProps> = ({
     }
   }, [activeTagPopover]);
 
-  const handleOpenTagPopover = (
-    existingTag?: FrameTag,
-    e?: React.MouseEvent,
-  ) => {
-    if (e) e.stopPropagation();
+  const handleOpenTagPopover = (existingTag?: FrameTag, e?: React.MouseEvent | Event) => {
+    if (e && 'stopPropagation' in e && typeof e.stopPropagation === 'function') {
+      e.stopPropagation();
+    }
     const from =
       state.selectedFrameIndices.length > 0
         ? Math.min(...state.selectedFrameIndices)
@@ -572,18 +496,18 @@ export const Timeline: React.FC<TimelineProps> = ({
       state.selectedFrameIndices.length > 0
         ? Math.max(...state.selectedFrameIndices)
         : state.activeFrameIndex;
-    
+
     let tag: FrameTag;
     if (existingTag) {
       tag = { ...existingTag };
     } else {
       tag = {
         id: `tag-${Date.now()}`,
-        name: "New Tag",
+        name: 'New Tag',
         from,
         to,
-        color: "#3b82f6",
-        direction: "forward",
+        color: '#3b82f6',
+        direction: 'forward',
         repeat: 0,
       };
       if (onSaveTag) {
@@ -605,22 +529,14 @@ export const Timeline: React.FC<TimelineProps> = ({
     if (onCloseTagPopover) onCloseTagPopover();
   };
 
-  const handleFrameClick = (
-    e: React.MouseEvent,
-    index: number,
-    layerId?: string,
-  ) => {
+  const handleFrameClick = (e: React.MouseEvent, index: number, layerId?: string) => {
     let newSelection = [...state.selectedFrameIndices];
 
     if (e.shiftKey) {
       const startIdx = state.activeFrameIndex;
       const endIdx = index;
       const range = [];
-      for (
-        let i = Math.min(startIdx, endIdx);
-        i <= Math.max(startIdx, endIdx);
-        i++
-      ) {
+      for (let i = Math.min(startIdx, endIdx); i <= Math.max(startIdx, endIdx); i++) {
         range.push(i);
       }
       newSelection = Array.from(new Set([...newSelection, ...range]));
@@ -641,13 +557,13 @@ export const Timeline: React.FC<TimelineProps> = ({
 
   const handleLayerDragStart = (e: React.DragEvent, id: string) => {
     e.stopPropagation();
-    e.dataTransfer.setData("type", "layer");
-    e.dataTransfer.setData("id", id);
-    setDragState({ type: "layer", id, overId: null, position: "after" });
+    e.dataTransfer.setData('type', 'layer');
+    e.dataTransfer.setData('id', id);
+    setDragState({ type: 'layer', id, overId: null, position: 'after' });
   };
 
   const handleLayerDragOver = (e: React.DragEvent, hoveredLayer: any) => {
-    if (dragState?.type !== "layer") return;
+    if (dragState?.type !== 'layer') return;
     e.preventDefault();
     e.stopPropagation();
 
@@ -657,40 +573,27 @@ export const Timeline: React.FC<TimelineProps> = ({
     const height = rect.height;
     const relativeY = e.clientY - rect.top;
     const relativeX = e.clientX - rect.left;
-
     const childLevel = hoveredLayer.childLevel ?? 0;
 
-    let position: "before" | "after" | "inside" | "outside" = "after";
+    let position: 'before' | 'after' | 'inside' | 'outside' = 'after';
 
-    // Un-nesting check: if item is inside a group and mouse is dragged towards the left margin
     if (hoveredLayer.parentId && relativeX < Math.max(18, childLevel * 10)) {
-      position = "outside";
-    } else if (hoveredLayer.type === "group") {
-      if (relativeY < height * 0.25) {
-        position = "before";
-      } else if (relativeY > height * 0.75) {
-        position = "after";
-      } else {
-        position = "inside";
-      }
+      position = 'outside';
+    } else if (hoveredLayer.type === 'group') {
+      if (relativeY < height * 0.25) position = 'before';
+      else if (relativeY > height * 0.75) position = 'after';
+      else position = 'inside';
     } else {
-      if (relativeY < height / 2) {
-        position = "before";
-      } else {
-        position = "after";
-      }
+      position = relativeY < height / 2 ? 'before' : 'after';
     }
 
-    if (
-      dragState.overId !== hoveredLayer.id ||
-      dragState.position !== position
-    ) {
+    if (dragState.overId !== hoveredLayer.id || dragState.position !== position) {
       setDragState({ ...dragState, overId: hoveredLayer.id, position });
     }
   };
 
   const handleLayerDrop = (e: React.DragEvent, targetId: string) => {
-    if (dragState?.type !== "layer") return;
+    if (dragState?.type !== 'layer') return;
     e.preventDefault();
     e.stopPropagation();
     if (dragState.id !== targetId && dragState.overId) {
@@ -699,65 +602,24 @@ export const Timeline: React.FC<TimelineProps> = ({
     setDragState(null);
   };
 
-  const handleFrameDragStart = (e: React.DragEvent, index: number) => {
-    e.stopPropagation();
-    e.dataTransfer.setData("type", "frame");
-    e.dataTransfer.setData("index", index.toString());
-    setDragState({
-      type: "frame",
-      id: index.toString(),
-      overId: null,
-      position: "after",
-    });
-  };
-
-  const handleFrameDragOver = (e: React.DragEvent, index: number) => {
-    if (dragState?.type !== "frame") return;
-    e.preventDefault();
-    e.stopPropagation();
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const midX = rect.left + rect.width / 2;
-    const position = e.clientX < midX ? "before" : "after";
-    if (
-      dragState.overId !== index.toString() ||
-      dragState.position !== position
-    ) {
-      setDragState({ ...dragState, overId: index.toString(), position });
-    }
-  };
-
-  const handleFrameDrop = (e: React.DragEvent, targetIndex: number) => {
-    if (dragState?.type !== "frame") return;
-    e.preventDefault();
-    e.stopPropagation();
-    const fromIndex = parseInt(dragState.id);
-    if (fromIndex !== targetIndex) {
-      let insertIndex = targetIndex;
-      if (dragState.position === "after") insertIndex = targetIndex + 1;
-      if (fromIndex < insertIndex) insertIndex--;
-      onReorderFrames(fromIndex, insertIndex);
-    }
-    setDragState(null);
-  };
-
   const handleInsertButtonDragOver = (e: React.DragEvent, index: number) => {
-    if (dragState?.type !== "frame") return;
+    if (dragState?.type !== 'frame') return;
     e.preventDefault();
     e.stopPropagation();
     if (dragState.overId !== `insert-${index}`) {
       setDragState({
         ...dragState,
         overId: `insert-${index}`,
-        position: "before",
+        position: 'before',
       });
     }
   };
 
   const handleInsertButtonDrop = (e: React.DragEvent, index: number) => {
-    if (dragState?.type !== "frame") return;
+    if (dragState?.type !== 'frame') return;
     e.preventDefault();
     e.stopPropagation();
-    const fromIndex = parseInt(dragState.id);
+    const fromIndex = parseInt(dragState.id, 10);
     let insertIndex = index;
     if (fromIndex < insertIndex) insertIndex--;
     onReorderFrames(fromIndex, insertIndex);
@@ -765,24 +627,24 @@ export const Timeline: React.FC<TimelineProps> = ({
   };
 
   const handleLayerContainerDragOver = (e: React.DragEvent) => {
-    if (dragState?.type !== "layer") return;
+    if (dragState?.type !== 'layer') return;
     e.preventDefault();
     e.stopPropagation();
-    if (dragState.overId !== "root-bottom") {
+    if (dragState.overId !== 'root-bottom') {
       setDragState({
         ...dragState,
-        overId: "root-bottom",
-        position: "root-bottom",
+        overId: 'root-bottom',
+        position: 'root-bottom',
       });
     }
   };
 
   const handleLayerContainerDrop = (e: React.DragEvent) => {
-    if (dragState?.type !== "layer") return;
+    if (dragState?.type !== 'layer') return;
     e.preventDefault();
     e.stopPropagation();
-    if (dragState.overId === "root-bottom") {
-      onReorderLayers(dragState.id, "root-bottom", "root-bottom");
+    if (dragState.overId === 'root-bottom') {
+      onReorderLayers(dragState.id, 'root-bottom', 'root-bottom');
     } else if (dragState.overId && dragState.id !== dragState.overId) {
       onReorderLayers(dragState.id, dragState.overId, dragState.position);
     }
@@ -790,13 +652,12 @@ export const Timeline: React.FC<TimelineProps> = ({
   };
 
   const handleFrameContainerDragOver = (e: React.DragEvent) => {
-    if (dragState?.type !== "frame") return;
+    if (dragState?.type !== 'frame') return;
     e.preventDefault();
     e.stopPropagation();
     const container = e.currentTarget as HTMLElement;
     const rect = container.getBoundingClientRect();
     const scrollLeft = container.scrollLeft;
-    // Each frame header is min-w-[40px] w-10 (40px)
     const relativeX = e.clientX - rect.left + scrollLeft;
 
     if (state.frames.length === 0) return;
@@ -804,31 +665,25 @@ export const Timeline: React.FC<TimelineProps> = ({
     const preciseIndex = relativeX / 40;
     let targetIndex = Math.floor(preciseIndex);
     if (targetIndex < 0) targetIndex = 0;
-    if (targetIndex >= state.frames.length)
-      targetIndex = state.frames.length - 1;
+    if (targetIndex >= state.frames.length) targetIndex = state.frames.length - 1;
 
     const offset = preciseIndex - targetIndex;
-    const position = offset < 0.5 ? "before" : "after";
+    const position = offset < 0.5 ? 'before' : 'after';
 
-    if (
-      dragState.overId !== targetIndex.toString() ||
-      dragState.position !== position
-    ) {
+    if (dragState.overId !== targetIndex.toString() || dragState.position !== position) {
       setDragState({ ...dragState, overId: targetIndex.toString(), position });
     }
   };
 
   const handleFrameContainerDrop = (e: React.DragEvent) => {
-    if (dragState?.type !== "frame") return;
+    if (dragState?.type !== 'frame') return;
     e.preventDefault();
     e.stopPropagation();
-    const fromIndex = parseInt(dragState.id);
-    const targetIndex = dragState.overId
-      ? parseInt(dragState.overId)
-      : state.frames.length - 1;
+    const fromIndex = parseInt(dragState.id, 10);
+    const targetIndex = dragState.overId ? parseInt(dragState.overId, 10) : state.frames.length - 1;
     if (fromIndex !== targetIndex) {
       let insertIndex = targetIndex;
-      if (dragState.position === "after") insertIndex = targetIndex + 1;
+      if (dragState.position === 'after') insertIndex = targetIndex + 1;
       if (fromIndex < insertIndex) insertIndex--;
       onReorderFrames(fromIndex, insertIndex);
     }
@@ -838,39 +693,56 @@ export const Timeline: React.FC<TimelineProps> = ({
   const isMultiFrame = state.selectedFrameIndices.length > 1;
   const canTween = state.selectedFrameIndices.length >= 3;
 
+  const allTags = state.tags || [];
+  const { trackTags, maxTracks } = calculateTagTracks(allTags, resizingTagState);
+  const { columns, frameXMap, totalWidth } = calculateColumns(
+    state.frames.length,
+    allTags,
+    collapsedTagIds
+  );
+  const tagStripHeight = allTags.length > 0 ? Math.max(28, maxTracks * 26 + 6) : 0;
+  const totalHeaderHeight = tagStripHeight + 32;
+
+  const activeEditingTag = tagPopover?.isOpen ? tagPopover.tag : null;
+  const tagPopoverAnchor = activeEditingTag
+    ? {
+        getBoundingClientRect: () =>
+          (tagRefs.current.get(activeEditingTag.id) ?? tagButtonRef.current)?.getBoundingClientRect() ??
+          new DOMRect(0, 0, 0, 0),
+      }
+    : null;
+
   return (
-    <div className="h-full bg-card border-t border-border/30 flex flex-col text-sm select-none">
+    <div className="flex h-full flex-col bg-card text-sm select-none">
       {resizingTagState && resizingTagState.hasMoved && (
-        <div className="fixed top-12 left-1/2 -translate-x-1/2 z-[200] bg-popover text-popover-foreground border border-border px-3 py-1.5 rounded-lg shadow-2xl text-xs font-medium flex items-center gap-2 animate-in fade-in zoom-in-95 pointer-events-none">
+        <div className="pointer-events-none fixed top-12 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-border-strong bg-popover px-3 py-1.5 text-xs font-medium text-popover-foreground shadow-2xl">
           <Tag size={13} className="text-primary" />
           <span>
             {Object.keys(resizingTagState.currentStates).length > 1 ? (
               <>
-                {resizingTagState.mode === "move" ? "Moving" : "Resizing"}{" "}
-                <strong className="text-primary font-mono font-semibold">
-                  {Object.keys(resizingTagState.currentStates).length} Selected
-                  Tags
+                {resizingTagState.mode === 'move' ? 'Moving' : 'Resizing'}{' '}
+                <strong className="font-mono font-semibold text-primary tabular-nums">
+                  {Object.keys(resizingTagState.currentStates).length} Selected Tags
                 </strong>
               </>
             ) : (
               (() => {
-                const firstState = Object.values(
-                  resizingTagState.currentStates,
-                )[0] as TagRange | undefined;
+                const firstState = Object.values(resizingTagState.currentStates)[0] as
+                  | TagRange
+                  | undefined;
                 return (
                   <>
-                    {resizingTagState.mode === "resize-left"
-                      ? "Resizing Start: "
-                      : resizingTagState.mode === "resize-right"
-                        ? "Resizing End: "
-                        : "Moving Tag: "}
-                    <strong className="text-primary font-mono font-semibold">
-                      Frame {firstState ? firstState.from + 1 : 1} -{" "}
+                    {resizingTagState.mode === 'resize-left'
+                      ? 'Resizing Start: '
+                      : resizingTagState.mode === 'resize-right'
+                        ? 'Resizing End: '
+                        : 'Moving Tag: '}
+                    <strong className="font-mono font-semibold text-primary tabular-nums">
+                      Frame {firstState ? firstState.from + 1 : 1} -{' '}
                       {firstState ? firstState.to + 1 : 1}
                     </strong>
-                    <span className="text-muted-foreground ml-1">
-                      ({firstState ? firstState.to - firstState.from + 1 : 1}{" "}
-                      frames)
+                    <span className="ml-1 font-mono text-muted-foreground tabular-nums">
+                      ({firstState ? firstState.to - firstState.from + 1 : 1} frames)
                     </span>
                   </>
                 );
@@ -880,1039 +752,935 @@ export const Timeline: React.FC<TimelineProps> = ({
         </div>
       )}
 
-      {(() => {
-        const allTags = state.tags || [];
-        const { trackTags, maxTracks } = calculateTagTracks(
-          allTags,
-          resizingTagState,
-        );
-        const { columns, frameXMap, totalWidth } = calculateColumns(
-          state.frames.length,
-          allTags,
-          collapsedTagIds,
-        );
-        const tagStripHeight =
-          allTags.length > 0 ? Math.max(28, maxTracks * 26 + 6) : 0;
-        const totalHeaderHeight = tagStripHeight + 32; // Tag strip + 32px frame numbers
+      {/* Single Shared Popover for Tag Properties */}
+      <Popover
+        open={!!(tagPopover?.isOpen && activeEditingTag && tagPopoverAnchor)}
+        onOpenChange={(open) => {
+          if (!open) handleCloseTagPopover();
+        }}
+      >
+        <PopoverContent
+          anchor={tagPopoverAnchor}
+          align="end"
+          side="bottom"
+          sideOffset={8}
+          collisionPadding={16}
+          initialFocus="none"
+          className="w-auto p-3.5"
+        >
+          {activeEditingTag && (
+            <AnimationTagPopover
+              isOpen={true}
+              tag={activeEditingTag}
+              isNew={false}
+              totalFrames={state.frames.length}
+              frames={state.frames}
+              onSave={(savedTag) => {
+                if (onSaveTag) {
+                  onSaveTag(savedTag);
+                } else if (onAddTag) {
+                  onAddTag(savedTag.name, savedTag.from, savedTag.to, savedTag.color);
+                }
+              }}
+              onClose={handleCloseTagPopover}
+              onDelete={
+                onDeleteTag
+                  ? (tagId) => {
+                      onDeleteTag(tagId);
+                      handleCloseTagPopover();
+                    }
+                  : undefined
+              }
+            />
+          )}
+        </PopoverContent>
+      </Popover>
 
-        return (
-          <div className="flex-1 flex flex-col overflow-hidden w-full h-full bg-card select-none">
-            {/* Fixed Top Header Row */}
-            <div
-              className="flex shrink-0 border-b border-border/30 bg-muted/30 overflow-hidden"
-              style={{ height: `${totalHeaderHeight}px` }}
-            >
-              {/* Left Top Header Section */}
+      <div className="flex h-full w-full flex-1 flex-col overflow-hidden bg-card select-none">
+        {/* Top Header Row */}
+        <div
+          className="flex shrink-0 overflow-hidden border-b border-border bg-background/50"
+          style={{ height: `${totalHeaderHeight}px` }}
+        >
+          {/* Left Top Controls */}
+          <div
+            style={{ width: `${sidebarWidth}px` }}
+            className="flex shrink-0 flex-col overflow-hidden border-r border-border bg-card"
+          >
+            {tagStripHeight > 0 && (
               <div
-                style={{ width: `${sidebarWidth}px` }}
-                className="shrink-0 border-r border-border/30 flex flex-col bg-muted overflow-hidden"
+                className="flex shrink-0 items-center gap-1.5 border-b border-border bg-background/40 px-2.5 text-[11px] font-medium text-muted-foreground select-none"
+                style={{ height: `${tagStripHeight}px` }}
               >
-                {tagStripHeight > 0 && (
-                  <div
-                    className="bg-secondary/15 border-b border-border/30 flex items-center px-2 gap-1.5 shrink-0 text-[10px] uppercase font-semibold tracking-wider text-muted-foreground/60 select-none"
-                    style={{ height: `${tagStripHeight}px` }}
-                  >
-                    <Tag size={11} className="text-primary/70 shrink-0" />
-                    <span className="truncate">Tags</span>
-                  </div>
-                )}
+                <Tag size={11} className="shrink-0 text-primary" />
+                <span className="truncate">Tags</span>
+              </div>
+            )}
 
-                <div className="h-8 bg-secondary/20 flex items-center px-2 gap-1 shrink-0 overflow-hidden">
-                <Tooltip>
-                  <TooltipTrigger asChild>
+            <div className="flex h-8 shrink-0 items-center gap-1 overflow-hidden px-2">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
                     <button
+                      type="button"
+                      aria-label="Duplicate Frame"
                       onClick={() =>
-                        isMultiFrame
-                          ? onDuplicateSelectedFrames()
-                          : onDuplicateFrame()
+                        isMultiFrame ? onDuplicateSelectedFrames() : onDuplicateFrame()
                       }
-                      className={`p-1 hover:text-foreground transition-colors ${isMultiFrame ? "text-primary font-bold" : "text-muted-foreground"}`}
+                      className={`flex h-6 w-6 items-center justify-center rounded-sm transition-colors hover:bg-accent ${
+                        isMultiFrame ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
+                      }`}
                     >
-                      <Copy size={14} />
+                      <Copy size={13} />
                     </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">Duplicate Frame</TooltipContent>
-                </Tooltip>
+                  }
+                />
+                <TooltipContent side="top">Duplicate Frame</TooltipContent>
+              </Tooltip>
 
-                <Tooltip>
-                  <TooltipTrigger asChild>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
                     <button
-                      onClick={() =>
-                        isMultiFrame
-                          ? onDeleteSelectedFrames()
-                          : onDeleteFrame()
-                      }
-                      className={`p-1 hover:text-destructive transition-colors ${isMultiFrame ? "text-destructive font-bold" : "text-muted-foreground"}`}
+                      type="button"
+                      aria-label="Delete Frame"
+                      onClick={() => (isMultiFrame ? onDeleteSelectedFrames() : onDeleteFrame())}
+                      className={`flex h-6 w-6 items-center justify-center rounded-sm transition-colors hover:bg-destructive/15 hover:text-destructive ${
+                        isMultiFrame ? 'text-destructive' : 'text-muted-foreground'
+                      }`}
                     >
-                      <Trash2 size={14} />
+                      <Trash2 size={13} />
                     </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">Delete Frame</TooltipContent>
-                </Tooltip>
+                  }
+                />
+                <TooltipContent side="top">Delete Frame</TooltipContent>
+              </Tooltip>
 
-                <div className="h-3 w-[1px] bg-border mx-0.5"></div>
+              <div className="mx-0.5 h-3.5 w-px bg-border" />
 
-                <Tooltip>
-                  <TooltipTrigger asChild>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
                     <button
+                      type="button"
+                      aria-label="Tween Between Selected Frames"
                       onClick={onTweenFrames}
                       disabled={!canTween}
-                      className={`p-1 transition-all ${canTween ? "text-primary hover:text-primary-foreground hover:bg-primary rounded" : "text-muted-foreground/40 cursor-not-allowed"}`}
+                      className="flex h-6 w-6 items-center justify-center rounded-sm text-primary transition-colors hover:bg-primary hover:text-primary-foreground disabled:cursor-not-allowed disabled:text-muted-foreground/35 disabled:hover:bg-transparent"
                     >
-                      <Sparkles size={14} />
+                      <Sparkles size={13} />
                     </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">
-                    Interpolate (Tween) Between Selection
-                  </TooltipContent>
-                </Tooltip>
-
-                <div className="h-3 w-[1px] bg-border mx-0.5"></div>
-
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      onClick={(e) => handleOpenTagPopover(undefined, e)}
-                      className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded transition-colors text-muted-foreground hover:text-foreground hover:bg-secondary/40"
-                    >
-                      <Tag size={13} className="text-primary" />
-                      <span className="text-[11px] font-medium hidden sm:inline">
-                        Tag
-                      </span>
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">
-                    Create Animation Tag from Selection
-                  </TooltipContent>
-                </Tooltip>
-              </div>
-            </div>
-
-              {/* Right Top Header Section (Tag Strip + Ruler) */}
-              <div
-                ref={headerHorizontalScrollRef}
-                className="flex-1 overflow-x-hidden overflow-y-hidden bg-[#171717] no-scrollbar"
-              >
-                <div className="flex flex-col min-w-max min-w-full relative">
-                  {/* Insert Buttons Overlay */}
-                  <div
-                    className="absolute left-0 w-full h-8 pointer-events-none z-30"
-                    style={{ top: `${tagStripHeight}px` }}
-                  >
-                    {Array.from({ length: state.frames.length + 1 }).map(
-                      (_, i) => {
-                        const isOver =
-                          dragState?.type === "frame" &&
-                          dragState.overId === `insert-${i}`;
-                        const framePos = frameXMap[i] || { x: i * 40 };
-                        return (
-                          <div
-                            key={`insert-${i}`}
-                            onDragOver={(e) =>
-                              handleInsertButtonDragOver(e, i)
-                            }
-                            onDrop={(e) => handleInsertButtonDrop(e, i)}
-                            className="absolute top-0 bottom-0 w-4 -ml-2 pointer-events-auto group flex items-center justify-center cursor-pointer"
-                            style={{ left: framePos.x }}
-                          >
-                            <div
-                              className={`w-[2px] h-full bg-primary transition-opacity ${isOver ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
-                            />
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <button
-                                  onClick={() => onInsertFrame(i)}
-                                  className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 bg-primary text-white rounded-full opacity-0 group-hover:opacity-100 flex items-center justify-center shadow-lg hover:scale-125 transition-all"
-                                >
-                                  <Plus size={10} />
-                                </button>
-                              </TooltipTrigger>
-                              <TooltipContent side="top">
-                                Insert Frame
-                              </TooltipContent>
-                            </Tooltip>
-                          </div>
-                        );
-                      },
-                    )}
-                  </div>
-
-                  {/* Multi-Track Tag Strip */}
-                  {allTags.length > 0 && (
-                    <div
-                      className="border-b border-border/30 bg-background/60 relative overflow-hidden transition-all cursor-default min-w-full"
-                      style={{
-                        width: `${totalWidth}px`,
-                        height: `${tagStripHeight}px`,
-                      }}
-                      onClick={() => setSelectedTagIds(new Set())}
-                    >
-                      {trackTags.map((tag) => {
-                        const startPos = frameXMap[tag.from] || {
-                          x: tag.from * 40,
-                          width: 40,
-                          isHidden: false,
-                        };
-                        const endPos = frameXMap[tag.to] || {
-                          x: tag.to * 40,
-                          width: 40,
-                          isHidden: false,
-                        };
-                        const isCollapsed = collapsedTagIds.has(tag.id);
-                        const isPopoverActive =
-                          tagPopover?.isOpen && tagPopover.tag.id === tag.id;
-                        const isTagSelected = selectedTagIds.has(tag.id);
-                        const color = tag.color || "#3b82f6";
-                        const transparentBg =
-                          color.startsWith("#") && color.length === 7
-                            ? `${color}50`
-                            : color;
-
-                        let leftX = startPos.x;
-                        let widthX = 36;
-
-                        if (!isCollapsed) {
-                          const rightX = endPos.isHidden
-                            ? endPos.x
-                            : endPos.x + endPos.width;
-                          widthX = Math.max(28, rightX - leftX);
-                        }
-
-                        const topY = tag.trackIndex * 26 + 3;
-                        const legHeight = Math.max(
-                          6,
-                          tagStripHeight - topY - 23,
-                        );
-                        const renderTagDirectionIcon = () => {
-                          switch (tag.direction) {
-                            case "reverse":
-                              return <ArrowLeft size={10} />;
-                            case "ping-pong":
-                              return <ArrowLeftRight size={10} />;
-                            case "ping-pong-reverse":
-                              return <ArrowRightLeft size={10} />;
-                            case "forward":
-                            default:
-                              return <ArrowRight size={10} />;
-                          }
-                        };
-
-                        const isPopoverOpen = !!(tagPopover?.isOpen && tagPopover.tag.id === tag.id);
-
-                        return (
-                          <Popover
-                            key={tag.id}
-                            open={isPopoverOpen}
-                            onOpenChange={(open) => {
-                              if (!open && tagPopover?.tag.id === tag.id) handleCloseTagPopover();
-                            }}
-                          >
-                            <ContextMenu>
-                              <ContextMenuTrigger asChild>
-                                <PopoverAnchor asChild>
-                                  <div
-                                    className="absolute group/tag select-none overflow-visible"
-                                    style={{
-                                      left: `${leftX}px`,
-                                      top: `${topY}px`,
-                                      width: `${widthX}px`,
-                                      height: "20px",
-                                      zIndex: isTagSelected
-                                        ? 40
-                                        : isPopoverOpen
-                                          ? 30
-                                          : 10,
-                                    }}
-                                  >
-                                    {/* Tag Header Badge - semi-transparent background, fits title snugly with fully rounded corners */}
-                                    <div className="flex items-center gap-1 z-20">
-                                      <Tooltip delayDuration={300}>
-                                        <TooltipTrigger asChild>
-                                          <div
-                                            className={`rounded-sm inline-flex items-center text-[10px] font-bold text-white shadow-xs transition-all cursor-default w-max max-w-[220px] h-[18px] px-1.5 gap-1 whitespace-nowrap ${
-                                              isTagSelected
-                                                ? "ring-2 ring-white scale-[1.01] shadow-md brightness-110"
-                                                : isPopoverOpen
-                                                  ? "ring-2 ring-amber-300"
-                                                  : ""
-                                            }`}
-                                            style={{
-                                              backgroundColor: transparentBg,
-                                            }}
-                                            onMouseDown={(e) =>
-                                              handleTagMouseDown(e, tag, "move")
-                                            }
-                                            onClick={(e) => e.stopPropagation()}
-                                            onDoubleClick={(e) =>
-                                              handleOpenTagPopover(tag, e)
-                                            }
-                                            onContextMenu={(e) => {
-                                              if (!selectedTagIds.has(tag.id)) {
-                                                if (
-                                                  e.shiftKey ||
-                                                  e.ctrlKey ||
-                                                  e.metaKey
-                                                ) {
-                                                  setSelectedTagIds((prev) =>
-                                                    new Set(prev).add(tag.id),
-                                                  );
-                                                } else {
-                                                  setSelectedTagIds(
-                                                    new Set([tag.id]),
-                                                  );
-                                                }
-                                              }
-                                            }}
-                                          >
-                                            {/* Tag Name & Direction Icon */}
-                                            <div className="flex items-center gap-1 pointer-events-none shrink-0 truncate">
-                                              <span className="font-bold whitespace-nowrap leading-none truncate">
-                                                {tag.name}
-                                              </span>
-                                              {!isCollapsed &&
-                                                tag.direction &&
-                                                tag.direction !== "forward" && (
-                                                  <span
-                                                    className="opacity-80 shrink-0 flex items-center justify-center"
-                                                    title={`Direction: ${tag.direction}`}
-                                                  >
-                                                    {renderTagDirectionIcon()}
-                                                  </span>
-                                                )}
-                                            </div>
-                                          </div>
-                                        </TooltipTrigger>
-                                        <TooltipContent
-                                          side="top"
-                                          className="text-xs bg-popover text-popover-foreground border border-border z-[100]"
-                                        >
-                                          <div className="flex flex-col gap-0.5">
-                                            <span className="font-bold text-primary">
-                                              {tag.name}
-                                            </span>
-                                            <span className="text-[10px] text-muted-foreground font-mono">
-                                              Frames {tag.from + 1} – {tag.to + 1}{" "}
-                                              ({tag.to - tag.from + 1}{" "}
-                                              {tag.to - tag.from === 0
-                                                ? "frame"
-                                                : "frames"}
-                                              )
-                                            </span>
-                                            {tag.direction &&
-                                              tag.direction !== "forward" && (
-                                                <span className="text-[10px] text-muted-foreground capitalize">
-                                                  Direction: {tag.direction}
-                                                </span>
-                                              )}
-                                          </div>
-                                        </TooltipContent>
-                                      </Tooltip>
-
-                                      {/* Collapse / Expand button placed outside the label */}
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          toggleCollapseTag(tag.id, e);
-                                        }}
-                                        className="opacity-0 group-hover/tag:opacity-100 transition-opacity duration-150 p-0.5 bg-background/80 hover:bg-background border border-border/60 text-muted-foreground hover:text-foreground rounded shadow-xs cursor-pointer shrink-0 z-30"
-                                        title={
-                                          isCollapsed
-                                            ? "Expand tag frames"
-                                            : "Collapse tag frames"
-                                        }
-                                      >
-                                        {isCollapsed ? (
-                                          <ChevronsLeftRight size={10} />
-                                        ) : (
-                                          <ChevronsRightLeft size={10} />
-                                        )}
-                                      </button>
-                                    </div>
-
-                                    {/* Left Resize Handle - highlights left bracket leg on hover */}
-                                    {!isCollapsed && (
-                                      <div
-                                        className="absolute -left-1 top-[19px] w-2.5 cursor-ew-resize z-30 group/lh opacity-0 group-hover/tag:opacity-100 flex items-center justify-center"
-                                        style={{ height: `${legHeight}px` }}
-                                        title="Drag to resize tag start"
-                                        onMouseDown={(e) => {
-                                          e.stopPropagation();
-                                          handleTagMouseDown(
-                                            e,
-                                            tag,
-                                            "resize-left",
-                                          );
-                                        }}
-                                      >
-                                        <div className="w-[3px] h-full bg-white opacity-0 group-hover/lh:opacity-100 transition-opacity rounded-full shadow-[0_0_4px_rgba(255,255,255,0.8)]" />
-                                      </div>
-                                    )}
-
-                                    {/* Right Resize Handle - highlights right bracket leg on hover */}
-                                    {!isCollapsed && (
-                                      <div
-                                        className="absolute top-[19px] w-2.5 cursor-ew-resize z-30 group/rh opacity-0 group-hover/tag:opacity-100 flex items-center justify-center"
-                                        style={{
-                                          left: `${Math.max(0, widthX - 8)}px`,
-                                          height: `${legHeight}px`,
-                                        }}
-                                        title="Drag to resize tag end"
-                                        onMouseDown={(e) => {
-                                          e.stopPropagation();
-                                          handleTagMouseDown(
-                                            e,
-                                            tag,
-                                            "resize-right",
-                                          );
-                                        }}
-                                      >
-                                        <div className="w-[3px] h-full bg-white opacity-0 group-hover/rh:opacity-100 transition-opacity rounded-full shadow-[0_0_4px_rgba(255,255,255,0.8)]" />
-                                      </div>
-                                    )}
-
-                                    {/* Smoothly rounded Aseprite-style bracket line & legs */}
-                                    {(() => {
-                                      const r = Math.min(
-                                        5,
-                                        Math.max(1, (widthX - 2) / 2),
-                                      );
-                                      const xRight = Math.max(2, widthX - 1);
-                                      return (
-                                        <svg
-                                          className="absolute top-[19px] left-0 pointer-events-none z-20 overflow-visible"
-                                          style={{
-                                            width: `${Math.max(4, widthX)}px`,
-                                            height: `${legHeight}px`,
-                                          }}
-                                        >
-                                          <path
-                                            d={`M 1 ${legHeight} V ${1 + r} Q 1 1 ${1 + r} 1 H ${xRight - r} Q ${xRight} 1 ${xRight} ${1 + r} V ${legHeight}`}
-                                            fill="none"
-                                            stroke={color}
-                                            strokeWidth="2"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                          />
-                                        </svg>
-                                      );
-                                    })()}
-                                  </div>
-                                </PopoverAnchor>
-                              </ContextMenuTrigger>
-                              <ContextMenuContent>
-                                {selectedTagIds.size <= 1 ? (
-                                  <>
-                                    <ContextMenuItem
-                                      onClick={(e) =>
-                                        handleOpenTagPopover(tag, e)
-                                      }
-                                    >
-                                      Edit Tag Properties...
-                                    </ContextMenuItem>
-                                    <ContextMenuItem
-                                      onClick={() => toggleCollapseTag(tag.id)}
-                                    >
-                                      {isCollapsed
-                                        ? "Expand / Unfold Frames (+)"
-                                        : "Collapse / Fold Frames (-)"}
-                                    </ContextMenuItem>
-                                    {onSaveTag && (
-                                      <ContextMenuItem
-                                        onClick={() => {
-                                          onSaveTag({
-                                            ...tag,
-                                            id: `tag_${Date.now()}`,
-                                            name: `${tag.name} (Copy)`,
-                                          });
-                                        }}
-                                      >
-                                        Duplicate Tag
-                                      </ContextMenuItem>
-                                    )}
-                                    {onDeleteTag && (
-                                      <>
-                                        <ContextMenuSeparator />
-                                        <ContextMenuItem
-                                          onClick={() => {
-                                            onDeleteTag(tag.id);
-                                            setSelectedTagIds((prev) => {
-                                              const next = new Set(prev);
-                                              next.delete(tag.id);
-                                              return next;
-                                            });
-                                            if (tagPopover?.tag.id === tag.id)
-                                              handleCloseTagPopover();
-                                          }}
-                                          className="text-destructive focus:text-destructive"
-                                        >
-                                          Delete Tag
-                                        </ContextMenuItem>
-                                      </>
-                                    )}
-                                  </>
-                                ) : (
-                                  <>
-                                    <ContextMenuItem
-                                      onClick={() => {
-                                        const allCollapsed = Array.from(
-                                          selectedTagIds,
-                                        ).every((id) =>
-                                          collapsedTagIds.has(id),
-                                        );
-                                        setCollapsedTagIds((prev) => {
-                                          const next = new Set(prev);
-                                          selectedTagIds.forEach((id) => {
-                                            if (allCollapsed) next.delete(id);
-                                            else next.add(id);
-                                          });
-                                          return next;
-                                        });
-                                      }}
-                                    >
-                                      {Array.from(selectedTagIds).every((id) =>
-                                        collapsedTagIds.has(id),
-                                      )
-                                        ? `Expand Frames (${selectedTagIds.size} Tags)`
-                                        : `Collapse Frames (${selectedTagIds.size} Tags)`}
-                                    </ContextMenuItem>
-                                    {onSaveTag && (
-                                      <ContextMenuItem
-                                        onClick={() => {
-                                          const allTagsList = state.tags || [];
-                                          selectedTagIds.forEach((id) => {
-                                            const t = allTagsList.find(
-                                              (x) => x.id === id,
-                                            );
-                                            if (t) {
-                                              onSaveTag({
-                                                ...t,
-                                                id: `tag_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-                                                name: `${t.name} (Copy)`,
-                                              });
-                                            }
-                                          });
-                                        }}
-                                      >
-                                        Duplicate Selected Tags (
-                                        {selectedTagIds.size})
-                                      </ContextMenuItem>
-                                    )}
-                                    {onDeleteTag && (
-                                      <>
-                                        <ContextMenuSeparator />
-                                        <ContextMenuItem
-                                          onClick={() => {
-                                            selectedTagIds.forEach((id) =>
-                                              onDeleteTag(id),
-                                            );
-                                            setSelectedTagIds(new Set());
-                                            if (
-                                              tagPopover &&
-                                              selectedTagIds.has(
-                                                tagPopover.tag.id,
-                                              )
-                                            )
-                                              handleCloseTagPopover();
-                                          }}
-                                          className="text-destructive focus:text-destructive"
-                                        >
-                                          Delete Selected Tags (
-                                          {selectedTagIds.size})
-                                        </ContextMenuItem>
-                                      </>
-                                    )}
-                                  </>
-                                )}
-                              </ContextMenuContent>
-                            </ContextMenu>
-
-                            {isPopoverOpen && (
-                              <PopoverContent
-                                align="right"
-                                side="bottom"
-                                sideOffset={-8}
-                                collisionPadding={16}
-                                className="p-0 border-none bg-transparent shadow-none outline-none z-[100]"
-                                onOpenAutoFocus={(e) => e.preventDefault()}
-                              >
-                                <AnimationTagPopover
-                                  isOpen={true}
-                                  tag={tag}
-                                  isNew={false}
-                                  totalFrames={state.frames.length}
-                                  frames={state.frames}
-                                  onSave={(savedTag) => {
-                                    if (onSaveTag) {
-                                      onSaveTag(savedTag);
-                                    } else if (onAddTag) {
-                                      onAddTag(
-                                        savedTag.name,
-                                        savedTag.from,
-                                        savedTag.to,
-                                        savedTag.color,
-                                      );
-                                    }
-                                  }}
-                                  onClose={handleCloseTagPopover}
-                                  onDelete={
-                                    onDeleteTag
-                                      ? (tagId) => {
-                                          onDeleteTag(tagId);
-                                          handleCloseTagPopover();
-                                        }
-                                      : undefined
-                                  }
-                                />
-                              </PopoverContent>
-                            )}
-                          </Popover>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {/* Frame Numbers Ruler */}
-                  <div className="flex h-8 border-b border-border/30 bg-muted/30">
-                    {columns.map((col) => {
-                      if (col.type === "collapsed") {
-                        return (
-                          <div
-                            key={`col-header-collapsed-${col.tag.id}`}
-                            onClick={(e) =>
-                              toggleCollapseTag(col.tag.id, e)
-                            }
-                            className="w-[36px] border-r border-border/30 bg-zinc-900/80 hover:bg-zinc-800 flex items-center justify-center cursor-pointer group shrink-0 text-[10px] font-semibold text-amber-400/90"
-                            title={`Collapsed tag "${col.tag.name}" (${col.count} frames). Click to expand.`}
-                          >
-                            <span>{col.count}f</span>
-                          </div>
-                        );
-                      }
-
-                      const idx = col.frameIndex;
-                      const frame = state.frames[idx];
-                      const isCurrent = state.currentFrameIndex === idx;
-                      const isSelected =
-                        state.selectedFrameIndices.includes(idx);
-
-                      return (
-                        <ContextMenu key={frame.id}>
-                          <ContextMenuTrigger asChild>
-                            <div
-                              onClick={(e) => handleFrameClick(e, idx)}
-                              className={`min-w-[40px] w-10 border-r border-border/30 flex items-center justify-center text-[10.5px] font-mono cursor-pointer transition-colors relative shrink-0 ${
-                                isCurrent
-                                  ? "bg-primary text-primary-foreground font-bold shadow-xs"
-                                  : isSelected
-                                    ? "bg-primary/25 text-foreground font-semibold"
-                                    : "text-muted-foreground hover:bg-secondary/40 hover:text-foreground"
-                              }`}
-                            >
-                              <span>{idx + 1}</span>
-                            </div>
-                          </ContextMenuTrigger>
-                          <ContextMenuContent>
-                            <ContextMenuItem
-                              onClick={() => {
-                                onSelectFrames([idx], idx);
-                                onDuplicateFrame();
-                              }}
-                            >
-                              Duplicate
-                            </ContextMenuItem>
-                            <ContextMenuItem
-                              onClick={() => {
-                                onSelectFrames([idx], idx);
-                                onDeleteFrame();
-                              }}
-                              className="text-destructive focus:text-destructive"
-                            >
-                              Delete
-                            </ContextMenuItem>
-                          </ContextMenuContent>
-                        </ContextMenu>
-                      );
-                    })}
-
-                    {/* New Frame Button */}
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          onClick={onAddFrame}
-                          className="min-w-[40px] w-10 border-r border-border/30 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary/40 transition-colors shrink-0 cursor-pointer"
-                        >
-                          <Plus size={14} />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top">New Frame</TooltipContent>
-                    </Tooltip>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Allotment Container (height constrained, synchronized inner vertical scrolling) */}
-            <div className="flex-1 min-h-0 w-full h-full bg-[#171717]">
-              <Allotment
-                key={isMobile ? "mobile" : "desktop"}
-                defaultSizes={[sidebarWidth, 1000]}
-                onChange={(sizes) => {
-                  if (sizes && sizes[0] && Math.abs(sizes[0] - sidebarWidth) > 0.5) {
-                    setSidebarWidth(sizes[0]);
                   }
-                }}
-                className="h-full w-full"
-              >
-                <Allotment.Pane minSize={100} preferredSize={sidebarWidth} priority={1 as any}>
-                  {/* Left Column (Layers) */}
-                  <div
-                    ref={layersScrollRef}
-                    onScroll={handleLayersScroll}
-                    data-vaul-no-drag
-                    className="w-full h-full overflow-y-auto overflow-x-hidden no-scrollbar bg-muted border-r border-border/30 flex flex-col"
-                  >
-                    <div
-                      onDragOver={handleLayerContainerDragOver}
-                      onDrop={handleLayerContainerDrop}
-                      className="flex flex-col"
+                />
+                <TooltipContent side="top">
+                  Interpolate (Tween) Between Selection
+                </TooltipContent>
+              </Tooltip>
+
+              <div className="mx-0.5 h-3.5 w-px bg-border" />
+
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      ref={tagButtonRef}
+                      type="button"
+                      aria-label="Create Animation Tag"
+                      onClick={(e) => handleOpenTagPopover(undefined, e)}
+                      className="flex h-6 items-center gap-1 rounded-sm px-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                     >
-                {(() => {
-                  const parentMap = getLayerParentMap(state.layers);
-                  const isCollapsed = (layer: any) => {
-                    let curr = layer;
-                    while (curr) {
-                      const parent =
-                        parentMap.get(curr.id) ||
-                        (curr.parentId
-                          ? state.layers.find((l) => l.id === curr?.parentId)
-                          : undefined);
-                      if (parent) {
-                        if (parent.collapsed) return true;
-                        curr = parent;
-                      } else {
-                        break;
-                      }
-                    }
-                    return false;
-                  };
+                      <Tag size={12} className="text-primary" />
+                      <span className="hidden sm:inline">Tag</span>
+                    </button>
+                  }
+                />
+                <TooltipContent side="top">Create Animation Tag from Selection</TooltipContent>
+              </Tooltip>
+            </div>
+          </div>
 
+          {/* Right Top Header (Tag Strip + Frame Ruler) */}
+          <div
+            ref={headerHorizontalScrollRef}
+            className="no-scrollbar flex-1 overflow-hidden bg-canvas"
+          >
+            <div className="relative flex min-w-full flex-col">
+              {/* Insert Frame Hover Handles */}
+              <div
+                className="pointer-events-none absolute left-0 z-30 h-8 w-full"
+                style={{ top: `${tagStripHeight}px` }}
+              >
+                {Array.from({ length: state.frames.length + 1 }).map((_, i) => {
+                  const isOver = dragState?.type === 'frame' && dragState.overId === `insert-${i}`;
+                  const framePos = frameXMap[i] || { x: i * 40 };
                   return (
-                    <>
-                      {state.layers
-                        .slice()
-                        .reverse()
-                        .map((layer) => {
-                          if (isCollapsed(layer)) return null;
-
-                          const isDragging =
-                            dragState?.type === "layer" &&
-                            dragState.id === layer.id;
-                          const isOver =
-                            dragState?.type === "layer" &&
-                            dragState.overId === layer.id;
-                          const isActive = state.activeLayerId === layer.id;
-                          const isSelected = state.selectedLayerIds.includes(
-                            layer.id,
-                          );
-                          const effectiveVis = isLayerVisible(
-                            layer,
-                            state.layers,
-                            parentMap,
-                          );
-                          const childLevel = layer.childLevel ?? 0;
-                          const isGroup = layer.type === "group";
-                          const childCount = isGroup
-                            ? getGroupChildCount(layer.id, state.layers)
-                            : 0;
-
-                          return (
-                            <div
-                              key={layer.id}
-                              draggable
-                              onDragStart={(e) =>
-                                handleLayerDragStart(e, layer.id)
-                              }
-                              onDragOver={(e) => {
-                                e.stopPropagation();
-                                handleLayerDragOver(e, layer);
-                              }}
-                              onDrop={(e) => {
-                                e.stopPropagation();
-                                handleLayerDrop(e, layer.id);
-                              }}
-                              onDragEnd={() => setDragState(null)}
-                              style={{
-                                paddingLeft: `${childLevel * 10 + 6}px`,
-                              }}
-                              className={`h-8 flex items-center pr-1.5 gap-1 border-b border-border/20 cursor-default group relative transition-colors shrink-0
-                                ${isGroup ? "font-semibold text-foreground/90" : "text-foreground/80"}
-                                ${isActive ? "bg-primary/15 font-semibold text-foreground border-b-primary/30" : isSelected ? "bg-secondary/60 text-foreground" : "hover:bg-accent/40 hover:text-foreground"}
-                                ${isDragging ? "opacity-30" : ""}
-                              `}
-                              onClick={() => onSelectLayer(layer.id)}
+                    <div
+                      key={`insert-${i}`}
+                      onDragOver={(e) => handleInsertButtonDragOver(e, i)}
+                      onDrop={(e) => handleInsertButtonDrop(e, i)}
+                      className="group pointer-events-auto absolute top-0 bottom-0 -ml-2 flex w-4 cursor-pointer items-center justify-center"
+                      style={{ left: framePos.x }}
+                    >
+                      <div
+                        className={`h-full w-0.5 bg-primary transition-opacity ${
+                          isOver ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                        }`}
+                      />
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label={`Insert frame at ${i + 1}`}
+                              onClick={() => onInsertFrame(i)}
+                              className="absolute top-1/2 left-1/2 flex h-4 w-4 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-primary text-primary-foreground opacity-0 shadow-md transition-all group-hover:opacity-100 hover:scale-110"
                             >
-                              {isOver && dragState.position === "before" && (
-                                <div className="absolute top-0 left-0 w-full h-[2px] bg-primary z-50 pointer-events-none rounded-full flex items-center shadow-xs">
-                                  <div className="w-1.5 h-1.5 rounded-full bg-primary -ml-1" />
-                                </div>
-                              )}
-                              {isOver && dragState.position === "after" && (
-                                <div className="absolute bottom-0 left-0 w-full h-[2px] bg-primary z-50 pointer-events-none rounded-full flex items-center shadow-xs">
-                                  <div className="w-1.5 h-1.5 rounded-full bg-primary -ml-1" />
-                                </div>
-                              )}
-                              {isOver && dragState.position === "inside" && (
-                                <div className="absolute inset-0 bg-primary/20 border-2 border-primary rounded z-50 pointer-events-none flex items-center justify-end pr-2">
-                                  <span className="text-[8.5px] font-bold text-primary bg-background border border-primary/40 px-1 py-0.2 rounded shadow-2xs">
-                                    Move Inside Group
-                                  </span>
-                                </div>
-                              )}
-                              {isOver && dragState.position === "outside" && (
-                                <div
-                                  className="absolute bottom-0 h-[2px] bg-primary z-50 pointer-events-none rounded-full flex items-center shadow-xs"
-                                  style={{
-                                    left: `-${childLevel * 10}px`,
-                                    right: 0,
-                                  }}
-                                >
-                                  <div className="w-1.5 h-1.5 rounded-full bg-primary -ml-1" />
-                                  <span className="absolute right-1 bottom-1 text-[8.5px] font-bold text-primary bg-background border border-primary/40 px-1 py-0.2 rounded shadow-2xs">
-                                    Move Outside Group
-                                  </span>
-                                </div>
-                              )}
+                              <Plus size={10} />
+                            </button>
+                          }
+                        />
+                        <TooltipContent side="top">Insert Frame</TooltipContent>
+                      </Tooltip>
+                    </div>
+                  );
+                })}
+              </div>
 
-                              {childLevel > 0 && (
-                                <div className="absolute left-1 top-0 bottom-0 border-l border-border/40 pointer-events-none" />
-                              )}
+              {/* Multi-Track Tag Strip */}
+              {allTags.length > 0 && (
+                <div
+                  className="relative min-w-full cursor-default overflow-hidden border-b border-border bg-background/60"
+                  style={{
+                    width: `${totalWidth}px`,
+                    height: `${tagStripHeight}px`,
+                  }}
+                  onClick={() => setSelectedTagIds(new Set())}
+                >
+                  {trackTags.map((tag) => {
+                    const startPos = frameXMap[tag.from] || {
+                      x: tag.from * 40,
+                      width: 40,
+                      isHidden: false,
+                    };
+                    const endPos = frameXMap[tag.to] || {
+                      x: tag.to * 40,
+                      width: 40,
+                      isHidden: false,
+                    };
+                    const isCollapsed = collapsedTagIds.has(tag.id);
+                    const isTagSelected = selectedTagIds.has(tag.id);
+                    const color = tag.color || '#3b82f6';
+                    const transparentBg =
+                      color.startsWith('#') && color.length === 7 ? `${color}48` : color;
 
-                              {isGroup ? (
+                    const leftX = startPos.x;
+                    let widthX = 36;
+                    if (!isCollapsed) {
+                      const rightX = endPos.isHidden ? endPos.x : endPos.x + endPos.width;
+                      widthX = Math.max(28, rightX - leftX);
+                    }
+
+                    const topY = tag.trackIndex * 26 + 3;
+                    const legHeight = Math.max(6, tagStripHeight - topY - 23);
+                    const isPopoverOpen = !!(tagPopover?.isOpen && tagPopover.tag.id === tag.id);
+
+                    const renderTagDirectionIcon = () => {
+                      switch (tag.direction) {
+                        case 'reverse':
+                          return <ArrowLeft size={10} />;
+                        case 'ping-pong':
+                          return <ArrowLeftRight size={10} />;
+                        case 'ping-pong-reverse':
+                          return <ArrowRightLeft size={10} />;
+                        case 'forward':
+                        default:
+                          return <ArrowRight size={10} />;
+                      }
+                    };
+
+                    return (
+                      <ContextMenu key={tag.id}>
+                        <ContextMenuTrigger
+                          render={
+                            <div
+                              ref={(el) => {
+                                if (el) tagRefs.current.set(tag.id, el);
+                                else tagRefs.current.delete(tag.id);
+                              }}
+                              className="group/tag absolute overflow-visible select-none"
+                              style={{
+                                left: `${leftX}px`,
+                                top: `${topY}px`,
+                                width: `${widthX}px`,
+                                height: '20px',
+                                zIndex: isTagSelected ? 40 : isPopoverOpen ? 30 : 10,
+                              }}
+                            >
+                              <div className="z-20 flex items-center gap-1">
+                                <Tooltip delay={300}>
+                                  <TooltipTrigger
+                                    render={
+                                      <div
+                                        className={`inline-flex h-[18px] w-max max-w-[220px] cursor-default items-center gap-1 rounded-sm px-1.5 text-[11px] font-semibold whitespace-nowrap text-white transition-all ${
+                                          isTagSelected
+                                            ? 'ring-2 ring-white brightness-110'
+                                            : isPopoverOpen
+                                              ? 'ring-2 ring-primary'
+                                              : ''
+                                        }`}
+                                        style={{ backgroundColor: transparentBg }}
+                                        onMouseDown={(e) => handleTagMouseDown(e, tag, 'move')}
+                                        onClick={(e) => e.stopPropagation()}
+                                        onDoubleClick={(e) => handleOpenTagPopover(tag, e)}
+                                        onContextMenu={(e) => {
+                                          if (!selectedTagIds.has(tag.id)) {
+                                            if (e.shiftKey || e.ctrlKey || e.metaKey) {
+                                              setSelectedTagIds((prev) => new Set(prev).add(tag.id));
+                                            } else {
+                                              setSelectedTagIds(new Set([tag.id]));
+                                            }
+                                          }
+                                        }}
+                                      >
+                                        <div className="pointer-events-none flex shrink-0 items-center gap-1 truncate">
+                                          <span className="truncate leading-none font-semibold whitespace-nowrap">
+                                            {tag.name}
+                                          </span>
+                                          {!isCollapsed &&
+                                            tag.direction &&
+                                            tag.direction !== 'forward' && (
+                                              <span className="flex shrink-0 items-center justify-center opacity-85">
+                                                {renderTagDirectionIcon()}
+                                              </span>
+                                            )}
+                                        </div>
+                                      </div>
+                                    }
+                                  />
+                                  <TooltipContent side="top" className="flex-col items-start gap-0.5">
+                                    <span className="font-semibold text-foreground">{tag.name}</span>
+                                    <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+                                      Frames {tag.from + 1} – {tag.to + 1} ({tag.to - tag.from + 1}{' '}
+                                      {tag.to - tag.from === 0 ? 'frame' : 'frames'})
+                                    </span>
+                                  </TooltipContent>
+                                </Tooltip>
+
                                 <button
+                                  type="button"
+                                  aria-label={isCollapsed ? 'Expand tag frames' : 'Collapse tag frames'}
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    if (onUpdateLayer) {
-                                      onUpdateLayer(layer.id, {
-                                        collapsed: !layer.collapsed,
-                                      });
-                                    }
+                                    toggleCollapseTag(tag.id, e);
                                   }}
-                                  className="p-0.5 text-muted-foreground hover:text-foreground hover:bg-accent/60 rounded transition-all shrink-0 mr-0.5"
+                                  className="z-30 shrink-0 cursor-pointer rounded-sm border border-border bg-card p-0.5 text-muted-foreground opacity-0 transition-opacity group-hover/tag:opacity-100 hover:text-foreground"
                                 >
-                                  {layer.collapsed ? (
-                                    <ChevronRight size={11} />
+                                  {isCollapsed ? (
+                                    <ChevronsLeftRight size={10} />
                                   ) : (
-                                    <ChevronDown size={11} />
+                                    <ChevronsRightLeft size={10} />
                                   )}
                                 </button>
-                              ) : (
-                                <div className="w-2.5 shrink-0" />
-                              )}
-
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onToggleLayerVisibility(layer.id);
-                                }}
-                                className={`p-0.5 shrink-0 transition-colors ${!layer.visible ? "text-muted-foreground/30" : !effectiveVis ? "text-muted-foreground/30" : isActive ? "text-primary font-bold" : "text-muted-foreground hover:text-foreground"}`}
-                                title={
-                                  layer.visible && !effectiveVis
-                                    ? "Hidden by parent group"
-                                    : undefined
-                                }
-                              >
-                                {layer.visible && effectiveVis ? (
-                                  <Eye size={11} />
-                                ) : (
-                                  <EyeOff size={11} />
-                                )}
-                              </button>
-
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onToggleLayerLock(layer.id);
-                                }}
-                                className={`p-0.5 shrink-0 transition-colors ${!layer.locked ? "text-muted-foreground/30" : "text-primary"}`}
-                              >
-                                {layer.locked ? (
-                                  <Lock size={10} />
-                                ) : (
-                                  <Unlock size={10} />
-                                )}
-                              </button>
-
-                              {isGroup && (
-                                <span className="text-muted-foreground group-hover:text-foreground shrink-0 mr-0.5 transition-colors">
-                                  {layer.collapsed ? (
-                                    <Folder size={11} />
-                                  ) : (
-                                    <FolderOpen size={11} />
-                                  )}
-                                </span>
-                              )}
-
-                              <div className="flex-1 truncate flex items-center gap-1.5 min-w-0">
-                                <span
-                                  className={`truncate text-[10.5px] ${isGroup ? "font-semibold text-foreground" : isActive ? "text-foreground font-semibold" : "text-foreground/80 group-hover:text-foreground transition-colors"}`}
-                                >
-                                  {layer.name}
-                                </span>
                               </div>
+
+                              {!isCollapsed && (
+                                <div
+                                  className="group/lh absolute -left-1 top-[19px] z-30 flex w-2.5 cursor-ew-resize items-center justify-center opacity-0 group-hover/tag:opacity-100"
+                                  style={{ height: `${legHeight}px` }}
+                                  title="Drag to resize tag start"
+                                  onMouseDown={(e) => {
+                                    e.stopPropagation();
+                                    handleTagMouseDown(e, tag, 'resize-left');
+                                  }}
+                                >
+                                  <div className="h-full w-[3px] rounded-full bg-white opacity-0 transition-opacity group-hover/lh:opacity-100" />
+                                </div>
+                              )}
+
+                              {!isCollapsed && (
+                                <div
+                                  className="group/rh absolute top-[19px] z-30 flex w-2.5 cursor-ew-resize items-center justify-center opacity-0 group-hover/tag:opacity-100"
+                                  style={{
+                                    left: `${Math.max(0, widthX - 8)}px`,
+                                    height: `${legHeight}px`,
+                                  }}
+                                  title="Drag to resize tag end"
+                                  onMouseDown={(e) => {
+                                    e.stopPropagation();
+                                    handleTagMouseDown(e, tag, 'resize-right');
+                                  }}
+                                >
+                                  <div className="h-full w-[3px] rounded-full bg-white opacity-0 transition-opacity group-hover/rh:opacity-100" />
+                                </div>
+                              )}
+
+                              {(() => {
+                                const r = Math.min(5, Math.max(1, (widthX - 2) / 2));
+                                const xRight = Math.max(2, widthX - 1);
+                                return (
+                                  <svg
+                                    className="pointer-events-none absolute top-[19px] left-0 z-20 overflow-visible"
+                                    style={{
+                                      width: `${Math.max(4, widthX)}px`,
+                                      height: `${legHeight}px`,
+                                    }}
+                                  >
+                                    <path
+                                      d={`M 1 ${legHeight} V ${1 + r} Q 1 1 ${1 + r} 1 H ${xRight - r} Q ${xRight} 1 ${xRight} ${1 + r} V ${legHeight}`}
+                                      fill="none"
+                                      stroke={color}
+                                      strokeWidth="2"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                    />
+                                  </svg>
+                                );
+                              })()}
                             </div>
-                          );
-                        })}
+                          }
+                        />
+                        <ContextMenuContent>
+                          {selectedTagIds.size <= 1 ? (
+                            <>
+                              <ContextMenuItem onSelect={(e) => handleOpenTagPopover(tag, e)}>
+                                Edit Tag Properties...
+                              </ContextMenuItem>
+                              <ContextMenuItem onSelect={() => toggleCollapseTag(tag.id)}>
+                                {isCollapsed
+                                  ? 'Expand / Unfold Frames'
+                                  : 'Collapse / Fold Frames'}
+                              </ContextMenuItem>
+                              {onSaveTag && (
+                                <ContextMenuItem
+                                  onSelect={() => {
+                                    onSaveTag({
+                                      ...tag,
+                                      id: `tag_${Date.now()}`,
+                                      name: `${tag.name} (Copy)`,
+                                    });
+                                  }}
+                                >
+                                  Duplicate Tag
+                                </ContextMenuItem>
+                              )}
+                              {onDeleteTag && (
+                                <>
+                                  <ContextMenuSeparator />
+                                  <ContextMenuItem
+                                    destructive
+                                    onSelect={() => {
+                                      onDeleteTag(tag.id);
+                                      setSelectedTagIds((prev) => {
+                                        const next = new Set(prev);
+                                        next.delete(tag.id);
+                                        return next;
+                                      });
+                                      if (tagPopover?.tag.id === tag.id) handleCloseTagPopover();
+                                    }}
+                                  >
+                                    Delete Tag
+                                  </ContextMenuItem>
+                                </>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              <ContextMenuItem
+                                onSelect={() => {
+                                  const allCollapsed = Array.from(selectedTagIds).every((id) =>
+                                    collapsedTagIds.has(id)
+                                  );
+                                  setCollapsedTagIds((prev) => {
+                                    const next = new Set(prev);
+                                    selectedTagIds.forEach((id) => {
+                                      if (allCollapsed) next.delete(id);
+                                      else next.add(id);
+                                    });
+                                    return next;
+                                  });
+                                }}
+                              >
+                                {Array.from(selectedTagIds).every((id) => collapsedTagIds.has(id))
+                                  ? `Expand Frames (${selectedTagIds.size} Tags)`
+                                  : `Collapse Frames (${selectedTagIds.size} Tags)`}
+                              </ContextMenuItem>
+                              {onSaveTag && (
+                                <ContextMenuItem
+                                  onSelect={() => {
+                                    const allTagsList = state.tags || [];
+                                    selectedTagIds.forEach((id) => {
+                                      const t = allTagsList.find((x) => x.id === id);
+                                      if (t) {
+                                        onSaveTag({
+                                          ...t,
+                                          id: `tag_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+                                          name: `${t.name} (Copy)`,
+                                        });
+                                      }
+                                    });
+                                  }}
+                                >
+                                  Duplicate Selected Tags ({selectedTagIds.size})
+                                </ContextMenuItem>
+                              )}
+                              {onDeleteTag && (
+                                <>
+                                  <ContextMenuSeparator />
+                                  <ContextMenuItem
+                                    destructive
+                                    onSelect={() => {
+                                      selectedTagIds.forEach((id) => onDeleteTag(id));
+                                      setSelectedTagIds(new Set());
+                                      if (tagPopover && selectedTagIds.has(tagPopover.tag.id)) {
+                                        handleCloseTagPopover();
+                                      }
+                                    }}
+                                  >
+                                    Delete Selected Tags ({selectedTagIds.size})
+                                  </ContextMenuItem>
+                                </>
+                              )}
+                            </>
+                          )}
+                        </ContextMenuContent>
+                      </ContextMenu>
+                    );
+                  })}
+                </div>
+              )}
 
-                      {dragState?.type === "layer" &&
-                        dragState?.overId === "root-bottom" && (
-                          <div className="h-[2px] bg-primary w-full my-1.5 rounded-full relative flex items-center shadow-xs shrink-0">
-                            <div className="w-1.5 h-1.5 rounded-full bg-primary -ml-1" />
-                          </div>
-                        )}
-
-                      {/* New Layer Button below the last layer */}
-                      <button
-                        onClick={onAddLayer}
-                        className="h-8 w-full flex items-center px-2.5 gap-1.5 border-b border-border/20 text-muted-foreground hover:text-foreground hover:bg-accent/40 transition-colors shrink-0 text-[10.5px] font-medium"
-                        title="New Layer"
+              {/* Frame Numbers Ruler */}
+              <div className="flex h-8 border-b border-border bg-background/40">
+                {columns.map((col) => {
+                  if (col.type === 'collapsed') {
+                    return (
+                      <div
+                        key={`col-header-collapsed-${col.tag.id}`}
+                        onClick={(e) => toggleCollapseTag(col.tag.id, e)}
+                        className="flex w-[36px] shrink-0 cursor-pointer items-center justify-center border-r border-border bg-secondary/70 font-mono text-[11px] font-semibold text-primary tabular-nums transition-colors hover:bg-accent"
+                        title={`Collapsed tag "${col.tag.name}" (${col.count} frames). Click to expand.`}
                       >
-                        <Plus size={12} className="shrink-0" />
-                        <span>New Layer</span>
-                      </button>
-                    </>
+                        <span>{col.count}f</span>
+                      </div>
+                    );
+                  }
+
+                  const idx = col.frameIndex;
+                  const frame = state.frames[idx];
+                  const isCurrent = state.activeFrameIndex === idx;
+                  const isSelected = state.selectedFrameIndices.includes(idx);
+
+                  return (
+                    <ContextMenu key={frame.id}>
+                      <ContextMenuTrigger
+                        render={
+                          <div
+                            onClick={(e) => handleFrameClick(e, idx)}
+                            className={`relative flex w-10 min-w-[40px] shrink-0 cursor-pointer items-center justify-center border-r border-border font-mono text-[11px] tabular-nums transition-colors ${
+                              isCurrent
+                                ? 'bg-primary font-semibold text-primary-foreground'
+                                : isSelected
+                                  ? 'bg-primary/20 font-medium text-foreground'
+                                  : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
+                            }`}
+                          >
+                            <span>{idx + 1}</span>
+                          </div>
+                        }
+                      />
+                      <ContextMenuContent>
+                        <ContextMenuItem
+                          onSelect={() => {
+                            onSelectFrames([idx], idx);
+                            onDuplicateFrame();
+                          }}
+                        >
+                          Duplicate Frame
+                        </ContextMenuItem>
+                        <ContextMenuItem
+                          destructive
+                          onSelect={() => {
+                            onSelectFrames([idx], idx);
+                            onDeleteFrame();
+                          }}
+                        >
+                          Delete Frame
+                        </ContextMenuItem>
+                      </ContextMenuContent>
+                    </ContextMenu>
                   );
-                })()}
+                })}
+
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        aria-label="New Frame"
+                        onClick={onAddFrame}
+                        className="flex w-10 min-w-[40px] shrink-0 cursor-pointer items-center justify-center border-r border-border text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+                      >
+                        <Plus size={14} />
+                      </button>
+                    }
+                  />
+                  <TooltipContent side="top">New Frame</TooltipContent>
+                </Tooltip>
               </div>
             </div>
-          </Allotment.Pane>
+          </div>
+        </div>
 
-          {/* Frames Grid (Right) */}
-          <Allotment.Pane priority={2 as any}>
-            <ContextMenu>
-              <ContextMenuTrigger asChild>
+        {/* Allotment Split Area (Synchronized Layer Tracks & Frame Cel Grid) */}
+        <div className="h-full w-full min-h-0 flex-1 bg-canvas">
+          <Allotment
+            key={isMobile ? 'mobile' : 'desktop'}
+            defaultSizes={[sidebarWidth, 1000]}
+            onChange={(sizes) => {
+              if (sizes && sizes[0] && Math.abs(sizes[0] - sidebarWidth) > 0.5) {
+                setSidebarWidth(sizes[0]);
+              }
+            }}
+            className="h-full w-full"
+          >
+            <Allotment.Pane minSize={100} preferredSize={sidebarWidth} priority={1 as any}>
+              <div
+                ref={layersScrollRef}
+                onScroll={handleLayersScroll}
+                className="no-scrollbar flex h-full w-full flex-col overflow-x-hidden overflow-y-auto border-r border-border bg-card"
+              >
                 <div
-                  ref={framesScrollRef}
-                  onScroll={handleFramesScroll}
-                  onDragOver={handleFrameContainerDragOver}
-                  onDrop={handleFrameContainerDrop}
-                  data-vaul-no-drag
-                  className="w-full h-full overflow-x-auto overflow-y-auto custom-scrollbar bg-[#171717]"
+                  onDragOver={handleLayerContainerDragOver}
+                  onDrop={handleLayerContainerDrop}
+                  className="flex flex-col"
                 >
-                    <div className="flex flex-col min-w-max relative">
+                  {(() => {
+                    const parentMap = getLayerParentMap(state.layers);
+                    const isCollapsed = (layer: any) => {
+                      let curr = layer;
+                      while (curr) {
+                        const parent =
+                          parentMap.get(curr.id) ||
+                          (curr.parentId
+                            ? state.layers.find((l) => l.id === curr?.parentId)
+                            : undefined);
+                        if (parent) {
+                          if (parent.collapsed) return true;
+                          curr = parent;
+                        } else {
+                          break;
+                        }
+                      }
+                      return false;
+                    };
 
-
-                      {(() => {
-                        const parentMap = getLayerParentMap(state.layers);
-                        const isCollapsed = (layer: any) => {
-                          let curr = layer;
-                          while (curr) {
-                            const parent =
-                              parentMap.get(curr.id) ||
-                              (curr.parentId
-                                ? state.layers.find(
-                                    (l) => l.id === curr?.parentId,
-                                  )
-                                : undefined);
-                            if (parent) {
-                              if (parent.collapsed) return true;
-                              curr = parent;
-                            } else {
-                              break;
-                            }
-                          }
-                          return false;
-                        };
-
-                        return state.layers
+                    return (
+                      <>
+                        {state.layers
                           .slice()
                           .reverse()
                           .map((layer) => {
                             if (isCollapsed(layer)) return null;
 
+                            const isDragging =
+                              dragState?.type === 'layer' && dragState.id === layer.id;
+                            const isOver =
+                              dragState?.type === 'layer' && dragState.overId === layer.id;
+                            const isActive = state.activeLayerId === layer.id;
+                            const isSelected = state.selectedLayerIds.includes(layer.id);
+                            const effectiveVis = isLayerVisible(layer, state.layers, parentMap);
+                            const childLevel = layer.childLevel ?? 0;
+                            const isGroup = layer.type === 'group';
+
                             return (
                               <div
                                 key={layer.id}
-                                className="flex h-8 border-b border-border/20"
-                                style={{ width: `${totalWidth + 40}px` }}
+                                draggable
+                                onDragStart={(e) => handleLayerDragStart(e, layer.id)}
+                                onDragOver={(e) => {
+                                  e.stopPropagation();
+                                  handleLayerDragOver(e, layer);
+                                }}
+                                onDrop={(e) => {
+                                  e.stopPropagation();
+                                  handleLayerDrop(e, layer.id);
+                                }}
+                                onDragEnd={() => setDragState(null)}
+                                style={{ paddingLeft: `${childLevel * 10 + 6}px` }}
+                                className={`group relative flex h-8 shrink-0 cursor-default items-center gap-1 border-b border-border pr-1.5 transition-colors ${
+                                  isGroup ? 'font-semibold text-foreground' : 'text-foreground/85'
+                                } ${
+                                  isActive
+                                    ? 'bg-primary/15 font-semibold text-foreground'
+                                    : isSelected
+                                      ? 'bg-secondary/70 text-foreground'
+                                      : 'hover:bg-accent/50 hover:text-foreground'
+                                } ${isDragging ? 'opacity-30' : ''}`}
+                                onClick={() => onSelectLayer(layer.id)}
                               >
-                                {columns.map((col) => {
-                                  if (col.type === "collapsed") {
-                                    return (
-                                      <div
-                                        key={`cell-collapsed-${layer.id}-${col.tag.id}`}
-                                        onClick={(e) =>
-                                          toggleCollapseTag(col.tag.id, e)
-                                        }
-                                        className="w-[36px] border-r border-border/30 bg-zinc-950/60 hover:bg-zinc-900/80 flex items-center justify-center cursor-pointer group shrink-0"
-                                        title={`Collapsed tag "${col.tag.name}" (${col.count} frames). Click to expand.`}
-                                      >
-                                        <div className="w-1.5 h-full border-x border-dashed border-amber-500/30 group-hover:border-amber-400/60" />
-                                      </div>
-                                    );
+                                {isOver && dragState.position === 'before' && (
+                                  <div className="pointer-events-none absolute top-0 left-0 z-50 flex h-0.5 w-full items-center rounded-full bg-primary">
+                                    <div className="-ml-1 h-1.5 w-1.5 rounded-full bg-primary" />
+                                  </div>
+                                )}
+                                {isOver && dragState.position === 'after' && (
+                                  <div className="pointer-events-none absolute bottom-0 left-0 z-50 flex h-0.5 w-full items-center rounded-full bg-primary">
+                                    <div className="-ml-1 h-1.5 w-1.5 rounded-full bg-primary" />
+                                  </div>
+                                )}
+                                {isOver && dragState.position === 'inside' && (
+                                  <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-end rounded border-2 border-primary bg-primary/15 pr-2">
+                                    <span className="rounded-xs border border-primary/40 bg-background px-1.5 py-0.5 text-[11px] font-medium text-primary">
+                                      Nest in Group
+                                    </span>
+                                  </div>
+                                )}
+                                {isOver && dragState.position === 'outside' && (
+                                  <div
+                                    className="pointer-events-none absolute bottom-0 z-50 flex h-0.5 items-center rounded-full bg-primary"
+                                    style={{ left: `-${childLevel * 10}px`, right: 0 }}
+                                  >
+                                    <div className="-ml-1 h-1.5 w-1.5 rounded-full bg-primary" />
+                                  </div>
+                                )}
+
+                                {childLevel > 0 && (
+                                  <div className="pointer-events-none absolute top-0 bottom-0 left-1 border-l border-border" />
+                                )}
+
+                                {isGroup ? (
+                                  <button
+                                    type="button"
+                                    aria-label={layer.collapsed ? 'Expand group' : 'Collapse group'}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (onUpdateLayer) {
+                                        onUpdateLayer(layer.id, { collapsed: !layer.collapsed });
+                                      }
+                                    }}
+                                    className="mr-0.5 shrink-0 rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                                  >
+                                    {layer.collapsed ? (
+                                      <ChevronRight size={11} />
+                                    ) : (
+                                      <ChevronDown size={11} />
+                                    )}
+                                  </button>
+                                ) : (
+                                  <div className="w-2.5 shrink-0" />
+                                )}
+
+                                <button
+                                  type="button"
+                                  aria-label={
+                                    layer.visible && effectiveVis ? 'Hide layer' : 'Show layer'
                                   }
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onToggleLayerVisibility(layer.id);
+                                  }}
+                                  className={`shrink-0 p-0.5 transition-colors ${
+                                    !layer.visible || !effectiveVis
+                                      ? 'text-muted-foreground/30'
+                                      : isActive
+                                        ? 'text-primary'
+                                        : 'text-muted-foreground hover:text-foreground'
+                                  }`}
+                                  title={
+                                    layer.visible && !effectiveVis
+                                      ? 'Hidden by parent group'
+                                      : undefined
+                                  }
+                                >
+                                  {layer.visible && effectiveVis ? (
+                                    <Eye size={12} />
+                                  ) : (
+                                    <EyeOff size={12} />
+                                  )}
+                                </button>
 
-                                  const frameIdx = col.frameIndex;
-                                  const frame = state.frames[frameIdx];
-                                  const hasContent = frame?.layerData[
-                                    layer.id
-                                  ]?.some((p) => p !== null);
-                                  const isActive =
-                                    state.activeFrameIndex === frameIdx &&
-                                    state.activeLayerId === layer.id;
-                                  const isFrameSelected =
-                                    state.selectedFrameIndices.includes(
-                                      frameIdx,
-                                    );
-                                  const isLayerSelected =
-                                    state.selectedLayerIds.includes(layer.id);
+                                <button
+                                  type="button"
+                                  aria-label={layer.locked ? 'Unlock layer' : 'Lock layer'}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onToggleLayerLock(layer.id);
+                                  }}
+                                  className={`shrink-0 p-0.5 transition-colors ${
+                                    !layer.locked ? 'text-muted-foreground/35' : 'text-primary'
+                                  }`}
+                                >
+                                  {layer.locked ? <Lock size={11} /> : <Unlock size={11} />}
+                                </button>
 
-                                  return (
-                                    <div
-                                      key={`${layer.id}-${frameIdx}`}
-                                      onClick={(e) => {
-                                        handleFrameClick(e, frameIdx, layer.id);
-                                      }}
-                                      className={`min-w-[40px] w-10 border-r border-border/20 flex items-center justify-center cursor-pointer relative transition-colors shrink-0
-                                     ${isActive ? "bg-primary/10" : isFrameSelected || isLayerSelected ? "bg-secondary/10" : "hover:bg-white/[0.02]"}
-                                  `}
-                                    >
-                                      {hasContent && (
-                                        <div
-                                          className={`w-2.5 h-2.5 rounded-full transition-transform ${isActive ? "bg-primary scale-110 shadow-[0_0_8px_rgba(var(--primary),0.5)]" : isFrameSelected || isLayerSelected ? "bg-foreground/80" : "bg-muted-foreground/60"}`}
-                                        ></div>
-                                      )}
-                                    </div>
-                                  );
-                                })}
+                                {isGroup && (
+                                  <span className="mr-0.5 shrink-0 text-muted-foreground group-hover:text-foreground">
+                                    {layer.collapsed ? (
+                                      <Folder size={11} />
+                                    ) : (
+                                      <FolderOpen size={11} />
+                                    )}
+                                  </span>
+                                )}
 
-                                {/* Placeholder cell aligned with New Frame button */}
-                                <div className="min-w-[40px] w-10 border-r border-border/20 flex items-center justify-center shrink-0 bg-muted/5 pointer-events-none" />
+                                <div className="flex min-w-0 flex-1 items-center gap-1.5 truncate">
+                                  <span
+                                    className={`truncate text-[11px] ${
+                                      isGroup || isActive
+                                        ? 'font-semibold text-foreground'
+                                        : 'text-foreground/85 group-hover:text-foreground'
+                                    }`}
+                                  >
+                                    {layer.name}
+                                  </span>
+                                </div>
                               </div>
                             );
-                          });
-                      })()}
-                    </div>
+                          })}
 
-                    {/* Placeholder row matching "New Layer" button in left sidebar */}
+                        {dragState?.type === 'layer' && dragState?.overId === 'root-bottom' && (
+                          <div className="relative my-1.5 flex h-0.5 w-full shrink-0 items-center rounded-full bg-primary">
+                            <div className="-ml-1 h-1.5 w-1.5 rounded-full bg-primary" />
+                          </div>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={onAddLayer}
+                          className="flex h-8 w-full shrink-0 items-center gap-1.5 border-b border-border px-2.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+                        >
+                          <Plus size={12} className="shrink-0" />
+                          <span>New Layer</span>
+                        </button>
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+            </Allotment.Pane>
+
+            {/* Frames Cel Grid */}
+            <Allotment.Pane priority={2 as any}>
+              <ContextMenu>
+                <ContextMenuTrigger
+                  render={
                     <div
-                      className="flex h-8 border-b border-border/20 bg-muted/5 pointer-events-none shrink-0"
-                      style={{ width: `${totalWidth + 40}px` }}
-                    />
-                  </div>
-                </ContextMenuTrigger>
-              <ContextMenuContent>
-                <ContextMenuItem onClick={onAddFrame}>
-                  New Frame
-                </ContextMenuItem>
-              </ContextMenuContent>
-            </ContextMenu>
-          </Allotment.Pane>
-        </Allotment>
+                      ref={framesScrollRef}
+                      onScroll={handleFramesScroll}
+                      onDragOver={handleFrameContainerDragOver}
+                      onDrop={handleFrameContainerDrop}
+                      tabIndex={0}
+                      className="h-full w-full overflow-x-auto overflow-y-auto bg-canvas outline-none"
+                    >
+                      <div className="relative flex min-w-max flex-col">
+                        {(() => {
+                          const parentMap = getLayerParentMap(state.layers);
+                          const isCollapsed = (layer: any) => {
+                            let curr = layer;
+                            while (curr) {
+                              const parent =
+                                parentMap.get(curr.id) ||
+                                (curr.parentId
+                                  ? state.layers.find((l) => l.id === curr?.parentId)
+                                  : undefined);
+                              if (parent) {
+                                if (parent.collapsed) return true;
+                                curr = parent;
+                              } else {
+                                break;
+                              }
+                            }
+                            return false;
+                          };
+
+                          return state.layers
+                            .slice()
+                            .reverse()
+                            .map((layer) => {
+                              if (isCollapsed(layer)) return null;
+
+                              return (
+                                <div
+                                  key={layer.id}
+                                  className="flex h-8 border-b border-border"
+                                  style={{ width: `${totalWidth + 40}px` }}
+                                >
+                                  {columns.map((col) => {
+                                    if (col.type === 'collapsed') {
+                                      return (
+                                        <div
+                                          key={`cell-collapsed-${layer.id}-${col.tag.id}`}
+                                          onClick={(e) => toggleCollapseTag(col.tag.id, e)}
+                                          className="group flex w-[36px] shrink-0 cursor-pointer items-center justify-center border-r border-border bg-background/60 hover:bg-secondary"
+                                          title={`Collapsed tag "${col.tag.name}" (${col.count} frames). Click to expand.`}
+                                        >
+                                          <div className="h-full w-1.5 border-x border-dashed border-primary/40 group-hover:border-primary/80" />
+                                        </div>
+                                      );
+                                    }
+
+                                    const frameIdx = col.frameIndex;
+                                    const frame = state.frames[frameIdx];
+                                    const hasContent = frame?.layerData[layer.id]?.some(
+                                      (p) => p !== null
+                                    );
+                                    const isActive =
+                                      state.activeFrameIndex === frameIdx &&
+                                      state.activeLayerId === layer.id;
+                                    const isFrameSelected =
+                                      state.selectedFrameIndices.includes(frameIdx);
+                                    const isLayerSelected =
+                                      state.selectedLayerIds.includes(layer.id);
+
+                                    return (
+                                      <div
+                                        key={`${layer.id}-${frameIdx}`}
+                                        onClick={(e) => handleFrameClick(e, frameIdx, layer.id)}
+                                        className={`relative flex w-10 min-w-[40px] shrink-0 cursor-pointer items-center justify-center border-r border-border transition-colors ${
+                                          isActive
+                                            ? 'bg-primary/15'
+                                            : isFrameSelected || isLayerSelected
+                                              ? 'bg-secondary/35'
+                                              : 'hover:bg-accent/25'
+                                        }`}
+                                      >
+                                        {hasContent && (
+                                          <div
+                                            className={`h-2.5 w-2.5 rounded-full transition-transform ${
+                                              isActive
+                                                ? 'scale-110 bg-primary'
+                                                : isFrameSelected || isLayerSelected
+                                                  ? 'bg-foreground/85'
+                                                  : 'bg-muted-foreground/65'
+                                            }`}
+                                          />
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+
+                                  <div className="pointer-events-none flex w-10 min-w-[40px] shrink-0 items-center justify-center border-r border-border bg-background/20" />
+                                </div>
+                              );
+                            });
+                        })()}
+                      </div>
+
+                      <div
+                        className="pointer-events-none flex h-8 shrink-0 border-b border-border bg-background/20"
+                        style={{ width: `${totalWidth + 40}px` }}
+                      />
+                    </div>
+                  }
+                />
+                <ContextMenuContent>
+                  <ContextMenuItem onSelect={onAddFrame}>New Frame</ContextMenuItem>
+                </ContextMenuContent>
+              </ContextMenu>
+            </Allotment.Pane>
+          </Allotment>
+        </div>
       </div>
-    </div>
-    );
-      })()}
     </div>
   );
 };

@@ -1,6 +1,19 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
+import {
+  Command as CommandRoot,
+  CommandEmpty,
+  CommandGroup,
+  CommandGroupLabel,
+  CommandInput,
+  CommandItem,
+  CommandItemText,
+  CommandList,
+  CommandSeparator,
+  CommandShortcut,
+} from '@ui-sdk/react/command';
+import { Dialog, DialogBackdrop, DialogContent, DialogTitle } from './ui/dialog';
 import { Command } from '../types';
-import { Search, Command as CmdIcon } from './Icons';
+import { Search } from './Icons';
 
 interface CommandPaletteProps {
   isOpen: boolean;
@@ -8,98 +21,119 @@ interface CommandPaletteProps {
   commands: Command[];
 }
 
+const CATEGORY_ORDER = ['File', 'Edit', 'View', 'Select', 'Layer', 'Sprite'];
+
 export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose, commands }) => {
   const [query, setQuery] = useState('');
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
-  
-  const filteredCommands = commands.filter(cmd => 
-    cmd.label.toLowerCase().includes(query.toLowerCase()) || 
-    cmd.category.toLowerCase().includes(query.toLowerCase())
-  );
 
   useEffect(() => {
     if (isOpen) {
-      setTimeout(() => inputRef.current?.focus(), 50);
       setQuery('');
-      setSelectedIndex(0);
     }
   }, [isOpen]);
 
-  useEffect(() => {
-    setSelectedIndex(0);
-  }, [query]);
+  const groupedCommands = useMemo(() => {
+    const map = new Map<string, Command[]>();
+    CATEGORY_ORDER.forEach((cat) => map.set(cat, []));
+    commands.forEach((cmd) => {
+      const list = map.get(cmd.category) ?? [];
+      list.push(cmd);
+      map.set(cmd.category, list);
+    });
+    return Array.from(map.entries()).filter(([, items]) => items.length > 0);
+  }, [commands]);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setSelectedIndex(i => Math.min(i + 1, filteredCommands.length - 1));
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setSelectedIndex(i => Math.max(i - 1, 0));
-    } else if (e.key === 'Enter') {
-      e.preventDefault();
-      if (filteredCommands[selectedIndex]) {
-        filteredCommands[selectedIndex].perform();
-        onClose();
-      }
-    } else if (e.key === 'Escape') {
+  const handleAction = (value: string) => {
+    const cmd = commands.find((c) => c.id === value);
+    if (cmd && !cmd.disabled) {
+      cmd.perform();
       onClose();
     }
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 z-[100] bg-black/50 backdrop-blur-[1px] flex justify-center items-start pt-[10vh] px-3" onClick={onClose}>
-      <div 
-        className="w-full max-w-[600px] bg-popover border border-border shadow-2xl rounded-lg overflow-hidden flex flex-col text-popover-foreground animate-in fade-in zoom-in-95 duration-100"
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="flex items-center px-3 py-3 border-b border-border">
-           <Search className="text-muted-foreground mr-3" size={18} />
-           <input
-             ref={inputRef}
-             className="flex-1 bg-transparent border-none outline-none text-sm text-foreground placeholder-muted-foreground"
-             placeholder="Type a command..."
-             value={query}
-             onChange={e => setQuery(e.target.value)}
-             onKeyDown={handleKeyDown}
-           />
-           <div className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-foreground font-semibold border border-border">ESC</div>
-        </div>
-        
-        <div className="max-h-[300px] overflow-y-auto py-1 custom-scrollbar">
-           {filteredCommands.length === 0 ? (
-             <div className="px-4 py-8 text-center text-muted-foreground text-sm">No commands found</div>
-           ) : (
-             filteredCommands.map((cmd, idx) => (
-               <button
-                 key={cmd.id}
-                 className={`w-full text-left px-3 py-2 flex items-center justify-between text-sm ${
-                   idx === selectedIndex ? 'bg-primary text-primary-foreground font-medium' : 'text-foreground hover:bg-accent'
-                 }`}
-                 onClick={() => {
-                   cmd.perform();
-                   onClose();
-                 }}
-                 onMouseEnter={() => setSelectedIndex(idx)}
-               >
-                 <div className="flex items-center gap-2">
-                    {idx === selectedIndex && <CmdIcon size={12} className="opacity-80" />}
-                    <span>{cmd.label}</span>
-                    <span className={`text-[10px] ml-2 border px-1 rounded-sm ${idx===selectedIndex ? 'border-primary-foreground/50 text-primary-foreground/90' : 'border-border text-muted-foreground font-medium'}`}>{cmd.category}</span>
-                 </div>
-                 {cmd.hotkey && <span className={`text-xs font-mono ${idx === selectedIndex ? 'text-primary-foreground/90 font-bold' : 'text-foreground/80 font-semibold'}`}>{cmd.hotkey}</span>}
-               </button>
-             ))
-           )}
-        </div>
-        <div className="bg-muted px-3 py-1 text-[10px] text-muted-foreground border-t border-border flex justify-between">
-            <span>PixelForge Command Palette</span>
-            <span>{filteredCommands.length} commands</span>
-        </div>
-      </div>
-    </div>
+    <Dialog
+      open={isOpen}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) onClose();
+      }}
+    >
+      <DialogBackdrop />
+      <DialogContent className="top-[14vh] translate-y-0 max-w-xl border-border-strong bg-popover text-popover-foreground">
+        <DialogTitle className="sr-only">Command Palette</DialogTitle>
+        <CommandRoot
+          query={query}
+          onQueryChange={(next) => setQuery(next)}
+          onAction={handleAction}
+          filter="fuzzy"
+          autoHighlight
+          loop
+          className="flex flex-col"
+        >
+          <div className="flex h-11 items-center gap-2.5 border-b border-border px-3.5">
+            <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <CommandInput
+              aria-label="Search commands"
+              placeholder="Search commands, tools, and actions..."
+              autoFocus
+              className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
+            />
+            <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[11px] leading-none text-muted-foreground">
+              Esc
+            </kbd>
+          </div>
+
+          <CommandEmpty className="text-center text-xs text-muted-foreground data-[empty]:px-4 data-[empty]:py-10">
+            No matching commands
+          </CommandEmpty>
+
+          <CommandList className="max-h-[340px] overflow-y-auto p-1.5">
+            {groupedCommands.map(([category, items], groupIdx) => (
+              <React.Fragment key={category}>
+                {groupIdx > 0 && <CommandSeparator className="my-1 h-px bg-border" />}
+                <CommandGroup>
+                  <CommandGroupLabel className="px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+                    {category}
+                  </CommandGroupLabel>
+                  {items.map((cmd) => (
+                    <CommandItem
+                      key={cmd.id}
+                      value={cmd.id}
+                      label={cmd.label}
+                      keywords={[cmd.category, cmd.hotkey || '']}
+                      disabled={cmd.disabled}
+                      className="flex w-full cursor-default select-none items-center justify-between gap-3 rounded-sm px-2.5 py-1.5 text-xs text-foreground outline-none transition-colors data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-40"
+                    >
+                      <CommandItemText className="min-w-0 flex-1 truncate [&>mark]:bg-primary/25 [&>mark]:text-primary [&>mark]:rounded-[2px] [&>mark]:px-0.5">
+                        {cmd.label}
+                      </CommandItemText>
+                      {cmd.hotkey && (
+                        <CommandShortcut className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                          {cmd.hotkey}
+                        </CommandShortcut>
+                      )}
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </React.Fragment>
+            ))}
+          </CommandList>
+
+          <div className="flex h-7 items-center justify-between border-t border-border bg-muted/40 px-3.5 text-[11px] text-muted-foreground">
+            <div className="flex items-center gap-3">
+              <span className="inline-flex items-center gap-1">
+                <kbd className="rounded border border-border bg-background px-1 font-mono text-[10px]">↑↓</kbd>
+                Navigate
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <kbd className="rounded border border-border bg-background px-1 font-mono text-[10px]">↵</kbd>
+                Run
+              </span>
+            </div>
+            <span className="tabular-nums">{commands.length} commands</span>
+          </div>
+        </CommandRoot>
+      </DialogContent>
+    </Dialog>
   );
 };

@@ -379,7 +379,7 @@ export function useAppCommands({
           perform: () => updateState({ ...state, zoom: Math.max(1, state.zoom / 2) })
         },
         {
-          id: 'app.commandPalette', label: 'Command Palette', category: 'View', hotkey: 'Ctrl+P', keys: ['Control+p', 'Meta+p', 'F1'],
+          id: 'app.commandPalette', label: 'Command Palette', category: 'View', hotkey: 'Ctrl+K', keys: ['Control+k', 'Meta+k', 'Control+p', 'Meta+p', 'F1'],
           perform: openCmdPalette
         }
     ], [state, updateState, projectActions, fileSystemActions, uiActions, openCmdPalette, onOpenProject]);

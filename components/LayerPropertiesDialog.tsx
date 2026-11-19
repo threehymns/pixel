@@ -6,14 +6,17 @@ import {
   Lock,
   Eye,
   ShieldAlert,
-  Link as LinkIcon,
-  Image as ImageIcon,
+  LinkIcon,
+  ImageIcon,
   Palette,
   Check,
-} from 'lucide-react';
-import { Popover, PopoverAnchor, PopoverContent, PopoverArrow } from './ui/popover';
+} from './Icons';
+import { ModalShell } from './ui/dialog';
 import { CustomCheckbox } from './ui/checkbox';
 import { CustomSlider } from './ui/slider';
+import { StudioSelect } from './ui/select';
+import { Input } from './ui/input';
+import { cn } from '../lib/utils';
 
 export interface LayerPropertiesDialogProps {
   isOpen: boolean;
@@ -59,7 +62,8 @@ export const LayerPropertiesDialogContent: React.FC<{
   layer: Layer;
   onClose: () => void;
   onUpdateLayer: (id: string, updates: Partial<Layer>) => void;
-}> = ({ layer, onClose, onUpdateLayer }) => {
+  hideHeader?: boolean;
+}> = ({ layer, onClose, onUpdateLayer, hideHeader = false }) => {
   const initialOpacity = layer.opacity != null && !isNaN(layer.opacity) ? layer.opacity : 100;
   const [name, setName] = useState(layer.name);
   const [opacity, setOpacity] = useState(initialOpacity);
@@ -136,104 +140,107 @@ export const LayerPropertiesDialogContent: React.FC<{
 
   return (
     <div
-      className="w-80 bg-popover text-popover-foreground border border-border shadow-2xl rounded-xl p-3.5 flex flex-col gap-3 text-xs outline-none select-none relative"
+      className={cn(
+        'flex flex-col gap-3 text-xs text-popover-foreground outline-none select-none',
+        !hideHeader && 'w-80'
+      )}
       onKeyDown={(e) => {
-        if (e.key === 'Enter' && e.target instanceof HTMLInputElement && e.target.type !== 'checkbox') {
+        if (
+          e.key === 'Enter' &&
+          e.target instanceof HTMLInputElement &&
+          e.target.type !== 'checkbox'
+        ) {
           e.preventDefault();
           handleSubmit();
-        } else if (e.key === 'Escape') {
+        } else if (e.key === 'Escape' && !hideHeader) {
           e.preventDefault();
           onClose();
         }
       }}
     >
-      <PopoverArrow />
-
-      {/* Header */}
-      <div className="flex items-center justify-between pb-2 border-b border-border/60">
-        <div className="flex items-center gap-2 font-semibold text-xs text-foreground">
-          <Layers size={14} className="text-primary shrink-0" />
-          <span>Layer Properties</span>
+      {!hideHeader && (
+        <div className="flex items-center justify-between border-b border-border pb-2">
+          <div className="flex items-center gap-2 text-xs font-semibold text-foreground">
+            <Layers size={14} className="shrink-0 text-muted-foreground" />
+            <span>Layer Properties</span>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close layer properties"
+            className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <X size={13} />
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="w-5 h-5 flex items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-        >
-          <X size={13} />
-        </button>
-      </div>
+      )}
 
-      {/* Form Body */}
       <div className="flex flex-col gap-2.5 text-xs">
-        {/* Name */}
         <div className="grid grid-cols-3 items-center gap-2">
-          <label className="text-muted-foreground font-medium">Name</label>
-          <input
+          <label className="text-[11px] font-medium text-muted-foreground">Name</label>
+          <Input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Layer name"
             autoFocus
-            className="col-span-2 bg-background border border-border rounded-md px-2 py-1 text-xs font-medium text-foreground outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+            className="col-span-2 h-7"
           />
         </div>
 
-        {/* Blend Mode */}
         <div className="grid grid-cols-3 items-center gap-2">
-          <label className="text-muted-foreground font-medium">Blend Mode</label>
-          <select
-            value={blendMode}
-            onChange={(e) => setBlendMode(e.target.value as LayerBlendMode)}
-            className="col-span-2 bg-background border border-border rounded-md px-2 py-1 text-xs font-medium text-foreground outline-none focus:ring-1 focus:ring-primary focus:border-primary capitalize cursor-pointer"
-          >
-            {BLEND_MODES.map((b) => (
-              <option key={b.value} value={b.value}>
-                {b.label}
-              </option>
-            ))}
-          </select>
+          <span className="text-[11px] font-medium text-muted-foreground">Blend Mode</span>
+          <div className="col-span-2">
+            <StudioSelect<LayerBlendMode>
+              value={blendMode}
+              options={BLEND_MODES}
+              onValueChange={setBlendMode}
+              className="h-7"
+              aria-label="Layer blend mode"
+            />
+          </div>
         </div>
 
-        {/* Opacity using CustomSlider */}
         <div className="grid grid-cols-3 items-center gap-2">
-          <label className="text-muted-foreground font-medium">Opacity</label>
+          <span className="text-[11px] font-medium text-muted-foreground">Opacity</span>
           <div className="col-span-2 flex items-center gap-2">
             <CustomSlider
               value={opacity}
-              onValueChange={(val) => setOpacity(val)}
+              onValueChange={setOpacity}
               min={0}
               max={100}
               step={1}
+              aria-label="Layer opacity"
               className="flex-1"
             />
-            <input
+            <Input
               type="number"
-              min="0"
-              max="100"
+              min={0}
+              max={100}
               value={opacity}
+              aria-label="Opacity percentage"
               onChange={(e) => {
                 const val = parseInt(e.target.value, 10);
                 setOpacity(isNaN(val) ? 100 : Math.max(0, Math.min(100, val)));
               }}
-              className="w-12 bg-background border border-border rounded-md px-1 py-0.5 text-xs font-mono font-medium text-foreground text-center outline-none focus:ring-1 focus:ring-primary focus:border-primary shrink-0"
+              className="h-7 w-12 shrink-0 px-1 text-center font-mono tabular-nums"
             />
-            <span className="text-[10px] font-mono text-muted-foreground">%</span>
+            <span className="font-mono text-[11px] text-muted-foreground">%</span>
           </div>
         </div>
 
-        {/* Color Tag */}
         <div className="grid grid-cols-3 items-center gap-2">
-          <label className="text-muted-foreground font-medium">Color Tag</label>
-          <div className="col-span-2 flex items-center gap-1.5 flex-wrap">
+          <span className="text-[11px] font-medium text-muted-foreground">Color Tag</span>
+          <div className="col-span-2 flex flex-wrap items-center gap-1.5">
             <button
               type="button"
               onClick={() => setColorTag(undefined)}
-              className={`px-1.5 py-0.5 text-[10px] rounded border transition-colors cursor-pointer ${
+              className={cn(
+                'rounded-sm border px-1.5 py-0.5 text-[11px] transition-colors',
                 !colorTag
-                  ? 'border-primary bg-primary/10 text-foreground font-semibold'
+                  ? 'border-primary bg-primary/15 font-medium text-foreground'
                   : 'border-border text-muted-foreground hover:text-foreground'
-              }`}
+              )}
             >
               None
             </button>
@@ -241,129 +248,111 @@ export const LayerPropertiesDialogContent: React.FC<{
               <button
                 key={t.id}
                 type="button"
+                aria-label={t.label}
                 onClick={() => setColorTag(t.id)}
-                title={t.label}
-                className={`w-4 h-4 rounded-full border transition-transform cursor-pointer relative flex items-center justify-center ${
+                className={cn(
+                  'relative flex h-4 w-4 items-center justify-center rounded-full border transition-transform',
                   colorTag === t.id
-                    ? 'ring-2 ring-primary ring-offset-1 ring-offset-popover scale-110 border-white'
-                    : 'border-black/10 dark:border-white/10 hover:scale-105'
-                }`}
+                    ? 'scale-110 border-foreground ring-2 ring-primary ring-offset-1 ring-offset-popover'
+                    : 'border-border-strong hover:scale-105'
+                )}
                 style={{ backgroundColor: t.color }}
               >
-                {colorTag === t.id && <Check size={10} className="text-white drop-shadow-xs" />}
+                {colorTag === t.id && <Check size={10} className="text-white" />}
               </button>
             ))}
           </div>
         </div>
 
-        {/* Flags with CustomCheckbox */}
-        <div className="flex flex-col gap-1.5 pt-1.5 border-t border-border/60">
-          <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Flags</span>
+        <div className="flex flex-col gap-1.5 border-t border-border pt-2">
+          <span className="text-[11px] font-medium text-muted-foreground">Flags</span>
           <div className="grid grid-cols-2 gap-1.5">
-            <label className="flex items-center gap-2 p-1.5 rounded-lg bg-muted/30 hover:bg-muted/60 border border-border/40 cursor-pointer transition-colors">
-              <CustomCheckbox
-                checked={visible}
-                onCheckedChange={(c) => setVisible(!!c)}
-              />
-              <Eye size={12} className="text-muted-foreground shrink-0" />
-              <span className="font-medium text-[11px] text-foreground">Visible</span>
-            </label>
-
-            <label className="flex items-center gap-2 p-1.5 rounded-lg bg-muted/30 hover:bg-muted/60 border border-border/40 cursor-pointer transition-colors">
-              <CustomCheckbox
-                checked={locked}
-                onCheckedChange={(c) => setLocked(!!c)}
-              />
-              <Lock size={12} className="text-muted-foreground shrink-0" />
-              <span className="font-medium text-[11px] text-foreground">Locked</span>
-            </label>
-
-            <label className="flex items-center gap-2 p-1.5 rounded-lg bg-muted/30 hover:bg-muted/60 border border-border/40 cursor-pointer transition-colors">
-              <CustomCheckbox
-                checked={lockMovement}
-                onCheckedChange={(c) => setLockMovement(!!c)}
-              />
-              <ShieldAlert size={12} className="text-muted-foreground shrink-0" />
-              <span className="font-medium text-[11px] text-foreground">Lock Motion</span>
-            </label>
-
-            <label className="flex items-center gap-2 p-1.5 rounded-lg bg-muted/30 hover:bg-muted/60 border border-border/40 cursor-pointer transition-colors">
-              <CustomCheckbox
-                checked={isBackground}
-                onCheckedChange={(c) => setIsBackground(!!c)}
-              />
-              <Layers size={12} className="text-muted-foreground shrink-0" />
-              <span className="font-medium text-[11px] text-foreground">Background</span>
-            </label>
-
-            <label className="flex items-center gap-2 p-1.5 rounded-lg bg-muted/30 hover:bg-muted/60 border border-border/40 cursor-pointer transition-colors">
-              <CustomCheckbox
-                checked={preferLinkedCels}
-                onCheckedChange={(c) => setPreferLinkedCels(!!c)}
-              />
-              <LinkIcon size={12} className="text-muted-foreground shrink-0" />
-              <span className="font-medium text-[11px] text-foreground">Linked Cels</span>
-            </label>
-
-            <label className="flex items-center gap-2 p-1.5 rounded-lg bg-muted/30 hover:bg-muted/60 border border-border/40 cursor-pointer transition-colors">
-              <CustomCheckbox
-                checked={isReference}
-                onCheckedChange={(c) => setIsReference(!!c)}
-              />
-              <ImageIcon size={12} className="text-muted-foreground shrink-0" />
-              <span className="font-medium text-[11px] text-foreground">Reference</span>
-            </label>
+            {(
+              [
+                { label: 'Visible', checked: visible, setter: setVisible, icon: <Eye size={12} /> },
+                { label: 'Locked', checked: locked, setter: setLocked, icon: <Lock size={12} /> },
+                {
+                  label: 'Lock Motion',
+                  checked: lockMovement,
+                  setter: setLockMovement,
+                  icon: <ShieldAlert size={12} />,
+                },
+                {
+                  label: 'Background',
+                  checked: isBackground,
+                  setter: setIsBackground,
+                  icon: <Layers size={12} />,
+                },
+                {
+                  label: 'Linked Cels',
+                  checked: preferLinkedCels,
+                  setter: setPreferLinkedCels,
+                  icon: <LinkIcon size={12} />,
+                },
+                {
+                  label: 'Reference',
+                  checked: isReference,
+                  setter: setIsReference,
+                  icon: <ImageIcon size={12} />,
+                },
+              ] as const
+            ).map((flag) => (
+              <label
+                key={flag.label}
+                className="flex cursor-pointer items-center gap-2 rounded-md border border-border bg-background/50 p-1.5 transition-colors hover:bg-accent/60"
+              >
+                <CustomCheckbox checked={flag.checked} onCheckedChange={flag.setter} />
+                <span className="shrink-0 text-muted-foreground">{flag.icon}</span>
+                <span className="text-[11px] font-medium text-foreground">{flag.label}</span>
+              </label>
+            ))}
           </div>
         </div>
 
-        {/* User Notes & Highlight */}
-        <div className="flex flex-col gap-1.5 pt-1.5 border-t border-border/60">
+        <div className="flex flex-col gap-1.5 border-t border-border pt-2">
           <div className="flex items-center justify-between text-[11px]">
             <span className="flex items-center gap-1 font-medium text-muted-foreground">
-              <Palette size={12} className="text-primary shrink-0" />
+              <Palette size={12} />
               <span>User Notes</span>
             </span>
-            <label className="flex items-center gap-1.5 cursor-pointer">
-              <CustomCheckbox
-                checked={hasUserColor}
-                onCheckedChange={(c) => setHasUserColor(!!c)}
-              />
-              <span className="text-[10px] text-muted-foreground">Highlight</span>
+            <label className="flex cursor-pointer items-center gap-1.5">
+              <CustomCheckbox checked={hasUserColor} onCheckedChange={setHasUserColor} />
+              <span className="text-[11px] text-muted-foreground">Highlight</span>
               {hasUserColor && (
                 <input
                   type="color"
                   value={userColor}
                   onChange={(e) => setUserColor(e.target.value)}
-                  className="w-3.5 h-3.5 rounded cursor-pointer border-0 bg-transparent p-0"
+                  aria-label="User note highlight color"
+                  className="h-3.5 w-3.5 cursor-pointer rounded border-0 bg-transparent p-0"
                 />
               )}
             </label>
           </div>
-          <input
+          <Input
             type="text"
             value={userText}
             onChange={(e) => setUserText(e.target.value)}
             placeholder="Notes or metadata..."
-            className="bg-background border border-border rounded-md px-2 py-1 text-xs font-medium text-foreground outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+            className="h-7"
           />
         </div>
       </div>
 
-      {/* Footer */}
-      <div className="flex items-center justify-end gap-1.5 pt-2 border-t border-border/60 mt-1">
+      <div className="mt-1 flex items-center justify-end gap-1.5 border-t border-border pt-2">
         <button
           type="button"
           onClick={onClose}
-          className="px-2.5 py-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors font-medium text-xs"
+          className="h-7 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           Cancel
         </button>
         <button
           type="button"
           onClick={() => handleSubmit()}
-          className="flex items-center gap-1 px-3 py-1 bg-primary text-primary-foreground font-medium rounded-md shadow-xs hover:bg-primary/90 transition-colors text-xs"
+          className="flex h-7 items-center gap-1 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
         >
-          <Check size={13} />
+          <Check size={12} />
           <span>Save Layer</span>
         </button>
       </div>
@@ -378,9 +367,8 @@ export const LayerPropertiesDialog: React.FC<LayerPropertiesDialogProps> = ({
   onUpdateLayer,
   isEmbedded = false,
 }) => {
-  if (!isOpen || !layer) return null;
-
   if (isEmbedded) {
+    if (!isOpen || !layer) return null;
     return (
       <LayerPropertiesDialogContent
         layer={layer}
@@ -391,17 +379,20 @@ export const LayerPropertiesDialog: React.FC<LayerPropertiesDialogProps> = ({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-xs p-4 animate-in fade-in-0 duration-150"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+    <ModalShell
+      open={isOpen && !!layer}
+      onClose={onClose}
+      title="Layer Properties"
+      maxWidthClassName="max-w-sm"
     >
-      <LayerPropertiesDialogContent
-        layer={layer}
-        onClose={onClose}
-        onUpdateLayer={onUpdateLayer}
-      />
-    </div>
+      {layer && (
+        <LayerPropertiesDialogContent
+          layer={layer}
+          onClose={onClose}
+          onUpdateLayer={onUpdateLayer}
+          hideHeader
+        />
+      )}
+    </ModalShell>
   );
 };

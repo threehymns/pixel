@@ -1,69 +1,65 @@
 import * as React from "react";
-import { Slider } from "@base-ui/react/slider";
-import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
+import {
+  Slider as PrimitiveSlider,
+  SliderControl as PrimitiveSliderControl,
+  SliderIndicator as PrimitiveSliderIndicator,
+  SliderThumb as PrimitiveSliderThumb,
+  SliderTrack as PrimitiveSliderTrack,
+  SliderValue as PrimitiveSliderValue,
+  createSliderController,
+} from "@ui-sdk/react/slider";
+import { cn } from "../../lib/utils";
 
-export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs));
-}
-
-const SliderRoot = React.forwardRef<
-  HTMLDivElement,
-  React.ComponentPropsWithoutRef<typeof Slider.Root>
->(({ className, ...props }, ref) => (
-  <Slider.Root
-    ref={ref}
-    className={cn(
-      "relative flex w-full touch-none select-none items-center group",
-      className
-    )}
-    {...props}
-  />
-));
-SliderRoot.displayName = "SliderRoot";
+const Slider = PrimitiveSlider;
+const SliderValue = PrimitiveSliderValue;
 
 const SliderControl = React.forwardRef<
   HTMLDivElement,
-  React.ComponentPropsWithoutRef<typeof Slider.Control>
+  React.ComponentPropsWithoutRef<typeof PrimitiveSliderControl>
 >(({ className, ...props }, ref) => (
-  <Slider.Control
+  <PrimitiveSliderControl
     ref={ref}
-    className={cn(
-      "relative flex w-full items-center",
-      className
-    )}
+    className={cn("relative flex w-full touch-none select-none items-center py-1.5", className)}
     {...props}
-  >
-    {props.children}
-  </Slider.Control>
+  />
 ));
 SliderControl.displayName = "SliderControl";
 
 const SliderTrack = React.forwardRef<
   HTMLDivElement,
-  React.ComponentPropsWithoutRef<typeof Slider.Track>
+  React.ComponentPropsWithoutRef<typeof PrimitiveSliderTrack>
 >(({ className, ...props }, ref) => (
-  <Slider.Track
+  <PrimitiveSliderTrack
     ref={ref}
     className={cn(
-      "relative h-1.5 w-full grow overflow-hidden rounded-full bg-secondary/50 border border-border/30",
+      "relative h-1.5 w-full grow rounded-full border border-border bg-secondary",
       className
     )}
     {...props}
-  >
-    <Slider.Indicator className="absolute h-full bg-primary transition-all duration-150" />
-  </Slider.Track>
+  />
 ));
 SliderTrack.displayName = "SliderTrack";
 
+const SliderIndicator = React.forwardRef<
+  HTMLDivElement,
+  React.ComponentPropsWithoutRef<typeof PrimitiveSliderIndicator>
+>(({ className, ...props }, ref) => (
+  <PrimitiveSliderIndicator
+    ref={ref}
+    className={cn("absolute h-full rounded-full bg-primary", className)}
+    {...props}
+  />
+));
+SliderIndicator.displayName = "SliderIndicator";
+
 const SliderThumb = React.forwardRef<
   HTMLDivElement,
-  React.ComponentPropsWithoutRef<typeof Slider.Thumb>
+  React.ComponentPropsWithoutRef<typeof PrimitiveSliderThumb>
 >(({ className, ...props }, ref) => (
-  <Slider.Thumb
+  <PrimitiveSliderThumb
     ref={ref}
     className={cn(
-      "block h-3.5 w-3.5 rounded-full border border-primary/50 bg-white shadow-lg ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 hover:scale-110 active:scale-95 cursor-grab active:cursor-grabbing",
+      "block h-3.5 w-3.5 -translate-x-1/2 rounded-full border border-primary/80 bg-foreground shadow-md transition-transform hover:scale-110 active:scale-95 cursor-grab active:cursor-grabbing has-[:focus-visible]:outline-none has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-1 has-[:focus-visible]:ring-offset-background data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       className
     )}
     {...props}
@@ -71,35 +67,49 @@ const SliderThumb = React.forwardRef<
 ));
 SliderThumb.displayName = "SliderThumb";
 
-export { SliderRoot, SliderControl, SliderTrack, SliderThumb };
-
-// A convenient combined component
-export const CustomSlider = ({ 
-  value, 
-  onValueChange, 
-  min = 0, 
-  max = 100, 
-  step = 1,
-  className 
-}: { 
-  value: number; 
-  onValueChange: (val: number) => void; 
-  min?: number; 
-  max?: number; 
+export const CustomSlider: React.FC<{
+  value: number;
+  onValueChange: (val: number) => void;
+  min?: number;
+  max?: number;
   step?: number;
+  disabled?: boolean;
   className?: string;
+  "aria-label"?: string;
+}> = ({
+  value,
+  onValueChange,
+  min = 0,
+  max = 100,
+  step = 1,
+  disabled = false,
+  className,
+  "aria-label": ariaLabel = "Slider value",
 }) => (
-  <SliderRoot 
-    value={value} 
-    onValueChange={(val) => onValueChange(Array.isArray(val) ? val[0] : val)} 
-    min={min} 
-    max={max} 
+  <Slider<number>
+    value={value}
+    onValueChange={(val) => onValueChange(Array.isArray(val) ? val[0] : val)}
+    min={min}
+    max={max}
     step={step}
-    className={className}
+    disabled={disabled}
+    className={cn("relative flex w-full items-center", className)}
   >
     <SliderControl>
-      <SliderTrack />
-      <SliderThumb />
+      <SliderTrack>
+        <SliderIndicator />
+        <SliderThumb aria-label={ariaLabel} />
+      </SliderTrack>
     </SliderControl>
-  </SliderRoot>
+  </Slider>
 );
+
+export {
+  Slider,
+  SliderControl,
+  SliderIndicator,
+  SliderThumb,
+  SliderTrack,
+  SliderValue,
+  createSliderController,
+};

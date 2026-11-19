@@ -1,54 +1,50 @@
+@layer ui-sdk;
 @import "tailwindcss";
 @import "allotment/dist/style.css";
-@plugin "tailwindcss-animate";
 
 :root {
-  /* Base Dark Theme (OKLCH Coordinates) */
-  --background-raw: 0.18 0 0;
-  --foreground-raw: 0.95 0 0;
-  --card-raw: 0.25 0 0;
-  --popover-raw: 0.25 0 0;
-  --primary-raw: 0.54 0.22 245;
-  --secondary-raw: 0.35 0 0;
-  --muted-raw: 0.24 0 0;
-  --accent-raw: 0.38 0 0;
-  --destructive-raw: 0.64 0.21 25;
-  --border-raw: 0.38 0 0;
-  --input-raw: 0.45 0 0;
-  --ring-raw: 0.76 0.17 76;
+  /* Unified Pro Dark Studio Tokens (OKLCH) */
+  --canvas-bg: oklch(0.14 0 0);
+  --background: oklch(0.17 0 0);
+  --foreground: oklch(0.94 0 0);
 
-  /* Derived Variables */
-  --background: oklch(var(--background-raw));
-  --foreground: oklch(var(--foreground-raw));
-  --card: oklch(var(--card-raw));
+  --card: oklch(0.205 0 0);
   --card-foreground: var(--foreground);
-  --popover: oklch(var(--popover-raw));
+  --popover: oklch(0.225 0 0);
   --popover-foreground: var(--foreground);
-  --primary: oklch(var(--primary-raw));
-  --primary-foreground: oklch(1 0 0);
-  --secondary: oklch(var(--secondary-raw));
+
+  --primary: oklch(0.60 0.20 248);
+  --primary-foreground: oklch(0.985 0 0);
+
+  --secondary: oklch(0.26 0 0);
   --secondary-foreground: var(--foreground);
-  --muted: oklch(var(--muted-raw));
-  --muted-foreground: oklch(0.80 0 0);
-  --accent: oklch(var(--accent-raw));
+  --muted: oklch(0.245 0 0);
+  --muted-foreground: oklch(0.70 0 0);
+  --accent: oklch(0.29 0 0);
   --accent-foreground: var(--foreground);
-  --destructive: oklch(var(--destructive-raw));
-  --destructive-foreground: oklch(1 0 0);
-  --border: oklch(var(--border-raw));
-  --input: oklch(var(--input-raw));
-  --ring: oklch(var(--ring-raw));
-  
-  --radius: 0.5rem;
+
+  --destructive: oklch(0.63 0.22 25);
+  --destructive-foreground: oklch(0.985 0 0);
+  --warning: oklch(0.75 0.16 70);
+
+  --border: oklch(1 0 0 / 0.09);
+  --border-strong: oklch(1 0 0 / 0.16);
+  --input: oklch(1 0 0 / 0.14);
+  --ring: var(--primary);
+
+  --radius: 0.375rem;
 
   /* Allotment Theme Overrides */
-  --sash-size: 8px;
-  --sash-hover-size: 8px;
+  --sash-size: 6px;
+  --sash-hover-size: 6px;
   --focus-border: var(--primary);
   --separator-border: var(--border);
 }
 
 @theme {
+  --color-canvas: var(--canvas-bg);
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-background: var(--background);
@@ -59,6 +55,7 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-warning: var(--warning);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
@@ -67,6 +64,9 @@
   --color-popover-foreground: var(--popover-foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
+
+  --font-sans: "Figtree", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
@@ -78,20 +78,20 @@
   --spacing-safe-right: env(safe-area-inset-right);
 }
 
-/* Custom scrollbar for that desktop-app feel */
+/* Studio scrollbars */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
 }
 ::-webkit-scrollbar-track {
-  background: var(--muted);
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--input);
+  background: oklch(1 0 0 / 0.14);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.55 0 0);
+  background: oklch(1 0 0 / 0.24);
 }
 
 /* Overlay scrollbar for horizontal toolbars */
@@ -100,15 +100,12 @@
 }
 .overlay-scrollbar::-webkit-scrollbar-thumb {
   background-color: var(--primary);
-  border-radius: 10px;
-  border: 1px solid transparent;
-  background-clip: padding-box;
+  border-radius: 9999px;
 }
 .overlay-scrollbar::-webkit-scrollbar-track {
   background: transparent;
 }
 
-/* Utility to hide scrollbar but keep functionality */
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
@@ -120,9 +117,8 @@
 body {
   background-color: var(--background);
   color: var(--foreground);
-  overflow: hidden; /* Prevent body scroll */
-  font-family: 'Figtree', system-ui, -apple-system, sans-serif;
-  /* Handle safe area insets for notched phones */
+  overflow: hidden;
+  font-family: var(--font-sans);
   padding-top: env(safe-area-inset-top);
   padding-bottom: env(safe-area-inset-bottom);
   padding-left: env(safe-area-inset-left);
@@ -141,37 +137,113 @@ body {
   image-rendering: pixelated;
 }
 
+/* Dark neutral transparency checkerboard */
+.checkerboard-alpha {
+  background-color: oklch(0.18 0 0);
+  background-image: conic-gradient(
+    oklch(0.22 0 0) 90deg,
+    oklch(0.18 0 0) 90deg 180deg,
+    oklch(0.22 0 0) 180deg 270deg,
+    oklch(0.18 0 0) 270deg
+  );
+  background-size: 12px 12px;
+}
+
 /* Allotment Sash Styling */
 .allotment-module_splitView__L-y5K {
   background: var(--background) !important;
 }
 
-/* Mobile Masking Utilities */
 .mask-fade-edges {
   mask-image: linear-gradient(to right, transparent, black 5%, black 95%, transparent);
 }
 
-/* Animation keyframe fallbacks for dialogs/modals */
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+/* @ui-sdk/react State & Slot Transitions */
+[data-slot="dialog-backdrop"]:not([data-sheet="bottom"]) {
+  transition: opacity 150ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+[data-slot="dialog-backdrop"]:not([data-sheet="bottom"]):is([data-starting-style], [data-ending-style]) {
+  opacity: 0;
 }
 
-@keyframes zoomIn95 {
-  from { transform: scale(0.95); opacity: 0; }
-  to { transform: scale(1); opacity: 1; }
+[data-slot="dialog-content"]:not([data-sheet="bottom"]) {
+  transition:
+    opacity 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    scale 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    translate 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+[data-slot="dialog-content"]:not([data-presentation="sheet"]):not([data-sheet="bottom"]):is([data-starting-style], [data-ending-style]) {
+  opacity: 0;
+  scale: 0.97;
+  translate: 0 6px;
+}
+[data-slot="dialog-content"]:not([data-sheet="bottom"])[data-ending-style] {
+  transition-duration: 120ms;
 }
 
-.animate-in {
-  animation-duration: 200ms;
-  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
-  animation-fill-mode: forwards;
+[data-slot="popover-content"],
+[data-slot="menu-content"],
+[data-slot="select-content"] {
+  transform-origin: var(--transform-origin);
+  transition:
+    opacity 130ms cubic-bezier(0.22, 1, 0.36, 1),
+    scale 130ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+[data-slot="popover-content"]:is([data-starting-style], [data-ending-style]),
+[data-slot="menu-content"]:is([data-starting-style], [data-ending-style]),
+[data-slot="select-content"]:is([data-starting-style], [data-ending-style]) {
+  opacity: 0;
+  scale: 0.96;
 }
 
-.fade-in {
-  animation-name: fadeIn;
+[data-slot="tooltip-content"] {
+  transform-origin: var(--transform-origin);
+  transition:
+    opacity 110ms ease-out,
+    scale 110ms ease-out;
+}
+[data-slot="tooltip-content"]:is([data-starting-style], [data-ending-style]) {
+  opacity: 0;
+  scale: 0.94;
+}
+[data-slot="tooltip-content"][data-instant] {
+  transition: none;
 }
 
-.zoom-in-95 {
-  animation-name: zoomIn95;
+[data-slot="checkbox-indicator"] {
+  transition: opacity 120ms ease, scale 120ms ease;
+}
+[data-slot="checkbox-indicator"]:is([data-starting-style], [data-ending-style]) {
+  opacity: 0;
+  scale: 0.6;
+}
+
+[data-slot="segmented-control"] {
+  position: relative;
+  display: inline-flex;
+  isolation: isolate;
+}
+[data-slot="segmented-control-indicator"] {
+  position: absolute;
+  z-index: -1;
+  top: var(--segmented-control-indicator-top);
+  left: var(--segmented-control-indicator-left);
+  width: var(--segmented-control-indicator-width);
+  height: var(--segmented-control-indicator-height);
+  transition-property: top, left, width, height;
+  transition-duration: 160ms;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="dialog-backdrop"],
+  [data-slot="dialog-content"],
+  [data-slot="popover-content"],
+  [data-slot="menu-content"],
+  [data-slot="select-content"],
+  [data-slot="tooltip-content"],
+  [data-slot="checkbox-indicator"],
+  [data-slot="segmented-control-indicator"] {
+    transition-duration: 1ms !important;
+  }
 }

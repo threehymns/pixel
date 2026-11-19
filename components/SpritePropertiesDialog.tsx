@@ -1,6 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ProjectState, ColorMode } from '../types';
-import { X, Check, Settings, Grid, Ratio, Palette } from 'lucide-react';
+import { ModalShell } from './ui/dialog';
+import { Input } from './ui/input';
+import { StudioSelect } from './ui/select';
+import { Grid, Ratio, Palette } from './Icons';
 
 interface SpritePropertiesDialogProps {
   isOpen: boolean;
@@ -14,6 +17,11 @@ interface SpritePropertiesDialogProps {
     grid?: { x: number; y: number; width: number; height: number };
   }) => void;
 }
+
+const COLOR_MODE_OPTIONS = [
+  { value: 'rgba' as ColorMode, label: 'RGBA (32 bpp)' },
+  { value: 'indexed' as ColorMode, label: 'Indexed (8 bpp)' },
+] as const;
 
 export const SpritePropertiesDialog: React.FC<SpritePropertiesDialogProps> = ({
   isOpen,
@@ -45,7 +53,24 @@ export const SpritePropertiesDialog: React.FC<SpritePropertiesDialogProps> = ({
     state.grid?.height && !isNaN(state.grid.height) ? state.grid.height : 16
   );
 
-  if (!isOpen) return null;
+  useEffect(() => {
+    if (!isOpen) return;
+    setTitle(state.title || '');
+    setColorMode(state.colorMode || 'rgba');
+    setTransparentIndex(
+      state.transparentIndex != null && !isNaN(state.transparentIndex) ? state.transparentIndex : 0
+    );
+    setPixelRatioWidth(
+      state.pixelRatio?.width && !isNaN(state.pixelRatio.width) ? state.pixelRatio.width : 1
+    );
+    setPixelRatioHeight(
+      state.pixelRatio?.height && !isNaN(state.pixelRatio.height) ? state.pixelRatio.height : 1
+    );
+    setGridX(state.grid?.x != null && !isNaN(state.grid.x) ? state.grid.x : 0);
+    setGridY(state.grid?.y != null && !isNaN(state.grid.y) ? state.grid.y : 0);
+    setGridWidth(state.grid?.width && !isNaN(state.grid.width) ? state.grid.width : 16);
+    setGridHeight(state.grid?.height && !isNaN(state.grid.height) ? state.grid.height : 16);
+  }, [isOpen, state]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,174 +80,177 @@ export const SpritePropertiesDialog: React.FC<SpritePropertiesDialogProps> = ({
       transparentIndex: isNaN(transparentIndex) ? 0 : transparentIndex,
       pixelRatio: {
         width: Math.max(1, isNaN(pixelRatioWidth) ? 1 : pixelRatioWidth),
-        height: Math.max(1, isNaN(pixelRatioHeight) ? 1 : pixelRatioHeight)
+        height: Math.max(1, isNaN(pixelRatioHeight) ? 1 : pixelRatioHeight),
       },
       grid: {
         x: isNaN(gridX) ? 0 : gridX,
         y: isNaN(gridY) ? 0 : gridY,
         width: Math.max(1, isNaN(gridWidth) ? 16 : gridWidth),
-        height: Math.max(1, isNaN(gridHeight) ? 16 : gridHeight)
-      }
+        height: Math.max(1, isNaN(gridHeight) ? 16 : gridHeight),
+      },
     });
     onClose();
   };
 
   return (
-    <div className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-sm flex justify-center items-center p-3 sm:p-4" onClick={onClose}>
-      <form
-        className="w-full max-w-[480px] max-h-[90vh] bg-card border border-border shadow-2xl rounded-2xl overflow-hidden flex flex-col text-foreground animate-in fade-in zoom-in-95 duration-200"
-        onClick={e => e.stopPropagation()}
-        onSubmit={handleSubmit}
-      >
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-muted/30">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center text-primary">
-              <Settings size={18} />
-            </div>
-            <div>
-              <h2 className="text-base font-semibold tracking-tight">Sprite Properties</h2>
-              <p className="text-[11px] text-muted-foreground">Configure canvas dimensions, color depth, pixel ratio & grid</p>
-            </div>
-          </div>
-          <button type="button" onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full text-muted-foreground hover:bg-accent transition-colors">
-            <X size={18} />
+    <ModalShell
+      open={isOpen}
+      onClose={onClose}
+      title="Sprite Properties"
+      subtitle="Color depth, pixel aspect ratio, and grid"
+      maxWidthClassName="max-w-md"
+      footer={
+        <>
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-7 rounded-md px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            Cancel
           </button>
+          <button
+            type="submit"
+            form="sprite-properties-form"
+            className="h-7 rounded-md bg-primary px-3.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            Apply Changes
+          </button>
+        </>
+      }
+    >
+      <form id="sprite-properties-form" onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <div className="flex flex-col gap-1.5">
+          <label
+            htmlFor="sprite-title-input"
+            className="text-[11px] font-medium text-muted-foreground"
+          >
+            Sprite Title
+          </label>
+          <Input
+            id="sprite-title-input"
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Project Name..."
+          />
         </div>
 
-        <div className="p-6 flex flex-col gap-5 max-h-[75vh] overflow-y-auto custom-scrollbar">
-          {/* Title */}
+        <div className="grid grid-cols-2 gap-3">
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-semibold">Sprite Title</label>
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              className="bg-background border border-border rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/50"
-              placeholder="Project Name..."
+            <span className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+              <Palette size={12} />
+              <span>Color Mode</span>
+            </span>
+            <StudioSelect<ColorMode>
+              value={colorMode}
+              options={COLOR_MODE_OPTIONS}
+              onValueChange={setColorMode}
+              aria-label="Color mode"
             />
           </div>
 
-          {/* Color Mode & Transparent Index */}
-          <div className="grid grid-cols-2 gap-4">
+          {colorMode === 'indexed' && (
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold flex items-center gap-1.5">
-                <Palette size={13} className="text-primary" />
-                Color Mode
-              </label>
-              <select
-                value={colorMode}
-                onChange={(e) => setColorMode(e.target.value as ColorMode)}
-                className="bg-background border border-border rounded-lg px-3 py-2 text-xs font-medium outline-none focus:ring-2 focus:ring-primary/50"
+              <label
+                htmlFor="transparent-idx-input"
+                className="text-[11px] font-medium text-muted-foreground"
               >
-                <option value="rgba">RGBA (32 bpp)</option>
-                <option value="indexed">Indexed (8 bpp)</option>
-              </select>
+                Transparent Index
+              </label>
+              <Input
+                id="transparent-idx-input"
+                type="number"
+                value={isNaN(transparentIndex) ? '' : transparentIndex}
+                onChange={(e) => setTransparentIndex(parseInt(e.target.value, 10))}
+                min={0}
+                max={Math.max(0, state.palette.length - 1)}
+                className="font-mono tabular-nums"
+              />
             </div>
-
-            {colorMode === 'indexed' && (
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold">Transparent Palette Index</label>
-                <input
-                  type="number"
-                  value={isNaN(transparentIndex) ? '' : transparentIndex}
-                  onChange={(e) => setTransparentIndex(parseInt(e.target.value))}
-                  className="bg-background border border-border rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/50"
-                  min="0"
-                  max={Math.max(0, state.palette.length - 1)}
-                />
-              </div>
-            )}
-          </div>
-
-          {/* Pixel Aspect Ratio */}
-          <div className="flex flex-col gap-2 p-3 bg-muted/20 border border-border/40 rounded-xl">
-            <label className="text-xs font-semibold flex items-center gap-1.5 text-foreground">
-              <Ratio size={14} className="text-primary" />
-              Pixel Aspect Ratio (Width : Height)
-            </label>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] text-muted-foreground w-12">Width:</span>
-                <input
-                  type="number"
-                  value={isNaN(pixelRatioWidth) ? '' : pixelRatioWidth}
-                  onChange={(e) => setPixelRatioWidth(parseInt(e.target.value))}
-                  className="bg-background border border-border rounded-lg px-2.5 py-1.5 text-xs outline-none focus:ring-2 focus:ring-primary/50 w-full font-mono"
-                  min="1"
-                  max="10"
-                />
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] text-muted-foreground w-12">Height:</span>
-                <input
-                  type="number"
-                  value={isNaN(pixelRatioHeight) ? '' : pixelRatioHeight}
-                  onChange={(e) => setPixelRatioHeight(parseInt(e.target.value))}
-                  className="bg-background border border-border rounded-lg px-2.5 py-1.5 text-xs outline-none focus:ring-2 focus:ring-primary/50 w-full font-mono"
-                  min="1"
-                  max="10"
-                />
-              </div>
-            </div>
-            <p className="text-[10px] text-muted-foreground">Standard pixels use 1:1 ratio. Double-wide pixels use 2:1 ratio.</p>
-          </div>
-
-          {/* Grid Settings */}
-          <div className="flex flex-col gap-2.5 p-3 bg-muted/20 border border-border/40 rounded-xl">
-            <label className="text-xs font-semibold flex items-center gap-1.5 text-foreground">
-              <Grid size={14} className="text-primary" />
-              Pixel Grid Settings
-            </label>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] text-muted-foreground w-14">Grid X:</span>
-                <input
-                  type="number"
-                  value={isNaN(gridX) ? '' : gridX}
-                  onChange={(e) => setGridX(parseInt(e.target.value))}
-                  className="bg-background border border-border rounded-lg px-2.5 py-1.5 text-xs outline-none focus:ring-2 focus:ring-primary/50 w-full font-mono"
-                />
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] text-muted-foreground w-14">Grid Y:</span>
-                <input
-                  type="number"
-                  value={isNaN(gridY) ? '' : gridY}
-                  onChange={(e) => setGridY(parseInt(e.target.value))}
-                  className="bg-background border border-border rounded-lg px-2.5 py-1.5 text-xs outline-none focus:ring-2 focus:ring-primary/50 w-full font-mono"
-                />
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] text-muted-foreground w-14">Width:</span>
-                <input
-                  type="number"
-                  value={isNaN(gridWidth) ? '' : gridWidth}
-                  onChange={(e) => setGridWidth(parseInt(e.target.value))}
-                  className="bg-background border border-border rounded-lg px-2.5 py-1.5 text-xs outline-none focus:ring-2 focus:ring-primary/50 w-full font-mono"
-                  min="1"
-                />
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] text-muted-foreground w-14">Height:</span>
-                <input
-                  type="number"
-                  value={isNaN(gridHeight) ? '' : gridHeight}
-                  onChange={(e) => setGridHeight(parseInt(e.target.value))}
-                  className="bg-background border border-border rounded-lg px-2.5 py-1.5 text-xs outline-none focus:ring-2 focus:ring-primary/50 w-full font-mono"
-                  min="1"
-                />
-              </div>
-            </div>
-          </div>
+          )}
         </div>
 
-        <div className="flex items-center justify-end gap-3 px-6 py-4 bg-muted/30 border-t border-border">
-          <button type="button" onClick={onClose} className="px-4 py-2 text-sm font-medium hover:bg-accent rounded-lg">Cancel</button>
-          <button type="submit" className="px-6 py-2 text-sm font-medium bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 shadow-sm transition-all active:scale-[0.98]">
-            Apply Changes
-          </button>
+        <div className="flex flex-col gap-2 rounded-lg border border-border bg-background/50 p-3">
+          <span className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+            <Ratio size={13} className="text-muted-foreground" />
+            <span>Pixel Aspect Ratio</span>
+          </span>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="flex items-center gap-2">
+              <span className="w-12 text-[11px] text-muted-foreground">Width</span>
+              <Input
+                type="number"
+                value={isNaN(pixelRatioWidth) ? '' : pixelRatioWidth}
+                onChange={(e) => setPixelRatioWidth(parseInt(e.target.value, 10))}
+                min={1}
+                max={10}
+                className="h-7 font-mono tabular-nums"
+              />
+            </label>
+            <label className="flex items-center gap-2">
+              <span className="w-12 text-[11px] text-muted-foreground">Height</span>
+              <Input
+                type="number"
+                value={isNaN(pixelRatioHeight) ? '' : pixelRatioHeight}
+                onChange={(e) => setPixelRatioHeight(parseInt(e.target.value, 10))}
+                min={1}
+                max={10}
+                className="h-7 font-mono tabular-nums"
+              />
+            </label>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Standard square pixels use 1:1. Double-wide pixels use 2:1.
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-2 rounded-lg border border-border bg-background/50 p-3">
+          <span className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+            <Grid size={13} className="text-muted-foreground" />
+            <span>Pixel Grid</span>
+          </span>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="flex items-center gap-2">
+              <span className="w-12 text-[11px] text-muted-foreground">Grid X</span>
+              <Input
+                type="number"
+                value={isNaN(gridX) ? '' : gridX}
+                onChange={(e) => setGridX(parseInt(e.target.value, 10))}
+                className="h-7 font-mono tabular-nums"
+              />
+            </label>
+            <label className="flex items-center gap-2">
+              <span className="w-12 text-[11px] text-muted-foreground">Grid Y</span>
+              <Input
+                type="number"
+                value={isNaN(gridY) ? '' : gridY}
+                onChange={(e) => setGridY(parseInt(e.target.value, 10))}
+                className="h-7 font-mono tabular-nums"
+              />
+            </label>
+            <label className="flex items-center gap-2">
+              <span className="w-12 text-[11px] text-muted-foreground">Width</span>
+              <Input
+                type="number"
+                value={isNaN(gridWidth) ? '' : gridWidth}
+                onChange={(e) => setGridWidth(parseInt(e.target.value, 10))}
+                min={1}
+                className="h-7 font-mono tabular-nums"
+              />
+            </label>
+            <label className="flex items-center gap-2">
+              <span className="w-12 text-[11px] text-muted-foreground">Height</span>
+              <Input
+                type="number"
+                value={isNaN(gridHeight) ? '' : gridHeight}
+                onChange={(e) => setGridHeight(parseInt(e.target.value, 10))}
+                min={1}
+                className="h-7 font-mono tabular-nums"
+              />
+            </label>
+          </div>
         </div>
       </form>
-    </div>
+    </ModalShell>
   );
 };

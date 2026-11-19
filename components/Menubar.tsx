@@ -1,7 +1,20 @@
 import React from 'react';
+import { Menubar as PrimitiveMenubar } from '@ui-sdk/react/menubar';
+import {
+  Menu,
+  MenuCheckboxItem,
+  MenuContent,
+  MenuItem,
+  MenuItemIcon,
+  MenuSeparator,
+  MenuShortcut,
+  MenuSub,
+  MenuSubContent,
+  MenuSubTrigger,
+  MenuTrigger,
+} from './ui/menu';
 import { Command, RecentProject } from '../types';
-import { Popover, PopoverTrigger, PopoverContent, PopoverClose } from './Popover';
-import { ChevronRight, Trash2, Check } from './Icons';
+import { Check, Trash2 } from './Icons';
 
 interface MenubarProps {
   commands: Command[];
@@ -10,213 +23,188 @@ interface MenubarProps {
   onClearRecent?: () => void;
 }
 
-export const Menubar: React.FC<MenubarProps> = ({ 
-  commands, 
-  recentProjects = [], 
+const CATEGORIES = ['File', 'Edit', 'View', 'Select', 'Layer', 'Sprite'] as const;
+
+const SEPARATOR_AFTER = new Set([
+  'file.close',
+  'edit.redo',
+  'edit.clearEdit',
+  'fx.outline',
+  'view.prevTab',
+  'view.timeline',
+  'view.referenceImage',
+  'select.stroke',
+  'layer.toggleCollapseAll',
+  'layer.centerContent',
+  'frame.duplicate',
+  'sprite.dithering',
+]);
+
+export const Menubar: React.FC<MenubarProps> = ({
+  commands,
+  recentProjects = [],
   onOpenRecent,
-  onClearRecent 
+  onClearRecent,
 }) => {
-  const categories = ['File', 'Edit', 'View', 'Select', 'Layer', 'Sprite'];
-  const [isAnyMenuOpen, setIsAnyMenuOpen] = React.useState(false);
-
-  // Track the global state of popovers to enable "hover-to-switch" behavior
-  React.useEffect(() => {
-    const handleToggle = () => {
-      const openPopover = document.querySelector('[popover]:popover-open');
-      setIsAnyMenuOpen(!!openPopover);
-    };
-    
-    document.addEventListener('toggle', handleToggle, true);
-    return () => document.removeEventListener('toggle', handleToggle, true);
-  }, []);
-
-  const handleMouseEnter = (e: React.MouseEvent<HTMLButtonElement>) => {
-    if (isAnyMenuOpen) {
-      const button = e.currentTarget;
-      const targetId = button.getAttribute('popovertarget');
-      const targetPopover = targetId ? document.getElementById(targetId) : null;
-      
-      if (targetPopover && !targetPopover.matches(':popover-open')) {
-        button.click();
-      }
-    }
-  };
-
-  const handleSubmenuEnter = (e: React.MouseEvent<HTMLButtonElement>) => {
-      const button = e.currentTarget;
-      const targetId = button.getAttribute('popovertarget');
-      const targetPopover = targetId ? document.getElementById(targetId) : null;
-      if (targetPopover && !targetPopover.matches(':popover-open')) {
-          try {
-              targetPopover.showPopover();
-          } catch (err) {}
-      }
-  };
-
   return (
-    <div className="flex items-center gap-0.5">
-      {categories.map(category => {
-        const categoryCommands = commands.filter(c => c.category === category);
-        
+    <PrimitiveMenubar aria-label="Application menu" className="flex items-center gap-0.5">
+      {CATEGORIES.map((category) => {
+        const categoryCommands = commands.filter((c) => c.category === category);
+
         return (
-          <Popover key={category}>
-            <PopoverTrigger 
-              asChild 
-              onMouseEnter={handleMouseEnter}
-            >
-              <button className="px-2.5 py-1 text-[13px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-md focus:outline-none focus:bg-muted/50 data-[state=open]:bg-muted/50 data-[state=open]:text-foreground transition-colors">
-                {category}
-              </button>
-            </PopoverTrigger>
-            <PopoverContent align="start" sideOffset={4} className="w-56 p-1 flex flex-col gap-0.5 overflow-visible shadow-lg border border-border/50 bg-card/95 backdrop-blur-sm rounded-lg">
-              {categoryCommands.map(cmd => {
-                // Special handling to group Color Mode commands into a nested Popover
-                if (cmd.id === 'sprite.modeRGBA') return null; 
-                
-                // Special handling for Edit > FX submenu (Aseprite parity)
+          <Menu key={category}>
+            <MenuTrigger className="rounded-sm px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[open]:bg-accent data-[open]:text-foreground">
+              {category}
+            </MenuTrigger>
+            <MenuContent align="start" sideOffset={4} className="w-56">
+              {categoryCommands.map((cmd) => {
+                if (cmd.id === 'sprite.modeRGBA') return null;
+
                 if (category === 'Edit' && cmd.id === 'fx.outline') {
-                    return (
-                        <Popover key="edit-fx-popover">
-                            <PopoverTrigger asChild onMouseEnter={handleSubmenuEnter}>
-                                <button className="w-full text-left px-3 py-1.5 rounded-sm hover:bg-primary hover:text-primary-foreground text-foreground flex items-center justify-between group">
-                                    <span className="text-xs">FX</span>
-                                    <ChevronRight size={12} className="text-muted-foreground group-hover:text-primary-foreground" />
-                                </button>
-                            </PopoverTrigger>
-                            <PopoverContent side="right" align="start" sideOffset={4} className="w-48 p-1 flex flex-col gap-0.5 shadow-lg border border-border/50 bg-card/95 backdrop-blur-sm rounded-lg z-[100]">
-                                <PopoverClose asChild>
-                                    <button 
-                                        onClick={cmd.perform}
-                                        disabled={cmd.disabled}
-                                        className="w-full text-left px-3 py-1.5 rounded-sm hover:bg-primary hover:text-primary-foreground text-foreground flex items-center justify-between group disabled:opacity-50"
-                                    >
-                                        <span className="text-xs">{cmd.label}</span>
-                                        {cmd.hotkey && (
-                                            <span className="text-[10px] text-muted-foreground group-hover:text-primary-foreground/80">{cmd.hotkey}</span>
-                                        )}
-                                    </button>
-                                </PopoverClose>
-                            </PopoverContent>
-                        </Popover>
-                    );
-                } 
-                
-                if (cmd.id === 'sprite.modeIndexed') {
-                    const indexedCmd = cmd;
-                    const rgbaCmd = categoryCommands.find(c => c.id === 'sprite.modeRGBA');
-                    
-                    return (
-                        <Popover key="color-mode-popover">
-                            <PopoverTrigger asChild onMouseEnter={handleSubmenuEnter}>
-                                <button className="w-full text-left px-3 py-1.5 rounded-sm hover:bg-primary hover:text-primary-foreground text-foreground flex items-center justify-between group">
-                                    <span className="text-xs">Color Mode</span>
-                                    <ChevronRight size={12} className="text-muted-foreground group-hover:text-primary-foreground" />
-                                </button>
-                            </PopoverTrigger>
-                            <PopoverContent side="right" align="start" sideOffset={4} className="w-44 p-1 flex flex-col gap-0.5 shadow-lg border border-border/50 bg-card/95 backdrop-blur-sm rounded-lg z-[100]">
-                                <PopoverClose asChild>
-                                    <button 
-                                        onClick={indexedCmd.perform}
-                                        disabled={indexedCmd.disabled}
-                                        className="w-full text-left px-3 py-1.5 rounded-sm hover:bg-primary hover:text-primary-foreground text-foreground flex items-center justify-between group disabled:opacity-50"
-                                    >
-                                        <span className="text-xs">Indexed</span>
-                                        {indexedCmd.disabled && <Check size={12} className="text-primary group-hover:text-primary-foreground" />}
-                                    </button>
-                                </PopoverClose>
-                                {rgbaCmd && (
-                                    <PopoverClose asChild>
-                                        <button 
-                                            onClick={rgbaCmd.perform}
-                                            disabled={rgbaCmd.disabled}
-                                            className="w-full text-left px-3 py-1.5 rounded-sm hover:bg-primary hover:text-primary-foreground text-foreground flex items-center justify-between group disabled:opacity-50"
-                                        >
-                                            <span className="text-xs">RGBA</span>
-                                            {rgbaCmd.disabled && <Check size={12} className="text-primary group-hover:text-primary-foreground" />}
-                                        </button>
-                                    </PopoverClose>
-                                )}
-                            </PopoverContent>
-                        </Popover>
-                    );
+                  return (
+                    <React.Fragment key="edit-fx-group">
+                      <MenuSub>
+                        <MenuSubTrigger>FX</MenuSubTrigger>
+                        <MenuSubContent className="w-44">
+                          <MenuItem
+                            value={cmd.id}
+                            disabled={cmd.disabled}
+                            onSelect={cmd.perform}
+                          >
+                            <span>{cmd.label}</span>
+                            {cmd.hotkey && <MenuShortcut>{cmd.hotkey}</MenuShortcut>}
+                          </MenuItem>
+                        </MenuSubContent>
+                      </MenuSub>
+                      <MenuSeparator />
+                    </React.Fragment>
+                  );
                 }
 
-                const menuItem = (
-                    <PopoverClose key={cmd.id} asChild>
-                        <button 
-                            onClick={cmd.perform}
-                            disabled={cmd.disabled}
-                            className="w-full text-left px-3 py-1.5 rounded-sm hover:bg-primary hover:text-primary-foreground text-foreground flex items-center justify-between group disabled:opacity-50 disabled:cursor-not-allowed"
+                if (cmd.id === 'sprite.modeIndexed') {
+                  const indexedCmd = cmd;
+                  const rgbaCmd = categoryCommands.find((c) => c.id === 'sprite.modeRGBA');
+
+                  return (
+                    <MenuSub key="color-mode-submenu">
+                      <MenuSubTrigger>Color Mode</MenuSubTrigger>
+                      <MenuSubContent className="w-40">
+                        <MenuItem
+                          value="mode-indexed"
+                          disabled={indexedCmd.disabled}
+                          onSelect={indexedCmd.perform}
+                          className="justify-between"
                         >
-                            <span className="text-xs flex items-center gap-2">
-                                {cmd.checked !== undefined && (
-                                    <span className="w-3 flex justify-center">
-                                        {cmd.checked && <Check size={12} className="text-foreground group-hover:text-primary-foreground" />}
-                                    </span>
-                                )}
-                                {cmd.label}
-                            </span>
-                            {cmd.hotkey && (
-                                <span className="text-[10px] text-muted-foreground group-hover:text-primary-foreground/80">{cmd.hotkey}</span>
-                            )}
-                        </button>
-                    </PopoverClose>
-                );
+                          <span>Indexed</span>
+                          {indexedCmd.disabled && <Check className="h-3.5 w-3.5 text-primary" />}
+                        </MenuItem>
+                        {rgbaCmd && (
+                          <MenuItem
+                            value="mode-rgba"
+                            disabled={rgbaCmd.disabled}
+                            onSelect={rgbaCmd.perform}
+                            className="justify-between"
+                          >
+                            <span>RGBA</span>
+                            {rgbaCmd.disabled && <Check className="h-3.5 w-3.5 text-primary" />}
+                          </MenuItem>
+                        )}
+                      </MenuSubContent>
+                    </MenuSub>
+                  );
+                }
+
+                const menuEntry =
+                  cmd.checked !== undefined ? (
+                    <MenuCheckboxItem
+                      key={cmd.id}
+                      value={cmd.id}
+                      checked={cmd.checked}
+                      disabled={cmd.disabled}
+                      onCheckedChange={() => cmd.perform()}
+                    >
+                      <span className="flex-1 truncate">{cmd.label}</span>
+                      {cmd.hotkey && <MenuShortcut>{cmd.hotkey}</MenuShortcut>}
+                    </MenuCheckboxItem>
+                  ) : (
+                    <MenuItem
+                      key={cmd.id}
+                      value={cmd.id}
+                      disabled={cmd.disabled}
+                      onSelect={cmd.perform}
+                    >
+                      <span className="flex-1 truncate">{cmd.label}</span>
+                      {cmd.hotkey && <MenuShortcut>{cmd.hotkey}</MenuShortcut>}
+                    </MenuItem>
+                  );
 
                 if (category === 'File' && cmd.id === 'file.open') {
-                   return (
-                     <React.Fragment key="fragment-recent">
-                       {menuItem}
-                       {/* Nested Popover for Open Recent */}
-                       <Popover>
-                          <PopoverTrigger asChild onMouseEnter={handleSubmenuEnter}>
-                              <button className="w-full text-left px-3 py-1.5 rounded-sm hover:bg-primary hover:text-primary-foreground text-foreground flex items-center justify-between group">
-                                  <span className="text-xs">Open Recent</span>
-                                  <ChevronRight size={12} className="text-muted-foreground group-hover:text-primary-foreground" />
-                              </button>
-                          </PopoverTrigger>
-                          <PopoverContent side="right" align="start" sideOffset={4} className="w-48 p-1 flex flex-col gap-0.5 shadow-lg border border-border/50 bg-card/95 backdrop-blur-sm rounded-lg z-[100]">
-                             {recentProjects.length === 0 ? (
-                                <div className="px-3 py-2 text-[10px] text-muted-foreground italic">No recent files</div>
-                             ) : (
+                  return (
+                    <React.Fragment key="file-open-with-recent">
+                      {menuEntry}
+                      <MenuSub>
+                        <MenuSubTrigger>Open Recent</MenuSubTrigger>
+                        <MenuSubContent className="w-56">
+                          {recentProjects.length === 0 ? (
+                            <div className="px-2.5 py-2 text-[11px] text-muted-foreground">
+                              No recent files
+                            </div>
+                          ) : (
+                            <>
+                              {recentProjects.map((recent) => (
+                                <MenuItem
+                                  key={recent.id}
+                                  value={`recent-${recent.id}`}
+                                  onSelect={() => onOpenRecent?.(recent)}
+                                  className="flex-col items-start gap-0.5 py-1.5"
+                                >
+                                  <span className="w-full truncate text-xs font-medium">
+                                    {recent.title}
+                                  </span>
+                                  <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+                                    {recent.width}×{recent.height} ·{' '}
+                                    {new Date(recent.timestamp).toLocaleDateString()}
+                                  </span>
+                                </MenuItem>
+                              ))}
+                              {onClearRecent && (
                                 <>
-                                  {recentProjects.map(recent => (
-                                    <PopoverClose key={recent.id} asChild>
-                                        <button
-                                            onClick={() => onOpenRecent && onOpenRecent(recent)}
-                                            className="w-full text-left px-3 py-1.5 rounded-sm hover:bg-primary hover:text-primary-foreground text-foreground flex flex-col group"
-                                        >
-                                            <span className="text-xs truncate font-medium">{recent.title}</span>
-                                            <span className="text-[9px] text-muted-foreground group-hover:text-primary-foreground/80">{new Date(recent.timestamp).toLocaleDateString()}</span>
-                                        </button>
-                                    </PopoverClose>
-                                  ))}
-                                  {onClearRecent && (
-                                    <>
-                                        <div className="border-t border-border my-0.5"></div>
-                                        <button 
-                                            onClick={onClearRecent}
-                                            className="w-full text-left px-3 py-1.5 rounded-sm hover:bg-destructive hover:text-destructive-foreground text-muted-foreground flex items-center gap-2 text-xs"
-                                        >
-                                            <Trash2 size={10} />
-                                            <span>Clear List</span>
-                                        </button>
-                                    </>
-                                  )}
+                                  <MenuSeparator />
+                                  <MenuItem
+                                    value="clear-recent"
+                                    destructive
+                                    onSelect={onClearRecent}
+                                  >
+                                    <MenuItemIcon>
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </MenuItemIcon>
+                                    <span>Clear Recent List</span>
+                                  </MenuItem>
                                 </>
-                             )}
-                          </PopoverContent>
-                       </Popover>
-                     </React.Fragment>
-                   );
+                              )}
+                            </>
+                          )}
+                        </MenuSubContent>
+                      </MenuSub>
+                    </React.Fragment>
+                  );
                 }
 
-                return menuItem;
+                if (SEPARATOR_AFTER.has(cmd.id)) {
+                  return (
+                    <React.Fragment key={cmd.id}>
+                      {menuEntry}
+                      <MenuSeparator />
+                    </React.Fragment>
+                  );
+                }
+
+                return menuEntry;
               })}
-            </PopoverContent>
-          </Popover>
+            </MenuContent>
+          </Menu>
         );
       })}
-    </div>
+    </PrimitiveMenubar>
   );
 };

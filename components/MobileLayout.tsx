@@ -1,50 +1,115 @@
-
-import React, { useState, useRef } from 'react';
-import { Drawer } from 'vaul';
-import { ProjectState, ToolType, Command, Position } from '../types';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  AnimatePresence,
+  animate,
+  motion,
+  useMotionValue,
+  useReducedMotion,
+  useTransform,
+} from 'motion/react';
+import { Command, Position, ProjectState, ToolType } from '../types';
+import { SELECTION_TOOLS } from '../constants';
 import { Canvas } from './Canvas';
 import { Palette } from './Palette';
 import { LayersPanel } from './LayersPanel';
 import { Timeline } from './Timeline';
+import { HistoryPanel } from './HistoryPanel';
 import { Preview } from './Preview';
 import { ColorPicker } from './ColorPicker';
 import { Home } from './Home';
-import { Popover, PopoverTrigger, PopoverContent } from './Popover';
-import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
-import { 
-  Menu, Undo, Redo, Share, Plus,
-  Pencil, Eraser, PaintBucket, Pipette, MousePointer2,
-  Layers, Clock, X,
-  BoxSelect, Square, Circle, Minus, Lasso,
-  Check, Play, Droplets, Zap,
-  Grid, Eye, Hand, FlipHorizontal, FlipVertical,
-  Settings, Waves, ChevronUp, ChevronDown, Wand2,
-  Sparkles, ArrowRightLeft, Palette as PaletteIcon, RefreshCcw
-} from './Icons';
-import { Crop, Tag, Maximize2, Scissors } from 'lucide-react';
-import { SELECTION_TOOLS } from '../constants';
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
+import {
+  Dialog,
+  DialogBackdrop,
+  DialogClose,
+  DialogDescription,
+  DialogSheetContent,
+  DialogTitle,
+} from './ui/dialog';
+import {
+  SegmentedControl,
+  SegmentedControlIndicator,
+  SegmentedControlItem,
+} from './ui/segmented-control';
 import { CustomSlider } from './ui/slider';
+import {
+  ArrowRightLeft,
+  BoxSelect,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Circle,
+  Clock,
+  Command as CommandIcon,
+  Crop,
+  Download,
+  Droplets,
+  Eraser,
+  Eye,
+  FlipHorizontal,
+  FlipVertical,
+  FolderOpen,
+  Grid,
+  Hand,
+  History as HistoryIcon,
+  Image as ImageIcon,
+  Lasso,
+  Layers,
+  Maximize2,
+  Menu as MenuIcon,
+  Minus,
+  MousePointer2,
+  PaintBucket,
+  Palette as PaletteIcon,
+  Pencil,
+  Pipette,
+  Play,
+  Plus,
+  Redo,
+  Scissors,
+  Settings,
+  Sliders,
+  Sparkles,
+  Square,
+  Tag,
+  Undo,
+  Wand2,
+  Waves,
+  X,
+  Zap,
+} from './Icons';
 
 interface MobileLayoutProps {
   state: ProjectState;
   updateState: (s: ProjectState, config?: any) => void;
   commands: Command[];
-  project: any; 
+  project: any;
   canvasTools: any;
-  fileInputRef: React.RefObject<HTMLInputElement>;
+  fileInputRef: React.RefObject<HTMLInputElement | null>;
   handleFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   statusMessage: { text: string; type: 'info' | 'error' | 'success' };
   mousePos: Position | null;
   dragStartPos: Position | null;
-  selectionSize: { w: number, h: number } | null;
+  selectionSize: { w: number; h: number } | null;
   setMousePos: (pos: Position | null) => void;
   setDragStartPos: (pos: Position | null) => void;
-  onScalePixels: (selection: Set<number>, srcBox: any, QUEEN_BOX: any) => void;
+  onScalePixels: (selection: Set<number>, srcBox: any, destBox: any) => void;
   activeTagPopover?: any;
   onCloseTagPopover?: () => void;
   layerPropertiesState?: { isOpen: boolean; layer: any };
   onCloseLayerProperties?: () => void;
 }
+
+type MobilePanel = 'palette' | 'layers' | 'timeline' | 'history' | 'menu' | 'preview' | null;
+
+const PANEL_TITLES: Record<Exclude<MobilePanel, null>, string> = {
+  palette: 'Palette',
+  layers: 'Layers',
+  timeline: 'Timeline',
+  history: 'History',
+  menu: 'Studio Menu',
+  preview: 'Preview',
+};
 
 export const MobileLayout: React.FC<MobileLayoutProps> = ({
   state,
@@ -54,735 +119,1718 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
   canvasTools,
   fileInputRef,
   handleFileChange,
-  statusMessage,
   setMousePos,
   setDragStartPos,
   activeTagPopover,
   onCloseTagPopover,
   layerPropertiesState,
   onCloseLayerProperties,
-  onScalePixels
+  onScalePixels,
 }) => {
-  const [activePanel, setActivePanel] = useState<'palette' | 'layers' | 'timeline' | 'menu' | 'preview' | 'settings' | null>(null);
+  const [activePanel, setActivePanel] = useState<MobilePanel>(null);
   const [isSettingsExpanded, setIsSettingsExpanded] = useState(false);
+  const [isDraggingTray, setIsDraggingTray] = useState(false);
+  const [isDraggingSheet, setIsDraggingSheet] = useState(false);
+  const shouldReduceMotion = useReducedMotion();
 
-  // Gesture handling for tool settings modal (swipe up on trigger to open, swipe down on modal to close)
-  const triggerTouchStart = useRef<{ x: number; y: number } | null>(null);
-  const modalTouchStart = useRef<{ x: number; y: number } | null>(null);
+  const trayRef = useRef<HTMLDivElement>(null);
+  const dragY = useMotionValue(0);
+  const dragScale = useTransform(dragY, [-18, 0, 220], [1.005, 1, 0.985]);
 
-  const handleTriggerTouchStart = (e: React.TouchEvent) => {
-    if (e.touches.length === 1) {
-      triggerTouchStart.current = {
-        x: e.touches[0].clientX,
-        y: e.touches[0].clientY,
-      };
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  const sheetY = useMotionValue(0);
+  const sheetBackdropOpacity = useMotionValue(1);
+  const isClosingSheetRef = useRef(false);
+  const suppressSheetClickRef = useRef(false);
+  const prevPanelRef = useRef<MobilePanel>(null);
+
+  const dragSessionRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    lastY: number;
+    lastTime: number;
+    velocityY: number;
+    isDragging: boolean;
+    captured: boolean;
+  } | null>(null);
+  const suppressClickRef = useRef(false);
+
+  const handleTrayPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('[data-slot="slider-control"], [role="slider"], input[type="range"]')) {
+      return;
+    }
+
+    dragY.stop();
+    suppressClickRef.current = false;
+    dragSessionRef.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      lastY: e.clientY,
+      lastTime: performance.now(),
+      velocityY: 0,
+      isDragging: false,
+      captured: false,
+    };
+  };
+
+  const handleTrayPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const session = dragSessionRef.current;
+    if (!session || session.pointerId !== e.pointerId) return;
+
+    const rawDeltaY = e.clientY - session.startY;
+    const absDeltaX = Math.abs(e.clientX - session.startX);
+
+    if (!session.isDragging) {
+      if (Math.abs(rawDeltaY) < 6 && absDeltaX < 6) return;
+      if (absDeltaX > Math.abs(rawDeltaY)) {
+        dragSessionRef.current = null;
+        return;
+      }
+
+      session.isDragging = true;
+      suppressClickRef.current = true;
+      setIsDraggingTray(true);
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        session.captured = true;
+      } catch {
+        // Ignore if pointer capture is unsupported
+      }
+    }
+
+    const now = performance.now();
+    const dt = now - session.lastTime;
+    if (dt > 0) {
+      const instantVy = ((e.clientY - session.lastY) / dt) * 1000;
+      session.velocityY = session.velocityY * 0.45 + instantVy * 0.55;
+      session.lastY = e.clientY;
+      session.lastTime = now;
+    }
+
+    if (rawDeltaY < 0) {
+      dragY.set(Math.max(-18, rawDeltaY * 0.16));
+    } else {
+      dragY.set(rawDeltaY);
     }
   };
 
-  const handleTriggerTouchMove = (e: React.TouchEvent) => {
-    if (!triggerTouchStart.current || e.touches.length !== 1) return;
-    const currentY = e.touches[0].clientY;
-    const currentX = e.touches[0].clientX;
-    const deltaY = triggerTouchStart.current.y - currentY; // positive = swipe up
-    const deltaX = Math.abs(currentX - triggerTouchStart.current.x);
+  const handleTrayPointerUpOrCancel = (e: React.PointerEvent<HTMLDivElement>) => {
+    const session = dragSessionRef.current;
+    if (!session || session.pointerId !== e.pointerId) return;
 
-    if (deltaY > 15 && deltaY > deltaX) {
-      setIsSettingsExpanded(true);
-      triggerTouchStart.current = null;
+    if (session.captured) {
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        // Ignore if already released
+      }
     }
-  };
 
-  const handleTriggerTouchEnd = (e: React.TouchEvent) => {
-    if (!triggerTouchStart.current) return;
-    const endY = e.changedTouches[0].clientY;
-    const endX = e.changedTouches[0].clientX;
-    const deltaY = triggerTouchStart.current.y - endY;
-    const deltaX = Math.abs(endX - triggerTouchStart.current.x);
+    dragSessionRef.current = null;
+    setIsDraggingTray(false);
 
-    if (deltaY > 12 && deltaY > deltaX) {
-      setIsSettingsExpanded(true);
-    }
-    triggerTouchStart.current = null;
-  };
+    if (!session.isDragging) return;
 
-  const handleModalTouchStart = (e: React.TouchEvent) => {
-    if (e.touches.length === 1) {
-      modalTouchStart.current = {
-        x: e.touches[0].clientX,
-        y: e.touches[0].clientY,
-      };
-    }
-  };
+    window.setTimeout(() => {
+      suppressClickRef.current = false;
+    }, 0);
 
-  const handleModalTouchMove = (e: React.TouchEvent) => {
-    if (!modalTouchStart.current || e.touches.length !== 1) return;
-    const currentY = e.touches[0].clientY;
-    const currentX = e.touches[0].clientX;
-    const deltaY = currentY - modalTouchStart.current.y; // positive = swipe down
-    const deltaX = Math.abs(currentX - modalTouchStart.current.x);
+    const currentY = dragY.get();
+    const trayHeight = trayRef.current?.offsetHeight ?? 200;
+    const dismissDistance = Math.min(72, trayHeight * 0.35);
+    const timeSinceMove = performance.now() - session.lastTime;
+    const vy = timeSinceMove > 90 ? 0 : session.velocityY;
 
-    if (deltaY > 20 && deltaY > deltaX) {
+    const shouldDismiss =
+      e.type !== 'pointercancel' &&
+      ((currentY > dismissDistance && vy >= -80) || (vy > 420 && currentY > 16));
+
+    if (shouldDismiss) {
+      if (!shouldReduceMotion) {
+        const targetY = currentY + Math.min(80, Math.max(0, vy * 0.06));
+        animate(dragY, targetY, {
+          duration: 0.16,
+          ease: [0.22, 1, 0.36, 1],
+        });
+      }
       setIsSettingsExpanded(false);
-      modalTouchStart.current = null;
+    } else if (shouldReduceMotion) {
+      dragY.set(0);
+    } else {
+      animate(dragY, 0, {
+        type: 'spring',
+        stiffness: 540,
+        damping: 34,
+        mass: 0.8,
+      });
     }
   };
 
-  const handleModalTouchEnd = (e: React.TouchEvent) => {
-    if (!modalTouchStart.current) return;
-    const endY = e.changedTouches[0].clientY;
-    const endX = e.changedTouches[0].clientX;
-    const deltaY = endY - modalTouchStart.current.y;
-    const deltaX = Math.abs(endX - modalTouchStart.current.x);
-
-    if (deltaY > 15 && deltaY > deltaX) {
-      setIsSettingsExpanded(false);
-    }
-    modalTouchStart.current = null;
-  };
-
-  const tools: { id: ToolType, icon: React.ReactNode, label: string }[] = [
-    { id: 'pencil', icon: <Pencil size={22} />, label: 'Pencil' },
-    { id: 'eraser', icon: <Eraser size={22} />, label: 'Eraser' },
-    { id: 'bucket', icon: <PaintBucket size={22} />, label: 'Fill' },
-    { id: 'eyedropper', icon: <Pipette size={22} />, label: 'Picker' },
-    { id: 'move', icon: <MousePointer2 size={22} />, label: 'Move' },
-    { id: 'rect', icon: <Square size={22} />, label: 'Rect' },
-    { id: 'filled-rect', icon: <Square className="fill-current" size={22} />, label: 'Fill Rect' },
-    { id: 'ellipse', icon: <Circle size={22} />, label: 'Ellipse' },
-    { id: 'filled-ellipse', icon: <Circle className="fill-current" size={22} />, label: 'Fill Circle' },
-    { id: 'line', icon: <Minus className="-rotate-45" size={22} />, label: 'Line' },
-    { id: 'smudge', icon: <Hand size={22} />, label: 'Smudge' },
-    { id: 'blur', icon: <Droplets size={22} />, label: 'Blur' },
-    { id: 'sharpen', icon: <Zap size={22} />, label: 'Sharpen' },
-    { id: 'color-replace', icon: <PaletteIcon size={22} />, label: 'Replace' },
-    { id: 'rect-select', icon: <BoxSelect size={22} />, label: 'Sel Rect' },
-    { id: 'ellipse-select', icon: <Circle size={22} className="stroke-dashed" />, label: 'Sel Ellipse' },
-    { id: 'lasso-select', icon: <Lasso size={22} />, label: 'Sel Lasso' },
-    { id: 'poly-lasso-select', icon: <Scissors size={22} />, label: 'Poly Lasso' },
-    { id: 'magic-wand', icon: <Wand2 size={22} />, label: 'Wand' },
+  const tools: { id: ToolType; icon: React.ReactNode; label: string }[] = [
+    { id: 'pencil', icon: <Pencil size={18} />, label: 'Pencil' },
+    { id: 'eraser', icon: <Eraser size={18} />, label: 'Eraser' },
+    { id: 'bucket', icon: <PaintBucket size={18} />, label: 'Fill' },
+    { id: 'eyedropper', icon: <Pipette size={18} />, label: 'Picker' },
+    { id: 'move', icon: <MousePointer2 size={18} />, label: 'Move' },
+    { id: 'rect', icon: <Square size={18} />, label: 'Rectangle' },
+    { id: 'filled-rect', icon: <Square size={18} className="fill-current" />, label: 'Filled Rect' },
+    { id: 'ellipse', icon: <Circle size={18} />, label: 'Ellipse' },
+    { id: 'filled-ellipse', icon: <Circle size={18} className="fill-current" />, label: 'Filled Ellipse' },
+    { id: 'line', icon: <Minus size={18} className="-rotate-45" />, label: 'Line' },
+    { id: 'smudge', icon: <Hand size={18} />, label: 'Smudge' },
+    { id: 'blur', icon: <Droplets size={18} />, label: 'Blur' },
+    { id: 'sharpen', icon: <Zap size={18} />, label: 'Sharpen' },
+    { id: 'color-replace', icon: <PaletteIcon size={18} />, label: 'Replace' },
+    { id: 'rect-select', icon: <BoxSelect size={18} />, label: 'Rect Select' },
+    { id: 'ellipse-select', icon: <Circle size={18} />, label: 'Ellipse Select' },
+    { id: 'lasso-select', icon: <Lasso size={18} />, label: 'Lasso Select' },
+    { id: 'poly-lasso-select', icon: <Scissors size={18} />, label: 'Poly Lasso' },
+    { id: 'magic-wand', icon: <Wand2 size={18} />, label: 'Magic Wand' },
   ];
 
-  const closePanel = () => setActivePanel(null);
+  const closePanel = useCallback(() => {
+    isClosingSheetRef.current = false;
+    setActivePanel(null);
+  }, []);
 
-  const isBrushTool = ['pencil', 'eraser', 'smudge', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'blur', 'sharpen', 'color-replace'].includes(state.tool);
+  const dismissPanel = useCallback(
+    (velocityY = 0) => {
+      if (!activePanel || isClosingSheetRef.current) return;
+      isClosingSheetRef.current = true;
+
+      if (shouldReduceMotion) {
+        isClosingSheetRef.current = false;
+        setActivePanel(null);
+        return;
+      }
+
+      const sheetHeight = sheetRef.current?.offsetHeight || 420;
+      const targetY = sheetHeight + 28;
+      const duration = velocityY > 500 ? 0.14 : 0.2;
+
+      animate(sheetBackdropOpacity, 0, {
+        duration,
+        ease: [0.22, 1, 0.36, 1],
+      });
+      animate(sheetY, targetY, {
+        duration,
+        ease: [0.32, 0.72, 0, 1],
+      }).then(() => {
+        if (isClosingSheetRef.current) {
+          isClosingSheetRef.current = false;
+          setActivePanel(null);
+        }
+      });
+    },
+    [activePanel, sheetBackdropOpacity, sheetY, shouldReduceMotion]
+  );
+
+  const snapSheetBack = useCallback(() => {
+    isClosingSheetRef.current = false;
+    if (shouldReduceMotion) {
+      sheetY.set(0);
+      sheetBackdropOpacity.set(1);
+      return;
+    }
+
+    animate(sheetY, 0, {
+      type: 'spring',
+      stiffness: 520,
+      damping: 36,
+      mass: 0.8,
+    });
+    animate(sheetBackdropOpacity, 1, {
+      duration: 0.18,
+      ease: [0.22, 1, 0.36, 1],
+    });
+  }, [sheetBackdropOpacity, sheetY, shouldReduceMotion]);
+
+  useLayoutEffect(() => {
+    const prevPanel = prevPanelRef.current;
+    prevPanelRef.current = activePanel;
+
+    if (!prevPanel && activePanel) {
+      isClosingSheetRef.current = false;
+      suppressSheetClickRef.current = false;
+      sheetY.stop();
+      sheetBackdropOpacity.stop();
+
+      if (shouldReduceMotion) {
+        sheetY.set(0);
+        sheetBackdropOpacity.set(1);
+      } else {
+        const startOffset = sheetRef.current?.offsetHeight || 420;
+        sheetY.set(startOffset);
+        sheetBackdropOpacity.set(0);
+        animate(sheetY, 0, {
+          type: 'spring',
+          stiffness: 440,
+          damping: 36,
+          mass: 0.85,
+        });
+        animate(sheetBackdropOpacity, 1, {
+          duration: 0.2,
+          ease: [0.22, 1, 0.36, 1],
+        });
+      }
+    }
+  }, [activePanel, sheetBackdropOpacity, sheetY, shouldReduceMotion]);
+
+  useEffect(() => {
+    if (!activePanel) return;
+    const sheetEl = sheetRef.current;
+    const backdropEl = backdropRef.current;
+    if (!sheetEl) return;
+
+    type SheetDragSession = {
+      source: 'touch' | 'pointer';
+      pointerId: number;
+      startX: number;
+      startY: number;
+      startOffsetY: number;
+      lastY: number;
+      lastTime: number;
+      velocityY: number;
+      scrollEl: HTMLElement | null;
+      startScrollTop: number;
+      isBackdrop: boolean;
+      isDragging: boolean;
+    };
+
+    let activeSession: SheetDragSession | null = null;
+
+    const shouldIgnoreTarget = (target: HTMLElement | null) =>
+      Boolean(
+        target?.closest(
+          '[data-slot="slider-control"], [role="slider"], input[type="range"], [data-slot="popover-content"], [data-slot="menu-content"], [data-slot="select-content"], [draggable="true"], .split-view-sash, .sash, input, textarea, select, [contenteditable="true"]'
+        )
+      );
+
+    const findVerticalScrollContainer = (target: HTMLElement | null) => {
+      let el = target;
+      while (el && el !== sheetEl) {
+        const overflowY = window.getComputedStyle(el).overflowY;
+        if ((overflowY === 'auto' || overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 1) {
+          return el;
+        }
+        el = el.parentElement;
+      }
+      return null;
+    };
+
+    const startSession = (
+      source: 'touch' | 'pointer',
+      pointerId: number,
+      clientX: number,
+      clientY: number,
+      target: HTMLElement | null,
+      isBackdrop: boolean
+    ): SheetDragSession | null => {
+      if (!isBackdrop && shouldIgnoreTarget(target)) return null;
+
+      isClosingSheetRef.current = false;
+      sheetY.stop();
+      sheetBackdropOpacity.stop();
+      if (!isBackdrop) suppressSheetClickRef.current = false;
+
+      const scrollEl = isBackdrop ? null : findVerticalScrollContainer(target);
+      return {
+        source,
+        pointerId,
+        startX: clientX,
+        startY: clientY,
+        startOffsetY: sheetY.get(),
+        lastY: clientY,
+        lastTime: performance.now(),
+        velocityY: 0,
+        scrollEl,
+        startScrollTop: scrollEl ? scrollEl.scrollTop : 0,
+        isBackdrop,
+        isDragging: false,
+      };
+    };
+
+    const moveSession = (clientX: number, clientY: number, touchEvent?: TouchEvent) => {
+      if (!activeSession) return;
+
+      const rawDeltaY = clientY - activeSession.startY;
+      const absDeltaX = Math.abs(clientX - activeSession.startX);
+      const absDeltaY = Math.abs(rawDeltaY);
+
+      if (!activeSession.isDragging) {
+        const threshold = activeSession.source === 'touch' ? 4 : 6;
+        if (absDeltaY < threshold && absDeltaX < threshold) return;
+
+        if (absDeltaX > absDeltaY) {
+          activeSession = null;
+          return;
+        }
+
+        if (activeSession.scrollEl) {
+          if (activeSession.scrollEl.scrollTop > 1 || activeSession.startScrollTop > 1 || rawDeltaY < 0) {
+            activeSession = null;
+            return;
+          }
+        }
+
+        if (touchEvent?.cancelable) touchEvent.preventDefault();
+        activeSession.isDragging = true;
+        if (!activeSession.isBackdrop) suppressSheetClickRef.current = true;
+        setIsDraggingSheet(true);
+      } else if (touchEvent?.cancelable) {
+        touchEvent.preventDefault();
+      }
+
+      const now = performance.now();
+      const dt = now - activeSession.lastTime;
+      if (dt > 0) {
+        const instantVy = ((clientY - activeSession.lastY) / dt) * 1000;
+        activeSession.velocityY = activeSession.velocityY * 0.45 + instantVy * 0.55;
+        activeSession.lastY = clientY;
+        activeSession.lastTime = now;
+      }
+
+      const nextRaw = activeSession.startOffsetY + rawDeltaY;
+      const nextY = nextRaw < 0 ? Math.max(-18, nextRaw * 0.16) : nextRaw;
+      sheetY.set(nextY);
+
+      const height = Math.max(240, sheetEl.offsetHeight || 360);
+      const progress = Math.min(1, Math.max(0, nextY / height));
+      sheetBackdropOpacity.set(1 - progress * 0.85);
+    };
+
+    const endSession = (isCancel: boolean) => {
+      const session = activeSession;
+      activeSession = null;
+      setIsDraggingSheet(false);
+      if (!session) return;
+
+      if (!session.isBackdrop) {
+        window.setTimeout(() => {
+          suppressSheetClickRef.current = false;
+        }, 50);
+      }
+
+      if (!session.isDragging) {
+        if (!isCancel && session.isBackdrop) {
+          const hasNestedPopup = Boolean(
+            document.querySelector(
+              '[data-slot="popover-content"][data-open], [data-slot="menu-content"][data-open], [data-slot="select-content"][data-open]'
+            )
+          );
+          if (!hasNestedPopup) {
+            dismissPanel();
+          }
+        } else if (sheetY.get() !== 0) {
+          snapSheetBack();
+        }
+        return;
+      }
+
+      const currentY = sheetY.get();
+      const sheetHeight = Math.max(240, sheetEl.offsetHeight || 360);
+      const dismissDistance = Math.min(110, sheetHeight * 0.3);
+      const timeSinceMove = performance.now() - session.lastTime;
+      const vy = timeSinceMove > 90 ? 0 : session.velocityY;
+
+      const shouldDismiss =
+        !isCancel &&
+        ((currentY > dismissDistance && vy >= -80) || (vy > 420 && currentY > 20));
+
+      if (shouldDismiss) {
+        dismissPanel(vy);
+      } else {
+        snapSheetBack();
+      }
+    };
+
+    const onSheetTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const touch = e.touches[0];
+      activeSession = startSession(
+        'touch',
+        touch.identifier,
+        touch.clientX,
+        touch.clientY,
+        e.target as HTMLElement | null,
+        false
+      );
+    };
+
+    const onBackdropTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const touch = e.touches[0];
+      activeSession = startSession(
+        'touch',
+        touch.identifier,
+        touch.clientX,
+        touch.clientY,
+        e.target as HTMLElement | null,
+        true
+      );
+    };
+
+    const findMatchingTouch = (list: TouchList, id: number) => {
+      for (let i = 0; i < list.length; i++) {
+        if (list[i].identifier === id) return list[i];
+      }
+      return null;
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (!activeSession || activeSession.source !== 'touch') return;
+      const touch = findMatchingTouch(e.touches, activeSession.pointerId);
+      if (!touch) return;
+      moveSession(touch.clientX, touch.clientY, e);
+    };
+
+    const onTouchEnd = (e: TouchEvent) => {
+      if (!activeSession || activeSession.source !== 'touch') return;
+      if (!findMatchingTouch(e.changedTouches, activeSession.pointerId)) return;
+      endSession(false);
+    };
+
+    const onTouchCancel = (e: TouchEvent) => {
+      if (!activeSession || activeSession.source !== 'touch') return;
+      if (!findMatchingTouch(e.changedTouches, activeSession.pointerId)) return;
+      endSession(true);
+    };
+
+    const onSheetPointerDown = (e: PointerEvent) => {
+      if (e.pointerType === 'touch' || e.button !== 0) return;
+      activeSession = startSession(
+        'pointer',
+        e.pointerId,
+        e.clientX,
+        e.clientY,
+        e.target as HTMLElement | null,
+        false
+      );
+    };
+
+    const onBackdropPointerDown = (e: PointerEvent) => {
+      if (e.pointerType === 'touch' || e.button !== 0) return;
+      activeSession = startSession(
+        'pointer',
+        e.pointerId,
+        e.clientX,
+        e.clientY,
+        e.target as HTMLElement | null,
+        true
+      );
+    };
+
+    const onWindowPointerMove = (e: PointerEvent) => {
+      if (!activeSession || activeSession.source !== 'pointer' || activeSession.pointerId !== e.pointerId) {
+        return;
+      }
+      moveSession(e.clientX, e.clientY);
+    };
+
+    const onWindowPointerUp = (e: PointerEvent) => {
+      if (!activeSession || activeSession.source !== 'pointer' || activeSession.pointerId !== e.pointerId) {
+        return;
+      }
+      endSession(false);
+    };
+
+    const onWindowPointerCancel = (e: PointerEvent) => {
+      if (!activeSession || activeSession.source !== 'pointer' || activeSession.pointerId !== e.pointerId) {
+        return;
+      }
+      endSession(true);
+    };
+
+    sheetEl.addEventListener('touchstart', onSheetTouchStart, { passive: true });
+    // Non-passive listener allows canceling native scroll on touchmove when pulling down at scrollTop 0.
+    sheetEl.addEventListener('touchmove', onTouchMove, { passive: false });
+    sheetEl.addEventListener('touchend', onTouchEnd);
+    sheetEl.addEventListener('touchcancel', onTouchCancel);
+    sheetEl.addEventListener('pointerdown', onSheetPointerDown);
+
+    backdropEl?.addEventListener('touchstart', onBackdropTouchStart, { passive: true });
+    backdropEl?.addEventListener('touchmove', onTouchMove, { passive: false });
+    backdropEl?.addEventListener('touchend', onTouchEnd);
+    backdropEl?.addEventListener('touchcancel', onTouchCancel);
+    backdropEl?.addEventListener('pointerdown', onBackdropPointerDown);
+
+    window.addEventListener('pointermove', onWindowPointerMove);
+    window.addEventListener('pointerup', onWindowPointerUp);
+    window.addEventListener('pointercancel', onWindowPointerCancel);
+
+    return () => {
+      sheetEl.removeEventListener('touchstart', onSheetTouchStart);
+      sheetEl.removeEventListener('touchmove', onTouchMove);
+      sheetEl.removeEventListener('touchend', onTouchEnd);
+      sheetEl.removeEventListener('touchcancel', onTouchCancel);
+      sheetEl.removeEventListener('pointerdown', onSheetPointerDown);
+
+      backdropEl?.removeEventListener('touchstart', onBackdropTouchStart);
+      backdropEl?.removeEventListener('touchmove', onTouchMove);
+      backdropEl?.removeEventListener('touchend', onTouchEnd);
+      backdropEl?.removeEventListener('touchcancel', onTouchCancel);
+      backdropEl?.removeEventListener('pointerdown', onBackdropPointerDown);
+
+      window.removeEventListener('pointermove', onWindowPointerMove);
+      window.removeEventListener('pointerup', onWindowPointerUp);
+      window.removeEventListener('pointercancel', onWindowPointerCancel);
+    };
+  }, [activePanel, dismissPanel, sheetBackdropOpacity, sheetY, snapSheetBack]);
+
+  const isBrushTool = [
+    'pencil',
+    'eraser',
+    'smudge',
+    'line',
+    'rect',
+    'filled-rect',
+    'ellipse',
+    'filled-ellipse',
+    'blur',
+    'sharpen',
+    'color-replace',
+  ].includes(state.tool);
   const isFillTool = state.tool === 'bucket';
   const isMagicWand = state.tool === 'magic-wand';
   const isSelectionTool = SELECTION_TOOLS.includes(state.tool);
   const isMoveTool = state.tool === 'move';
 
-  const hasAnySettings = isBrushTool || isFillTool || isSelectionTool || isMoveTool;
+  const hasAnySettings =
+    isBrushTool || isFillTool || isMagicWand || isSelectionTool || isMoveTool;
 
-  const toggleSymmetryX = () => updateState({...state, symmetry: { ...state.symmetry, x: !state.symmetry.x }});
-  const toggleSymmetryY = () => updateState({...state, symmetry: { ...state.symmetry, y: !state.symmetry.y }});
+  useEffect(() => {
+    if (isSettingsExpanded && hasAnySettings) {
+      if (shouldReduceMotion) {
+        dragY.set(0);
+      } else {
+        animate(dragY, 0, {
+          type: 'spring',
+          stiffness: 520,
+          damping: 36,
+          mass: 0.8,
+        });
+      }
+    }
+  }, [isSettingsExpanded, hasAnySettings, dragY, shouldReduceMotion]);
+
+  const toggleSymmetryX = () =>
+    updateState({ ...state, symmetry: { ...state.symmetry, x: !state.symmetry.x } });
+  const toggleSymmetryY = () =>
+    updateState({ ...state, symmetry: { ...state.symmetry, y: !state.symmetry.y } });
 
   const getSettingsSummary = () => {
-    if (isBrushTool) return `${state.brushSize}px • ${state.brushShape}`;
-    if (isFillTool) return state.fillContiguous ? 'Contiguous' : 'Global';
-    if (isSelectionTool) return state.selectionMode.toUpperCase();
+    if (isBrushTool) return `${state.brushSize}px`;
+    if (isFillTool || isMagicWand) return state.fillContiguous ? 'Contig.' : 'Global';
+    if (isSelectionTool) return state.selectionMode.slice(0, 3).toUpperCase();
     if (isMoveTool) return state.rotationAlgorithm === 'rotsprite' ? 'RotSprite' : 'Nearest';
-    return '';
+    return 'Options';
   };
-  
+
+  const handleSwapColors = () => {
+    const nextPrimary = state.secondaryColor;
+    const nextSecondary = state.primaryColor;
+    updateState({
+      ...state,
+      primaryColor: nextPrimary,
+      secondaryColor: nextSecondary,
+      ...(state.inkType === 'shading' ? { shades: [...state.shades].reverse() } : {}),
+    });
+  };
+
   const { activeProjectId } = project;
   const isHome = activeProjectId === 'home';
 
   return (
-    <div className={`flex flex-col h-screen bg-background relative overflow-hidden ${isHome ? '' : 'touch-none'}`}>
-      <input 
-          type="file" 
-          ref={fileInputRef} 
-          className="hidden" 
-          accept=".aseprite,.ase,.png,.jpg,.jpeg,.gif,.json,.pxa" 
-          onChange={handleFileChange} 
+    <div
+      className={`relative flex h-dvh flex-col overflow-hidden bg-background ${
+        isHome ? '' : 'overscroll-none'
+      }`}
+    >
+      <input
+        type="file"
+        ref={fileInputRef}
+        className="hidden"
+        accept=".aseprite,.ase,.png,.jpg,.jpeg,.gif,.json,.pxa"
+        onChange={handleFileChange}
       />
 
       {isHome ? (
-        <Home 
-          onCreateProject={project.createProject} 
-          onImportProject={() => fileInputRef.current?.click()} 
+        <Home
+          onCreateProject={project.createProject}
+          onImportProject={() => fileInputRef.current?.click()}
           recentProjects={project.recentProjects}
           onOpenRecent={project.loadRecentProject}
           onClearRecent={project.clearRecents}
         />
       ) : (
         <>
-          {/* Top Bar: Minimal Status & Global Actions */}
-          <div className="absolute top-0 left-0 right-0 h-16 flex items-center justify-between px-2 z-20 pointer-events-none safe-top">
-        <div className="pointer-events-auto flex items-center gap-2">
-           <button 
-            onClick={() => setActivePanel('menu')} 
-            className="w-10 h-10 bg-card/90 backdrop-blur-md border border-border/30 rounded-full flex items-center justify-center shadow-lg text-foreground active:scale-90 transition-transform"
-            aria-label="Menu"
-           >
-             <Menu size={20} />
-           </button>
-           <div className="flex gap-1 bg-card/90 backdrop-blur-md border border-border/30 rounded-full p-1 shadow-lg">
-             <button 
-                onClick={() => commands.find(c => c.id === 'edit.undo')?.perform()} 
-                className="p-2 text-foreground hover:text-primary active:scale-75 transition-transform"
-                title="Undo"
+          {/* Docked Top Studio Header */}
+          <header className="z-20 flex h-12 shrink-0 items-center justify-between gap-1 border-b border-border bg-card px-1.5 safe-top">
+            <div className="flex items-center gap-0.5">
+              <button
+                type="button"
+                onClick={() => setActivePanel('menu')}
+                aria-label="Studio Menu"
+                className="flex h-11 w-11 items-center justify-center rounded-md text-foreground transition-colors hover:bg-accent active:bg-accent"
+              >
+                <MenuIcon size={20} />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => commands.find((c) => c.id === 'edit.undo')?.perform()}
+                disabled={!project.canUndo}
                 aria-label="Undo"
-             >
-               <Undo size={18} />
-             </button>
-             <button 
-                onClick={() => commands.find(c => c.id === 'edit.redo')?.perform()} 
-                className="p-2 text-foreground hover:text-primary active:scale-75 transition-transform"
-                title="Redo"
+                className="flex h-11 w-11 items-center justify-center rounded-md text-foreground transition-colors hover:bg-accent active:bg-accent disabled:opacity-35"
+              >
+                <Undo size={18} />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => commands.find((c) => c.id === 'edit.redo')?.perform()}
+                disabled={!project.canRedo}
                 aria-label="Redo"
-             >
-               <Redo size={18} />
-             </button>
-           </div>
-        </div>
-        
-        <div className="pointer-events-auto flex items-center gap-2">
-           <div className="flex gap-1 bg-card/90 backdrop-blur-md border border-border/40 rounded-full p-1 shadow-lg mr-1">
-                <button 
-                    onClick={() => updateState({...state, showGrid: !state.showGrid})}
-                    className={`p-2 rounded-full transition-colors ${state.showGrid ? 'text-primary' : 'text-muted-foreground'}`}
-                    aria-label="Toggle Grid"
-                >
-                    <Grid size={16} />
-                </button>
-                <button 
-                    onClick={() => updateState({...state, onionSkin: !state.onionSkin})}
-                    className={`p-2 rounded-full transition-colors ${state.onionSkin ? 'text-primary' : 'text-muted-foreground'}`}
-                    aria-label="Toggle Onion Skin"
-                >
-                    <Eye size={16} />
-                </button>
-           </div>
-           <button 
-            onClick={() => setActivePanel('preview')} 
-            className="w-10 h-10 bg-secondary/90 backdrop-blur-md text-foreground border border-border/30 rounded-full flex items-center justify-center shadow-lg active:scale-90 transition-transform"
-            aria-label="Preview"
-           >
-             <Play size={18} fill="currentColor" />
-           </button>
-        </div>
-      </div>
+                className="flex h-11 w-11 items-center justify-center rounded-md text-foreground transition-colors hover:bg-accent active:bg-accent disabled:opacity-35"
+              >
+                <Redo size={18} />
+              </button>
+            </div>
 
-      {/* Main Drawing Area */}
-      <div className="absolute inset-0 z-0 flex flex-col">
-        <Canvas 
-          state={state}
-          onDrawStart={(pos) => { setDragStartPos(pos); canvasTools.handleDrawStart(pos, { shift: false, ctrl: false, alt: false, meta: false }); }}
-          onDraw={canvasTools.handleDraw}
-          onDrawEnd={() => { setDragStartPos(null); canvasTools.handleDrawEnd(); }}
-          onSelectionUpdate={(sel) => updateState({...state, selection: sel}, { action: 'Select Area', tool: state.tool })}
-          onMovePixels={canvasTools.handleMovePixels}
-          onRotatePixels={canvasTools.handleRotatePixels}
-          onScalePixels={onScalePixels}
-          onZoom={(z) => updateState({...state, zoom: z})}
-          onMousePosUpdate={setMousePos}
-        />
-      </div>
+            <div className="hidden min-w-0 items-center gap-1.5 font-mono text-[11px] text-muted-foreground tabular-nums sm:flex">
+              <span>
+                {state.width}×{state.height}
+              </span>
+              <span>·</span>
+              <span>{Math.round(state.zoom * 100)}%</span>
+            </div>
 
-      {/* Bottom Interface Container */}
-      <div className="absolute bottom-0 left-0 right-0 z-20 flex flex-col pointer-events-none pb-safe">
-        
-        {/* Contextual Tool Settings Strip (Above Bottom Bar) */}
-        <div className="pointer-events-auto px-4 mb-2 flex flex-col items-center gap-2">
-            
-            {/* Expanded Tool Settings Area */}
-            {(isSettingsExpanded && hasAnySettings) && (
-                <div 
-                    onTouchStart={handleModalTouchStart}
-                    onTouchMove={handleModalTouchMove}
-                    onTouchEnd={handleModalTouchEnd}
-                    className="w-full max-w-sm bg-card/95 backdrop-blur-xl border border-border/30 rounded-2xl shadow-2xl p-4 flex flex-col gap-4 animate-in slide-in-from-bottom-4 zoom-in-95 duration-200 select-none touch-pan-y"
+            <div className="flex items-center gap-0.5">
+              <button
+                type="button"
+                onClick={() => updateState({ ...state, showGrid: !state.showGrid })}
+                aria-label="Toggle Grid"
+                aria-pressed={state.showGrid}
+                className={`flex h-11 w-11 items-center justify-center rounded-md transition-colors ${
+                  state.showGrid
+                    ? 'bg-primary/15 text-primary'
+                    : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                }`}
+              >
+                <Grid size={18} />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => updateState({ ...state, onionSkin: !state.onionSkin })}
+                aria-label="Toggle Onion Skin"
+                aria-pressed={state.onionSkin}
+                className={`flex h-11 w-11 items-center justify-center rounded-md transition-colors ${
+                  state.onionSkin
+                    ? 'bg-primary/15 text-primary'
+                    : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                }`}
+              >
+                <Eye size={18} />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActivePanel('preview')}
+                aria-label="Preview Animation"
+                className="flex h-11 w-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <Play size={18} />
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  project.openExportDialog ? project.openExportDialog('gif') : project.downloadImage()
+                }
+                aria-label="Export"
+                className="ml-1 flex h-9 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground transition-opacity active:opacity-90"
+              >
+                <Download size={14} />
+                <span>Export</span>
+              </button>
+            </div>
+          </header>
+
+          {/* Unobstructed Central Canvas Stage */}
+          <div className="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden bg-canvas">
+            <Canvas
+              state={state}
+              onDrawStart={(pos) => {
+                setDragStartPos(pos);
+                canvasTools.handleDrawStart(pos, {
+                  shift: false,
+                  ctrl: false,
+                  alt: false,
+                  meta: false,
+                });
+              }}
+              onDraw={canvasTools.handleDraw}
+              onDrawEnd={() => {
+                setDragStartPos(null);
+                canvasTools.handleDrawEnd();
+              }}
+              onSelectionUpdate={(sel) =>
+                updateState({ ...state, selection: sel }, { action: 'Select Area', tool: state.tool })
+              }
+              onMovePixels={canvasTools.handleMovePixels}
+              onRotatePixels={canvasTools.handleRotatePixels}
+              onScalePixels={onScalePixels}
+              onZoom={(z) => updateState({ ...state, zoom: z })}
+              onMousePosUpdate={setMousePos}
+            />
+
+            {/* Contextual Selection Bar (Anchored Cleanly Above Bottom Dock) */}
+            <AnimatePresence>
+              {!isSettingsExpanded && state.selection && state.selection.size > 0 && (
+                <motion.div
+                  key="mobile-selection-bar"
+                  initial={shouldReduceMotion ? { opacity: 0 } : { y: 'calc(100% + 16px)' }}
+                  animate={shouldReduceMotion ? { opacity: 1 } : { y: 0 }}
+                  exit={
+                    shouldReduceMotion
+                      ? { opacity: 0, transition: { duration: 0.08 } }
+                      : {
+                          y: 'calc(100% + 16px)',
+                          transition: { duration: 0.18, ease: [0.32, 0.72, 0, 1] },
+                        }
+                  }
+                  transition={
+                    shouldReduceMotion
+                      ? { duration: 0.08 }
+                      : { type: 'spring', stiffness: 460, damping: 34, mass: 0.8 }
+                  }
+                  className="pointer-events-auto absolute right-3 bottom-3 left-3 z-10 flex justify-center"
                 >
-                    <div className="w-10 h-1 bg-muted-foreground/30 rounded-full mx-auto -mt-1 -mb-1 cursor-grab" />
+                  <div className="flex items-center gap-1.5 rounded-lg border border-border-strong bg-card p-1 shadow-xl">
+                    <button
+                      type="button"
+                      onClick={() => project.openOutlineDialog && project.openOutlineDialog()}
+                      className="flex h-10 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground active:opacity-90"
+                    >
+                      <Sparkles size={14} />
+                      <span>Outline</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => updateState({ ...state, selection: null }, { action: 'Deselect' })}
+                      className="flex h-10 items-center gap-1.5 rounded-md px-3 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+                    >
+                      <X size={14} />
+                      <span>Deselect</span>
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Expanded Tool Settings Tray */}
+            <AnimatePresence>
+              {isSettingsExpanded && hasAnySettings && (
+                <motion.div
+                  key="mobile-tool-settings-tray"
+                  initial={shouldReduceMotion ? { opacity: 0 } : { y: 'calc(100% + 16px)' }}
+                  animate={shouldReduceMotion ? { opacity: 1 } : { y: 0 }}
+                  exit={
+                    shouldReduceMotion
+                      ? { opacity: 0, transition: { duration: 0.08 } }
+                      : {
+                          y: 'calc(100% + 16px)',
+                          transition: { duration: 0.2, ease: [0.32, 0.72, 0, 1] },
+                        }
+                  }
+                  transition={
+                    shouldReduceMotion
+                      ? { duration: 0.08 }
+                      : { type: 'spring', stiffness: 440, damping: 34, mass: 0.85 }
+                  }
+                  className="pointer-events-none absolute right-3 bottom-3 left-3 z-10 mx-auto max-w-sm"
+                >
+                  <motion.div
+                    ref={trayRef}
+                    style={{
+                      y: dragY,
+                      scale: dragScale,
+                    }}
+                    onPointerDown={handleTrayPointerDown}
+                    onPointerMove={handleTrayPointerMove}
+                    onPointerUp={handleTrayPointerUpOrCancel}
+                    onPointerCancel={handleTrayPointerUpOrCancel}
+                    onClickCapture={(e) => {
+                      if (suppressClickRef.current) {
+                        e.stopPropagation();
+                        e.preventDefault();
+                      }
+                    }}
+                    className="pointer-events-auto flex flex-col gap-3 rounded-xl border border-border-strong bg-card p-3.5 shadow-2xl select-none touch-none"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setIsSettingsExpanded(false)}
+                      aria-label="Collapse Tool Settings"
+                      className="group mx-auto -my-1.5 flex w-20 cursor-grab items-center justify-center rounded-full py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
+                    >
+                      <span
+                        className={`h-1 rounded-full transition-all duration-150 ${
+                          isDraggingTray
+                            ? 'w-11 bg-muted-foreground'
+                            : 'w-9 bg-border-strong group-hover:bg-muted-foreground'
+                        }`}
+                        aria-hidden="true"
+                      />
+                    </button>
                     <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Tool Settings</span>
-                        <button onClick={() => setIsSettingsExpanded(false)} className="p-1 text-muted-foreground hover:text-foreground"><ChevronDown size={18}/></button>
+                      <span className="text-xs font-semibold text-foreground">Tool Settings</span>
                     </div>
 
-                    {isBrushTool && (
-                        <div className="space-y-4">
-                            <div className="flex flex-col gap-2">
-                                <div className="flex justify-between items-center px-1">
-                                    <span className="text-[10px] font-bold text-muted-foreground uppercase">Brush Size</span>
-                                    <span className="text-xs font-mono bg-muted px-2 py-0.5 rounded">{state.brushSize}px</span>
-                                </div>
-                                <CustomSlider
-                                    min={1} 
-                                    max={32} 
-                                    value={state.brushSize} 
-                                    onValueChange={(val) => updateState({...state, brushSize: val})}
-                                    className="w-full"
-                                />
-                            </div>
-                            
-                            <div className="flex items-center justify-between gap-4">
-                                <div className="flex-1 flex flex-col gap-2">
-                                    <span className="text-[10px] font-bold text-muted-foreground uppercase">Shape</span>
-                                    <div className="flex bg-muted rounded-lg p-1">
-                                        <button onClick={() => updateState({...state, brushShape: 'square'})} className={`flex-1 flex justify-center py-2 rounded-md ${state.brushShape === 'square' ? 'bg-background text-primary shadow-sm' : 'text-muted-foreground'}`}><Square size={18} /></button>
-                                        <button onClick={() => updateState({...state, brushShape: 'circle'})} className={`flex-1 flex justify-center py-2 rounded-md ${state.brushShape === 'circle' ? 'bg-background text-primary shadow-sm' : 'text-muted-foreground'}`}><Circle size={18} /></button>
-                                    </div>
-                                </div>
-                                <div className="flex-1 flex flex-col gap-2">
-                                    <span className="text-[10px] font-bold text-muted-foreground uppercase">Symmetry</span>
-                                    <div className="flex bg-muted rounded-lg p-1">
-                                        <button onClick={toggleSymmetryX} className={`flex-1 flex justify-center py-2 rounded-md ${state.symmetry.x ? 'bg-background text-primary shadow-sm' : 'text-muted-foreground'}`}><FlipHorizontal size={18} /></button>
-                                        <button onClick={toggleSymmetryY} className={`flex-1 flex justify-center py-2 rounded-md ${state.symmetry.y ? 'bg-background text-primary shadow-sm' : 'text-muted-foreground'}`}><FlipVertical size={18} /></button>
-                                    </div>
-                                </div>
-                            </div>
+                {isBrushTool && (
+                  <div className="space-y-3.5">
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-medium text-muted-foreground">
+                          Brush Size
+                        </span>
+                        <span className="font-mono text-xs text-foreground tabular-nums">
+                          {state.brushSize}px
+                        </span>
+                      </div>
+                      <CustomSlider
+                        min={1}
+                        max={32}
+                        value={state.brushSize}
+                        onValueChange={(val) => updateState({ ...state, brushSize: val })}
+                        aria-label="Brush size"
+                        className="w-full"
+                      />
+                    </div>
 
-                            <div className="flex items-center gap-4">
-                                <button 
-                                    onClick={() => updateState({...state, inkType: state.inkType === 'shading' ? 'simple' : 'shading'})}
-                                    className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border text-xs font-bold transition-all ${state.inkType === 'shading' ? 'bg-primary/10 border-primary text-primary' : 'bg-muted border-transparent text-muted-foreground'}`}
-                                >
-                                    <Droplets size={16} /> {state.inkType === 'shading' ? 'SHADING ON' : 'SIMPLE INK'}
-                                </button>
-                                {state.tool === 'pencil' && (
-                                    <button 
-                                        onClick={() => updateState({...state, pixelPerfect: !state.pixelPerfect})}
-                                        className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border text-xs font-bold transition-all ${state.pixelPerfect ? 'bg-primary/10 border-primary text-primary' : 'bg-muted border-transparent text-muted-foreground'}`}
-                                    >
-                                        <Zap size={16} /> PIXEL PERFECT
-                                    </button>
-                                )}
-                            </div>
-
-                            {state.tool === 'smudge' && (
-                                <div className="flex flex-col gap-3 pt-2 border-t border-border/50">
-                                    <div className="flex items-center justify-between">
-                                        <span className="text-[10px] font-bold text-muted-foreground uppercase">Smudge Mode</span>
-                                        <div className="flex bg-muted rounded-lg p-1 gap-1">
-                                            <button
-                                                onClick={() => updateState({...state, smudgeMode: 'blend'})}
-                                                className={`px-3 py-1.5 rounded-md text-xs font-bold flex items-center gap-1.5 transition-all ${(!state.smudgeMode || state.smudgeMode === 'blend') ? 'bg-background text-primary shadow-sm' : 'text-muted-foreground'}`}
-                                            >
-                                                <Droplets size={14} /> Blend
-                                            </button>
-                                            <button
-                                                onClick={() => updateState({...state, smudgeMode: 'push'})}
-                                                className={`px-3 py-1.5 rounded-md text-xs font-bold flex items-center gap-1.5 transition-all ${state.smudgeMode === 'push' ? 'bg-background text-primary shadow-sm' : 'text-muted-foreground'}`}
-                                            >
-                                                <Hand size={14} /> Push
-                                            </button>
-                                        </div>
-                                    </div>
-                                    <div className="flex flex-col gap-1.5">
-                                        <div className="flex justify-between items-center">
-                                            <span className="text-[10px] font-bold text-muted-foreground uppercase">Strength</span>
-                                            <span className="text-xs font-mono bg-muted px-2 py-0.5 rounded">{Math.round((state.smudgeStrength ?? 0.7) * 100)}%</span>
-                                        </div>
-                                        <CustomSlider
-                                            min={10}
-                                            max={100}
-                                            step={5}
-                                            value={Math.round((state.smudgeStrength ?? 0.7) * 100)}
-                                            onValueChange={(val) => updateState({...state, smudgeStrength: val / 100})}
-                                            className="w-full"
-                                        />
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    )}
-
-                    {(isFillTool || isMagicWand) && (
-                        <div className="space-y-4">
-                            <div className="flex flex-col gap-2">
-                                <span className="text-[10px] font-bold text-muted-foreground uppercase">Fill Mode</span>
-                                <button 
-                                    onClick={() => updateState({...state, fillContiguous: !state.fillContiguous})}
-                                    className={`flex items-center justify-center gap-2 py-3 rounded-xl border text-xs font-bold transition-all ${state.fillContiguous ? 'bg-primary border-primary text-primary-foreground shadow-lg' : 'bg-muted border-transparent text-muted-foreground'}`}
-                                >
-                                    <Check size={16} /> {state.fillContiguous ? 'CONTIGUOUS' : 'GLOBAL (ALL PIXELS)'}
-                                </button>
-                            </div>
-                        </div>
-                    )}
-
-                    {isMoveTool && (
-                        <div className="space-y-4">
-                            <div className="flex flex-col gap-2">
-                                <span className="text-[10px] font-bold text-muted-foreground uppercase">Rotation Method</span>
-                                <div className="grid grid-cols-2 gap-2">
-                                    <button 
-                                        onClick={() => updateState({...state, rotationAlgorithm: 'nearest'})}
-                                        className={`flex items-center justify-center gap-2 py-3 rounded-xl border text-xs font-bold transition-all ${state.rotationAlgorithm === 'nearest' ? 'bg-primary border-primary text-primary-foreground' : 'bg-muted border-transparent text-muted-foreground'}`}
-                                    >
-                                        NEAREST
-                                    </button>
-                                    <button 
-                                        onClick={() => updateState({...state, rotationAlgorithm: 'rotsprite'})}
-                                        className={`flex items-center justify-center gap-2 py-3 rounded-xl border text-xs font-bold transition-all ${state.rotationAlgorithm === 'rotsprite' ? 'bg-primary border-primary text-primary-foreground' : 'bg-muted border-transparent text-muted-foreground'}`}
-                                    >
-                                        <Sparkles size={14} /> ROTSPRITE
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {isSelectionTool && (
-                        <div className="space-y-4">
-                            <div className="flex flex-col gap-2">
-                                <span className="text-[10px] font-bold text-muted-foreground uppercase">Selection Mode</span>
-                                <div className="grid grid-cols-2 gap-2">
-                                    {[
-                                        { mode: 'replace', label: 'NEW', icon: <Square size={14}/> },
-                                        { mode: 'add', label: 'ADD', icon: <Plus size={14}/> },
-                                        { mode: 'subtract', label: 'SUBTRACT', icon: <Minus size={14}/> },
-                                        { mode: 'intersect', label: 'INTERSECT', icon: <Waves size={14}/> }
-                                    ].map(m => (
-                                        <button 
-                                            key={m.mode} 
-                                            onClick={() => updateState({...state, selectionMode: m.mode as any})} 
-                                            className={`flex items-center justify-center gap-2 py-3 rounded-xl border text-[10px] font-bold transition-all ${state.selectionMode === m.mode ? 'bg-primary border-primary text-primary-foreground shadow-lg' : 'bg-muted border-transparent text-muted-foreground'}`}
-                                        >
-                                            {m.icon} {m.label}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-                        </div>
-                    )}
-                </div>
-            )}
-
-            {/* Compact Tool Settings Bubble */}
-            {!isSettingsExpanded && hasAnySettings && (
-                <button 
-                    onClick={() => setIsSettingsExpanded(true)}
-                    onTouchStart={handleTriggerTouchStart}
-                    onTouchMove={handleTriggerTouchMove}
-                    onTouchEnd={handleTriggerTouchEnd}
-                    className="flex items-center gap-3 px-4 py-2 bg-card/90 backdrop-blur-xl border border-border/30 rounded-full shadow-lg text-xs font-bold text-foreground active:scale-95 transition-all animate-in slide-in-from-bottom-2 select-none touch-pan-y"
-                >
-                    <Settings size={14} className="text-primary" />
-                    <span>{getSettingsSummary()}</span>
-                    <ChevronUp size={14} className="text-muted-foreground ml-1" />
-                </button>
-            )}
-
-            {/* Selection Quick Action Pill */}
-            {!isSettingsExpanded && state.selection && state.selection.size > 0 && (
-                <div className="flex items-center gap-1.5 animate-in slide-in-from-bottom-2">
-                    <button
-                        onClick={() => project.openOutlineDialog && project.openOutlineDialog()}
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-full shadow-lg text-xs font-semibold active:scale-95 transition-all"
-                        aria-label="Outline Selection"
-                    >
-                        <Sparkles size={13} />
-                        <span>Outline</span>
-                    </button>
-                    <button
-                        onClick={() => updateState({...state, selection: null}, { action: 'Deselect' })}
-                        className="flex items-center gap-1 px-2.5 py-1.5 bg-card/90 backdrop-blur-xl border border-border/40 text-muted-foreground hover:text-foreground rounded-full shadow-lg text-xs font-medium active:scale-95 transition-all"
-                        aria-label="Deselect"
-                    >
-                        <X size={12} />
-                        <span>Deselect</span>
-                    </button>
-                </div>
-            )}
-        </div>
-
-        {/* Bottom Bar: Color, Tools, Panels */}
-        <div className="bg-card/95 backdrop-blur-2xl border-t border-border/30 pointer-events-auto">
-            {/* Visual Status Indicator */}
-            <div className="h-5 flex items-center justify-center bg-background/30 text-[9px] text-muted-foreground/60 border-b border-border grayscale-[0.5] uppercase tracking-widest font-bold">
-                {statusMessage.text || `${state.width}×${state.height} • ${state.tool}`}
-            </div>
-            
-            <div className="h-16 flex items-center px-4 gap-3">
-                {/* Active Color Preview */}
-                <div className="relative shrink-0 flex items-center justify-center w-12 h-12">
-                    <Popover>
-                        <PopoverTrigger asChild>
-                            <button 
-                                className="absolute inset-0 group active:scale-90 transition-transform z-10"
-                                aria-label="Primary Color"
-                            >
-                                <div className="w-11 h-11 rounded-2xl border-2 border-border shadow-xl flex items-center justify-center overflow-hidden" style={{ backgroundColor: state.primaryColor }}>
-                                    {state.inkType === 'shading' && <Droplets size={16} className="text-white/40 mix-blend-difference" />}
-                                </div>
-                            </button>
-                        </PopoverTrigger>
-                        <PopoverContent side="top" align="start" sideOffset={10} className="p-0 border-none bg-transparent shadow-none">
-                            <ColorPicker color={state.primaryColor} onChange={(c) => updateState({...state, primaryColor: c})} />
-                        </PopoverContent>
-                    </Popover>
-
-                    <Popover>
-                        <PopoverTrigger asChild>
-                            <button 
-                                className="absolute -bottom-1 -right-1 w-5 h-5 rounded-lg border-2 border-card shadow-lg z-0" 
-                                style={{ backgroundColor: state.secondaryColor }} 
-                                aria-label="Secondary Color"
-                            />
-                        </PopoverTrigger>
-                        <PopoverContent side="top" align="start" sideOffset={10} className="p-0 border-none bg-transparent shadow-none">
-                            <ColorPicker color={state.secondaryColor} onChange={(c) => updateState({...state, secondaryColor: c})} />
-                        </PopoverContent>
-                    </Popover>
-
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button 
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                const p = state.primaryColor;
-                                updateState({...state, primaryColor: state.secondaryColor, secondaryColor: p});
-                                if (state.inkType === 'shading') {
-                                    updateState({...state, primaryColor: state.secondaryColor, secondaryColor: p, shades: [...state.shades].reverse()});
-                                }
-                            }}
-                            className="absolute -bottom-2 -right-2 w-6 h-6 bg-card rounded-full border border-border/20 flex items-center justify-center text-muted-foreground hover:text-foreground shadow-sm z-20 active:scale-90 transition-transform"
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <span className="text-[11px] font-medium text-muted-foreground">Shape</span>
+                        <SegmentedControl
+                          value={state.brushShape}
+                          onValueChange={(val) => {
+                            if (val === 'square' || val === 'circle') {
+                              updateState({ ...state, brushShape: val });
+                            }
+                          }}
                         >
-                            <ArrowRightLeft size={10} className="rotate-45" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top">Swap Colors (X)</TooltipContent>
-                    </Tooltip>
-                </div>
+                          <SegmentedControlIndicator />
+                          <SegmentedControlItem value="square" className="h-9">
+                            <Square size={15} />
+                          </SegmentedControlItem>
+                          <SegmentedControlItem value="circle" className="h-9">
+                            <Circle size={15} />
+                          </SegmentedControlItem>
+                        </SegmentedControl>
+                      </div>
 
-                <div className="w-[1px] h-8 bg-border/60 mx-1 shrink-0"></div>
-                
-                {/* Scrollable Tool Strip */}
-                <div className="flex-1 flex items-center gap-3 overflow-x-auto no-scrollbar scroll-smooth h-full mask-fade-edges">
-                    <div className="flex items-center gap-3 h-full">
-                        {tools.map(tool => (
-                            <button 
-                                key={tool.id} 
-                                onClick={() => updateState({ ...state, tool: tool.id })} 
-                                className={`shrink-0 flex items-center justify-center min-w-[36px] h-[26px] rounded-md transition-all ${state.tool === tool.id ? 'bg-primary text-primary-foreground shadow-inner' : 'text-muted-foreground hover:bg-accent active:scale-95'}`}
-                                aria-label={`Select ${tool.label} Tool`}
-                            >
-                                {React.cloneElement(tool.icon as React.ReactElement, { size: 16 })}
-                            </button>
-                        ))}
+                      <div className="space-y-1.5">
+                        <span className="text-[11px] font-medium text-muted-foreground">
+                          Symmetry
+                        </span>
+                        <div className="grid grid-cols-2 gap-1 rounded-md border border-border bg-background p-0.5">
+                          <button
+                            type="button"
+                            onClick={toggleSymmetryX}
+                            aria-label="Horizontal Symmetry"
+                            aria-pressed={state.symmetry.x}
+                            className={`flex h-9 items-center justify-center rounded-sm transition-colors ${
+                              state.symmetry.x
+                                ? 'bg-accent text-primary'
+                                : 'text-muted-foreground hover:text-foreground'
+                            }`}
+                          >
+                            <FlipHorizontal size={16} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={toggleSymmetryY}
+                            aria-label="Vertical Symmetry"
+                            aria-pressed={state.symmetry.y}
+                            className={`flex h-9 items-center justify-center rounded-sm transition-colors ${
+                              state.symmetry.y
+                                ? 'bg-accent text-primary'
+                                : 'text-muted-foreground hover:text-foreground'
+                            }`}
+                          >
+                            <FlipVertical size={16} />
+                          </button>
+                        </div>
+                      </div>
                     </div>
-                </div>
 
-                <div className="w-[1px] h-8 bg-border/60 mx-1 shrink-0"></div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          updateState({
+                            ...state,
+                            inkType: state.inkType === 'shading' ? 'simple' : 'shading',
+                          })
+                        }
+                        className={`flex h-11 flex-1 items-center justify-center gap-1.5 rounded-md border text-xs font-medium transition-colors ${
+                          state.inkType === 'shading'
+                            ? 'border-primary bg-primary/15 text-primary'
+                            : 'border-border bg-background text-muted-foreground'
+                        }`}
+                      >
+                        <Droplets size={15} />
+                        <span>{state.inkType === 'shading' ? 'Shading Ink' : 'Simple Ink'}</span>
+                      </button>
 
-                {/* Bottom Panel Toggles */}
-                <div className="flex items-center gap-1 shrink-0">
-                    <button 
-                        onClick={() => setActivePanel('palette')} 
-                        className={`p-2.5 rounded-2xl active:scale-90 transition-all ${activePanel === 'palette' ? 'bg-primary/10 text-primary' : 'text-muted-foreground'}`}
-                        aria-label="Palette Panel"
+                      {state.tool === 'pencil' && (
+                        <button
+                          type="button"
+                          onClick={() => updateState({ ...state, pixelPerfect: !state.pixelPerfect })}
+                          className={`flex h-11 flex-1 items-center justify-center gap-1.5 rounded-md border text-xs font-medium transition-colors ${
+                            state.pixelPerfect
+                              ? 'border-primary bg-primary/15 text-primary'
+                              : 'border-border bg-background text-muted-foreground'
+                          }`}
+                        >
+                          <Zap size={15} />
+                          <span>Pixel Perfect</span>
+                        </button>
+                      )}
+                    </div>
+
+                    {state.tool === 'smudge' && (
+                      <div className="space-y-3 border-t border-border pt-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-medium text-muted-foreground">
+                            Smudge Mode
+                          </span>
+                          <SegmentedControl
+                            value={state.smudgeMode || 'blend'}
+                            onValueChange={(val) => {
+                              if (val === 'blend' || val === 'push') {
+                                updateState({ ...state, smudgeMode: val });
+                              }
+                            }}
+                            className="w-auto"
+                          >
+                            <SegmentedControlIndicator />
+                            <SegmentedControlItem value="blend" className="h-9 px-3">
+                              Blend
+                            </SegmentedControlItem>
+                            <SegmentedControlItem value="push" className="h-9 px-3">
+                              Push
+                            </SegmentedControlItem>
+                          </SegmentedControl>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-medium text-muted-foreground">
+                              Strength
+                            </span>
+                            <span className="font-mono text-xs text-foreground tabular-nums">
+                              {Math.round((state.smudgeStrength ?? 0.7) * 100)}%
+                            </span>
+                          </div>
+                          <CustomSlider
+                            min={10}
+                            max={100}
+                            step={5}
+                            value={Math.round((state.smudgeStrength ?? 0.7) * 100)}
+                            onValueChange={(val) =>
+                              updateState({ ...state, smudgeStrength: val / 100 })
+                            }
+                            aria-label="Smudge strength"
+                            className="w-full"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {(isFillTool || isMagicWand) && (
+                  <div className="space-y-2">
+                    <span className="text-[11px] font-medium text-muted-foreground">
+                      Fill Scope
+                    </span>
+                    <SegmentedControl
+                      value={state.fillContiguous ? 'contiguous' : 'global'}
+                      onValueChange={(val) =>
+                        updateState({ ...state, fillContiguous: val === 'contiguous' })
+                      }
                     >
-                        <PaletteIcon size={22} />
-                    </button>
-                    <button 
-                        onClick={() => setActivePanel('layers')} 
-                        className={`p-2.5 rounded-2xl active:scale-90 transition-all ${activePanel === 'layers' ? 'bg-primary/10 text-primary' : 'text-muted-foreground'}`}
-                        aria-label="Layers Panel"
+                      <SegmentedControlIndicator />
+                      <SegmentedControlItem value="contiguous" className="h-10">
+                        Contiguous
+                      </SegmentedControlItem>
+                      <SegmentedControlItem value="global" className="h-10">
+                        Global
+                      </SegmentedControlItem>
+                    </SegmentedControl>
+                  </div>
+                )}
+
+                {isMoveTool && (
+                  <div className="space-y-2">
+                    <span className="text-[11px] font-medium text-muted-foreground">
+                      Rotation Algorithm
+                    </span>
+                    <SegmentedControl
+                      value={state.rotationAlgorithm}
+                      onValueChange={(val) => {
+                        if (val === 'nearest' || val === 'rotsprite') {
+                          updateState({ ...state, rotationAlgorithm: val });
+                        }
+                      }}
                     >
-                        <Layers size={22} />
-                    </button>
-                    <button 
-                        onClick={() => setActivePanel('timeline')} 
-                        className={`p-2.5 rounded-2xl active:scale-90 transition-all ${activePanel === 'timeline' ? 'bg-primary/10 text-primary' : 'text-muted-foreground'}`}
-                        aria-label="Timeline Panel"
-                    >
-                        <Clock size={22} />
-                    </button>
-                </div>
+                      <SegmentedControlIndicator />
+                      <SegmentedControlItem value="nearest" className="h-10">
+                        Nearest
+                      </SegmentedControlItem>
+                      <SegmentedControlItem value="rotsprite" className="h-10">
+                        RotSprite
+                      </SegmentedControlItem>
+                    </SegmentedControl>
+                  </div>
+                )}
+
+                {isSelectionTool && (
+                  <div className="space-y-2">
+                    <span className="text-[11px] font-medium text-muted-foreground">
+                      Selection Mode
+                    </span>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {[
+                        { mode: 'replace', label: 'New', icon: <Square size={14} /> },
+                        { mode: 'add', label: 'Add', icon: <Plus size={14} /> },
+                        { mode: 'subtract', label: 'Subtract', icon: <Minus size={14} /> },
+                        { mode: 'intersect', label: 'Intersect', icon: <Waves size={14} /> },
+                      ].map((m) => (
+                        <button
+                          key={m.mode}
+                          type="button"
+                          onClick={() => updateState({ ...state, selectionMode: m.mode as any })}
+                          className={`flex h-11 items-center justify-center gap-1.5 rounded-md border text-xs font-medium transition-colors ${
+                            state.selectionMode === m.mode
+                              ? 'border-primary bg-primary text-primary-foreground'
+                              : 'border-border bg-background text-muted-foreground'
+                          }`}
+                        >
+                          {m.icon}
+                          <span>{m.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                  </motion.div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+          {/* Docked Two-Row Bottom Bar (44px+ Touch Targets, Zero Overlap) */}
+          <footer className="z-20 shrink-0 border-t border-border bg-card pb-safe">
+            {/* Row 1: Full-Width Scrollable Tool Strip */}
+            <div className="flex h-12 items-center gap-1 overflow-x-auto border-b border-border bg-background/40 px-2 no-scrollbar">
+              {tools.map((tool) => {
+                const isActive = state.tool === tool.id;
+                return (
+                  <button
+                    key={tool.id}
+                    type="button"
+                    onClick={() => updateState({ ...state, tool: tool.id })}
+                    aria-label={tool.label}
+                    aria-pressed={isActive}
+                    className={`flex h-10 min-w-[44px] shrink-0 items-center justify-center rounded-md transition-colors ${
+                      isActive
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                    }`}
+                  >
+                    {tool.icon}
+                  </button>
+                );
+              })}
             </div>
-        </div>
-      </div>
 
-      {/* Full-Screen Panels (Bottom Sheets) */}
-      <Drawer.Root open={!!activePanel} onOpenChange={(open) => !open && closePanel()}>
-        <Drawer.Portal>
-          <Drawer.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm" />
-          <Drawer.Content className="fixed bottom-0 left-0 right-0 z-50 flex flex-col bg-card border-t border-border/30 rounded-t-3xl shadow-2xl max-h-[90vh] overflow-hidden outline-none">
-              <div className="h-16 flex items-center justify-between px-3 shrink-0">
-                <Drawer.Title className="font-bold text-foreground text-xs uppercase tracking-[0.2em]">{activePanel}</Drawer.Title>
-                <button onClick={closePanel} className="w-10 h-10 flex items-center justify-center bg-muted/50 rounded-full text-muted-foreground active:scale-75 transition-transform border border-border/30">
-                    <X size={18} />
+            {/* Row 2: Color Swatches, Tool Options & Panel Drawers */}
+            <div className="flex h-14 items-center justify-between gap-2 px-2">
+              <div className="flex items-center gap-1.5">
+                <Popover>
+                  <PopoverTrigger
+                    render={
+                      <button
+                        type="button"
+                        aria-label="Primary Color"
+                        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md border-2 border-border-strong shadow-xs"
+                        style={{ backgroundColor: state.primaryColor }}
+                      />
+                    }
+                  >
+                    {state.inkType === 'shading' && (
+                      <Droplets size={15} className="text-white/70 mix-blend-difference" />
+                    )}
+                  </PopoverTrigger>
+                  <PopoverContent
+                    side="top"
+                    align="start"
+                    sideOffset={10}
+                    className="w-auto border-none bg-transparent p-0 shadow-none"
+                  >
+                    <ColorPicker
+                      color={state.primaryColor}
+                      onChange={(c) => updateState({ ...state, primaryColor: c })}
+                    />
+                  </PopoverContent>
+                </Popover>
+
+                <Popover>
+                  <PopoverTrigger
+                    render={
+                      <button
+                        type="button"
+                        aria-label="Secondary Color"
+                        className="h-11 w-9 shrink-0 rounded-md border border-border-strong shadow-xs"
+                        style={{ backgroundColor: state.secondaryColor }}
+                      />
+                    }
+                  />
+                  <PopoverContent
+                    side="top"
+                    align="start"
+                    sideOffset={10}
+                    className="w-auto border-none bg-transparent p-0 shadow-none"
+                  >
+                    <ColorPicker
+                      color={state.secondaryColor}
+                      onChange={(c) => updateState({ ...state, secondaryColor: c })}
+                    />
+                  </PopoverContent>
+                </Popover>
+
+                <button
+                  type="button"
+                  onClick={handleSwapColors}
+                  aria-label="Swap Colors"
+                  className="flex h-11 w-9 shrink-0 items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition-colors hover:text-foreground active:bg-accent"
+                >
+                  <ArrowRightLeft size={14} />
                 </button>
+
+                {hasAnySettings && (
+                  <button
+                    type="button"
+                    onClick={() => setIsSettingsExpanded((v) => !v)}
+                    aria-label="Tool Settings"
+                    aria-expanded={isSettingsExpanded}
+                    className={`flex h-11 items-center gap-1 rounded-md border px-2.5 text-xs font-medium transition-colors ${
+                      isSettingsExpanded
+                        ? 'border-primary bg-primary/15 text-primary'
+                        : 'border-border bg-background text-foreground'
+                    }`}
+                  >
+                    <Sliders size={14} className="text-primary" />
+                    <span className="font-mono text-[11px] tabular-nums">{getSettingsSummary()}</span>
+                    {isSettingsExpanded ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
+                  </button>
+                )}
               </div>
 
-              <div className="flex-1 overflow-y-auto min-h-0 relative pb-safe-bottom pt-2">
-                  <Drawer.Description className="sr-only">
-                    {activePanel} settings and options
-                  </Drawer.Description>
-                  {activePanel === 'palette' && (
-                          <div className="h-[450px]">
-                              <Palette 
-                                width={0} 
-                                colors={state.palette} 
-                                palettes={state.paletteLibrary} 
-                                activePaletteId={state.activePaletteId} 
-                                primaryColor={state.primaryColor} 
-                                secondaryColor={state.secondaryColor}
-                                onColorSelect={(c, p) => p ? updateState({...state, primaryColor: c}) : updateState({...state, secondaryColor: c})}
-                                onAddColor={(c) => {
-                                    const updatedLibrary = state.paletteLibrary.map(p => p.id === state.activePaletteId ? { ...p, colors: [...p.colors, c] } : p);
-                                    updateState({ ...state, paletteLibrary: updatedLibrary, palette: [...state.palette, c] });
-                                }}
-                                onSelectPalette={project.selectPalette} 
-                                onImportPalette={project.importPalette} 
-                                onResizeStart={() => {}} 
-                                onColorsSelected={(selectedColors) => {
-                                    updateState({...state, shades: selectedColors, inkType: 'shading'});
-                                }}
-                              />
-                          </div>
-                      )}
-                      {activePanel === 'layers' && (
-                          <div className="h-[400px]">
-                              <LayersPanel 
-                                state={state} 
-                                onSelectLayers={(ids, active) => updateState({...state, selectedLayerIds: ids, activeLayerId: active})}
-                                onUpdateLayer={project.updateLayer} 
-                                onAddLayer={project.addLayer} 
-                                onAddGroupLayer={project.addGroupLayer}
-                                onGroupSelectedLayers={project.groupSelectedLayers}
-                                onUngroupSelectedLayers={project.ungroupSelectedLayers}
-                                onAddLayerToGroup={project.addLayerToGroup}
-                                onToggleCollapseAllGroups={project.toggleCollapseAllGroups}
-                                onDuplicateLayer={project.duplicateLayer} 
-                                onDeleteLayer={project.deleteLayer} 
-                                onDuplicateSelectedLayers={project.duplicateSelectedLayers} 
-                                onDeleteSelectedLayers={project.deleteSelectedLayers} 
-                                onReorderLayers={project.reorderLayers} 
-                                onOpenLayerProperties={project.openLayerPropertiesDialog}
-                                layerPropertiesState={layerPropertiesState}
-                                onCloseLayerProperties={onCloseLayerProperties}
-                              />
-                          </div>
-                      )}
-                      {activePanel === 'timeline' && (
-                          <div className="h-[450px] max-h-[70vh] flex flex-col overflow-hidden">
-                              <Timeline 
-                                state={state} 
-                                onSelectFrames={(indices, active, layerId) => {
-                                  const nextState = {
-                                    ...state,
-                                    selectedFrameIndices: indices,
-                                    activeFrameIndex: active
-                                  };
-                                  if (layerId) {
-                                    nextState.activeLayerId = layerId;
-                                    nextState.selectedLayerIds = [layerId];
-                                  }
-                                  updateState(nextState);
-                                }}
-                                onAddFrame={project.addFrame} 
-                                onDuplicateFrame={project.duplicateFrame} 
-                                onDeleteFrame={project.deleteFrame} 
-                                onDuplicateSelectedFrames={project.duplicateSelectedFrames} 
-                                onDeleteSelectedFrames={project.deleteSelectedFrames} 
-                                onInsertFrame={project.insertFrame}
-                                onTweenFrames={project.tweenFrames}
-                                onSetFrameDuration={project.setFrameDuration}
-                                onAddTag={project.addTag}
-                                onSaveTag={project.saveTag}
-                                onDeleteTag={project.deleteTag}
-                                onOpenTagProperties={project.openTagPropertiesDialog}
-                                activeTagPopover={activeTagPopover}
-                                onCloseTagPopover={onCloseTagPopover}
-                                onSelectLayer={(id) => updateState({...state, activeLayerId: id, selectedLayerIds: [id]})} 
-                                onAddLayer={project.addLayer} 
-                                onAddGroupLayer={project.addGroupLayer}
-                                onUpdateLayer={project.updateLayer}
-                                onToggleLayerVisibility={(id) => updateState({...state, layers: state.layers.map(l => l.id===id?{...l, visible:!l.visible}:l)})} 
-                                onToggleLayerLock={(id) => updateState({...state, layers: state.layers.map(l => l.id===id?{...l, locked:!l.locked}:l)})} 
-                                onReorderLayers={project.reorderLayers} 
-                                onReorderFrames={project.reorderFrames} 
-                              />
-                          </div>
-                      )}
-                      {activePanel === 'preview' && ( 
-                        <div className="h-[450px] flex flex-col bg-card overflow-hidden">
-                            <Preview state={state} width={0} isFloating={false} />
-                        </div> 
-                      )}
-                      {activePanel === 'menu' && (
-                          <div className="p-4 flex flex-col gap-5">
-                             <div className="flex flex-col gap-2">
-                                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest px-1">Canvas & File</span>
-                                <div className="grid grid-cols-2 gap-2">
-                                   <button onClick={() => { project.createProject(); closePanel(); }} className="flex items-center gap-2.5 p-2.5 rounded-xl bg-secondary/5 border border-border/40 active:bg-secondary/20 text-left transition-colors">
-                                       <Plus size={18} className="text-muted-foreground/60" />
-                                       <span className="text-xs font-medium">New Canvas</span>
-                                   </button>
-                                   <button onClick={() => { fileInputRef.current?.click(); closePanel(); }} className="flex items-center gap-2.5 p-2.5 rounded-xl bg-secondary/5 border border-border/40 active:bg-secondary/20 text-left transition-colors">
-                                       <Hand size={18} className="text-muted-foreground/60" />
-                                       <span className="text-xs font-medium">Open Local</span>
-                                   </button>
-                                   <button onClick={() => { project.saveProject(); closePanel(); }} className="flex items-center gap-2.5 p-2.5 rounded-xl bg-secondary/5 border border-border/40 active:bg-secondary/20 text-left transition-colors">
-                                       <Check size={18} className="text-muted-foreground/60" />
-                                       <span className="text-xs font-medium">Save Project</span>
-                                   </button>
-                                   <button onClick={() => { if (project.openExportDialog) { project.openExportDialog('gif'); } else { project.downloadImage(); } closePanel(); }} className="flex items-center gap-2.5 p-2.5 rounded-xl bg-primary text-primary-foreground shadow-sm active:opacity-90 text-left">
-                                       <Share size={18} />
-                                       <span className="text-xs font-medium">Export PNG / GIF</span>
-                                   </button>
-                                </div>
-                             </div>
+              <div className="flex items-center gap-0.5">
+                <button
+                  type="button"
+                  onClick={() => setActivePanel('palette')}
+                  aria-label="Palette"
+                  className={`flex h-11 w-11 items-center justify-center rounded-md transition-colors ${
+                    activePanel === 'palette'
+                      ? 'bg-primary/15 text-primary'
+                      : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                  }`}
+                >
+                  <PaletteIcon size={20} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActivePanel('layers')}
+                  aria-label="Layers"
+                  className={`flex h-11 w-11 items-center justify-center rounded-md transition-colors ${
+                    activePanel === 'layers'
+                      ? 'bg-primary/15 text-primary'
+                      : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                  }`}
+                >
+                  <Layers size={20} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActivePanel('timeline')}
+                  aria-label="Timeline"
+                  className={`flex h-11 w-11 items-center justify-center rounded-md transition-colors ${
+                    activePanel === 'timeline'
+                      ? 'bg-primary/15 text-primary'
+                      : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                  }`}
+                >
+                  <Clock size={20} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActivePanel('history')}
+                  aria-label="History"
+                  className={`flex h-11 w-11 items-center justify-center rounded-md transition-colors ${
+                    activePanel === 'history'
+                      ? 'bg-primary/15 text-primary'
+                      : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                  }`}
+                >
+                  <HistoryIcon size={20} />
+                </button>
+              </div>
+            </div>
+          </footer>
 
-                             <div className="flex flex-col gap-2">
-                                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest px-1">Sprite & Properties</span>
-                                <div className="grid grid-cols-2 gap-2">
-                                   <button onClick={() => { if (project.openSpritePropertiesDialog) project.openSpritePropertiesDialog(); closePanel(); }} className="flex items-center gap-2.5 p-2.5 rounded-xl bg-secondary/5 border border-border/40 active:bg-secondary/20 text-left transition-colors">
-                                       <Settings size={18} className="text-primary" />
-                                       <span className="text-xs font-medium">Sprite Properties</span>
-                                   </button>
-                                   <button onClick={() => { if (project.openSlicesDialog) project.openSlicesDialog(); closePanel(); }} className="flex items-center gap-2.5 p-2.5 rounded-xl bg-secondary/5 border border-border/40 active:bg-secondary/20 text-left transition-colors">
-                                       <Crop size={18} className="text-primary" />
-                                       <span className="text-xs font-medium">Slice Manager</span>
-                                   </button>
-                                   <button onClick={() => { if (project.openResizeDialog) project.openResizeDialog(); closePanel(); }} className="flex items-center gap-2.5 p-2.5 rounded-xl bg-secondary/5 border border-border/40 active:bg-secondary/20 text-left transition-colors">
-                                       <Maximize2 size={18} className="text-muted-foreground" />
-                                       <span className="text-xs font-medium">Resize Canvas</span>
-                                   </button>
-                                   <button onClick={() => { if (project.openLayerPropertiesDialog) project.openLayerPropertiesDialog(); closePanel(); }} className="flex items-center gap-2.5 p-2.5 rounded-xl bg-secondary/5 border border-border/40 active:bg-secondary/20 text-left transition-colors">
-                                       <Layers size={18} className="text-muted-foreground" />
-                                       <span className="text-xs font-medium">Layer Properties</span>
-                                   </button>
-                                   <button onClick={() => { if (project.openTagPropertiesDialog) project.openTagPropertiesDialog(); closePanel(); }} className="flex items-center gap-2.5 p-2.5 rounded-xl bg-secondary/5 border border-border/40 active:bg-secondary/20 text-left transition-colors col-span-2">
-                                       <Tag size={18} className="text-primary" />
-                                       <span className="text-xs font-medium">New Animation Tag...</span>
-                                   </button>
-                                </div>
-                             </div>
-                             
-                             <div className="flex flex-col gap-2">
-                                <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest px-1">Recent Works</div>
-                                <div className="flex flex-col gap-1">
-                                    {project.recentProjects.length === 0 ? ( 
-                                        <div className="p-6 border border-dashed border-border rounded-xl text-center text-muted-foreground/40 text-xs">
-                                            No recent projects
-                                        </div> 
-                                    ) : (
-                                        project.recentProjects.map((p: any) => (
-                                            <button 
-                                              key={p.id} 
-                                              onClick={() => { project.loadRecentProject(p); closePanel(); }} 
-                                              className="w-full p-2.5 text-left rounded-xl hover:bg-secondary/10 active:bg-secondary/20 transition-colors flex items-center justify-between group border border-border/40"
-                                            >
-                                                <div className="flex flex-col gap-0.5">
-                                                    <div className="text-xs font-medium">{p.title}</div>
-                                                    <div className="text-[10px] text-muted-foreground/60 font-mono">
-                                                      {p.width}x{p.height} • {new Date(p.timestamp).toLocaleDateString()}
-                                                    </div>
-                                                </div>
-                                            </button>
-                                        ))
-                                    )}
-                                </div>
-                             </div>
-                          </div>
-                      )}
+          <Dialog
+            open={!!activePanel}
+            closeOnOutsidePress={false}
+            onOpenChange={(open, details) => {
+              if (!open) {
+                details.cancel();
+                dismissPanel();
+              }
+            }}
+          >
+            <DialogBackdrop
+              ref={backdropRef}
+              data-sheet="bottom"
+              render={(props) => (
+                <motion.div
+                  {...props}
+                  style={{
+                    ...(props.style as React.CSSProperties | undefined),
+                    opacity: sheetBackdropOpacity as unknown as number,
+                  }}
+                />
+              )}
+            />
+            <DialogSheetContent
+              ref={sheetRef}
+              initialFocus="content"
+              onClickCapture={(e) => {
+                if (suppressSheetClickRef.current) {
+                  e.stopPropagation();
+                  e.preventDefault();
+                }
+              }}
+              render={(props) => (
+                <motion.div
+                  {...props}
+                  style={{
+                    ...(props.style as React.CSSProperties | undefined),
+                    y: sheetY as unknown as number,
+                  }}
+                />
+              )}
+            >
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-t-xl border-t border-border-strong bg-card text-card-foreground shadow-2xl overscroll-y-contain">
+                <div
+                  className="flex shrink-0 cursor-grab items-center justify-center pt-2.5 pb-1 touch-none active:cursor-grabbing"
+                  aria-hidden="true"
+                >
+                  <div
+                    className={`h-1 rounded-full transition-all duration-150 ${
+                      isDraggingSheet ? 'w-11 bg-muted-foreground' : 'w-9 bg-border-strong'
+                    }`}
+                  />
+                </div>
+                <div className="flex h-11 shrink-0 cursor-grab items-center justify-between border-b border-border px-4 touch-none active:cursor-grabbing">
+                  <DialogTitle className="text-sm font-semibold text-foreground">
+                    {activePanel ? PANEL_TITLES[activePanel] : ''}
+                  </DialogTitle>
+                  <DialogClose
+                    render={
+                      <button
+                        type="button"
+                        aria-label="Close panel"
+                        className="flex h-11 w-11 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                      />
+                    }
+                  >
+                    <X size={18} />
+                  </DialogClose>
+                </div>
+
+                <DialogDescription className="sr-only">
+                  {activePanel ? `${PANEL_TITLES[activePanel]} controls` : 'Panel controls'}
+                </DialogDescription>
+
+                <div className="flex min-h-0 flex-1 flex-col pb-safe">
+                {activePanel === 'palette' && (
+                  <div className="flex h-[52dvh] min-h-[340px] flex-col">
+                    <Palette
+                      width={0}
+                      colors={state.palette}
+                      palettes={state.paletteLibrary}
+                      activePaletteId={state.activePaletteId}
+                      primaryColor={state.primaryColor}
+                      secondaryColor={state.secondaryColor}
+                      onColorSelect={(c, p) =>
+                        p
+                          ? updateState({ ...state, primaryColor: c })
+                          : updateState({ ...state, secondaryColor: c })
+                      }
+                      onAddColor={(c) => {
+                        const updatedLibrary = state.paletteLibrary.map((p) =>
+                          p.id === state.activePaletteId ? { ...p, colors: [...p.colors, c] } : p
+                        );
+                        updateState({
+                          ...state,
+                          paletteLibrary: updatedLibrary,
+                          palette: [...state.palette, c],
+                        });
+                      }}
+                      onSelectPalette={project.selectPalette}
+                      onImportPalette={project.importPalette}
+                      onResizeStart={() => {}}
+                      onColorsSelected={(selectedColors) => {
+                        updateState({ ...state, shades: selectedColors, inkType: 'shading' });
+                      }}
+                    />
                   </div>
-          </Drawer.Content>
-        </Drawer.Portal>
-      </Drawer.Root>
+                )}
+
+                {activePanel === 'layers' && (
+                  <div className="flex h-[50dvh] min-h-[320px] flex-col">
+                    <LayersPanel
+                      state={state}
+                      onSelectLayers={(ids, active) =>
+                        updateState({ ...state, selectedLayerIds: ids, activeLayerId: active })
+                      }
+                      onUpdateLayer={project.updateLayer}
+                      onAddLayer={project.addLayer}
+                      onAddGroupLayer={project.addGroupLayer}
+                      onGroupSelectedLayers={project.groupSelectedLayers}
+                      onUngroupSelectedLayers={project.ungroupSelectedLayers}
+                      onAddLayerToGroup={project.addLayerToGroup}
+                      onToggleCollapseAllGroups={project.toggleCollapseAllGroups}
+                      onDuplicateLayer={project.duplicateLayer}
+                      onDeleteLayer={project.deleteLayer}
+                      onDuplicateSelectedLayers={project.duplicateSelectedLayers}
+                      onDeleteSelectedLayers={project.deleteSelectedLayers}
+                      onReorderLayers={project.reorderLayers}
+                      onOpenLayerProperties={project.openLayerPropertiesDialog}
+                      layerPropertiesState={layerPropertiesState}
+                      onCloseLayerProperties={onCloseLayerProperties}
+                      className="h-full w-full flex-1"
+                    />
+                  </div>
+                )}
+
+                {activePanel === 'timeline' && (
+                  <div className="flex h-[52dvh] min-h-[320px] flex-col overflow-hidden">
+                    <Timeline
+                      state={state}
+                      onSelectFrames={(indices, active, layerId) => {
+                        const nextState = {
+                          ...state,
+                          selectedFrameIndices: indices,
+                          activeFrameIndex: active,
+                        };
+                        if (layerId) {
+                          nextState.activeLayerId = layerId;
+                          nextState.selectedLayerIds = [layerId];
+                        }
+                        updateState(nextState);
+                      }}
+                      onAddFrame={project.addFrame}
+                      onDuplicateFrame={project.duplicateFrame}
+                      onDeleteFrame={project.deleteFrame}
+                      onDuplicateSelectedFrames={project.duplicateSelectedFrames}
+                      onDeleteSelectedFrames={project.deleteSelectedFrames}
+                      onInsertFrame={project.insertFrame}
+                      onTweenFrames={project.tweenFrames}
+                      onSetFrameDuration={project.setFrameDuration}
+                      onAddTag={project.addTag}
+                      onSaveTag={project.saveTag}
+                      onDeleteTag={project.deleteTag}
+                      onOpenTagProperties={project.openTagPropertiesDialog}
+                      activeTagPopover={activeTagPopover}
+                      onCloseTagPopover={onCloseTagPopover}
+                      onSelectLayer={(id) =>
+                        updateState({ ...state, activeLayerId: id, selectedLayerIds: [id] })
+                      }
+                      onAddLayer={project.addLayer}
+                      onAddGroupLayer={project.addGroupLayer}
+                      onUpdateLayer={project.updateLayer}
+                      onToggleLayerVisibility={(id) =>
+                        updateState({
+                          ...state,
+                          layers: state.layers.map((l) =>
+                            l.id === id ? { ...l, visible: !l.visible } : l
+                          ),
+                        })
+                      }
+                      onToggleLayerLock={(id) =>
+                        updateState({
+                          ...state,
+                          layers: state.layers.map((l) =>
+                            l.id === id ? { ...l, locked: !l.locked } : l
+                          ),
+                        })
+                      }
+                      onReorderLayers={project.reorderLayers}
+                      onReorderFrames={project.reorderFrames}
+                    />
+                  </div>
+                )}
+
+                {activePanel === 'history' && (
+                  <div className="flex h-[50dvh] min-h-[320px] flex-col">
+                    <HistoryPanel
+                      history={project.history}
+                      historyIndex={project.historyIndex}
+                      onJumpToHistory={project.jumpToHistory}
+                      className="h-full w-full flex-1"
+                    />
+                  </div>
+                )}
+
+                {activePanel === 'preview' && (
+                  <div className="flex h-[50dvh] min-h-[320px] flex-col bg-card">
+                    <Preview state={state} width={0} isFloating={false} />
+                  </div>
+                )}
+
+                {activePanel === 'menu' && (
+                  <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-4">
+                    <div className="space-y-2">
+                      <span className="px-0.5 text-[11px] font-semibold text-muted-foreground">
+                        File &amp; Export
+                      </span>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            project.createProject();
+                            closePanel();
+                          }}
+                          className="flex min-h-[44px] items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2 text-left text-xs font-medium text-foreground transition-colors active:bg-accent"
+                        >
+                          <Plus size={16} className="text-muted-foreground" />
+                          <span>New Canvas</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            fileInputRef.current?.click();
+                            closePanel();
+                          }}
+                          className="flex min-h-[44px] items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2 text-left text-xs font-medium text-foreground transition-colors active:bg-accent"
+                        >
+                          <FolderOpen size={16} className="text-muted-foreground" />
+                          <span>Open File</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            project.saveProject();
+                            closePanel();
+                          }}
+                          className="flex min-h-[44px] items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2 text-left text-xs font-medium text-foreground transition-colors active:bg-accent"
+                        >
+                          <Check size={16} className="text-muted-foreground" />
+                          <span>Save Project</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (project.openExportDialog) {
+                              project.openExportDialog('gif');
+                            } else {
+                              project.downloadImage();
+                            }
+                            closePanel();
+                          }}
+                          className="flex min-h-[44px] items-center gap-2.5 rounded-lg bg-primary px-3 py-2 text-left text-xs font-semibold text-primary-foreground active:opacity-90"
+                        >
+                          <Download size={16} />
+                          <span>Export...</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <span className="px-0.5 text-[11px] font-semibold text-muted-foreground">
+                        Canvas &amp; Tools
+                      </span>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            closePanel();
+                            commands.find((c) => c.id === 'app.commandPalette')?.perform();
+                          }}
+                          className="flex min-h-[44px] items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2 text-left text-xs font-medium text-foreground transition-colors active:bg-accent"
+                        >
+                          <CommandIcon size={16} className="text-primary" />
+                          <span>Command Palette</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            updateState({ ...state, tiled: !state.tiled });
+                            closePanel();
+                          }}
+                          className={`flex min-h-[44px] items-center gap-2.5 rounded-lg border px-3 py-2 text-left text-xs font-medium transition-colors ${
+                            state.tiled
+                              ? 'border-primary bg-primary/15 text-primary'
+                              : 'border-border bg-background text-foreground'
+                          }`}
+                        >
+                          <Grid size={16} />
+                          <span>Tiled View</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            closePanel();
+                            commands.find((c) => c.id === 'view.referenceImage')?.perform();
+                          }}
+                          className="flex min-h-[44px] items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2 text-left text-xs font-medium text-foreground transition-colors active:bg-accent"
+                        >
+                          <ImageIcon size={16} className="text-muted-foreground" />
+                          <span>Reference Image</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            closePanel();
+                            project.openOutlineDialog?.();
+                          }}
+                          className="flex min-h-[44px] items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2 text-left text-xs font-medium text-foreground transition-colors active:bg-accent"
+                        >
+                          <Sparkles size={16} className="text-primary" />
+                          <span>Outline FX...</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <span className="px-0.5 text-[11px] font-semibold text-muted-foreground">
+                        Sprite &amp; Properties
+                      </span>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            project.openSpritePropertiesDialog?.();
+                            closePanel();
+                          }}
+                          className="flex min-h-[44px] items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2 text-left text-xs font-medium text-foreground transition-colors active:bg-accent"
+                        >
+                          <Settings size={16} className="text-primary" />
+                          <span>Sprite Properties</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            project.openSlicesDialog?.();
+                            closePanel();
+                          }}
+                          className="flex min-h-[44px] items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2 text-left text-xs font-medium text-foreground transition-colors active:bg-accent"
+                        >
+                          <Crop size={16} className="text-primary" />
+                          <span>Slice Manager</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            commands.find((c) => c.id === 'sprite.resize')?.perform();
+                            closePanel();
+                          }}
+                          className="flex min-h-[44px] items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2 text-left text-xs font-medium text-foreground transition-colors active:bg-accent"
+                        >
+                          <Maximize2 size={16} className="text-muted-foreground" />
+                          <span>Resize Canvas</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            project.openLayerPropertiesDialog?.();
+                            closePanel();
+                          }}
+                          className="flex min-h-[44px] items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2 text-left text-xs font-medium text-foreground transition-colors active:bg-accent"
+                        >
+                          <Layers size={16} className="text-muted-foreground" />
+                          <span>Layer Properties</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            project.openTagPropertiesDialog?.();
+                            closePanel();
+                          }}
+                          className="col-span-2 flex min-h-[44px] items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2 text-left text-xs font-medium text-foreground transition-colors active:bg-accent"
+                        >
+                          <Tag size={16} className="text-primary" />
+                          <span>New Animation Tag...</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <span className="px-0.5 text-[11px] font-semibold text-muted-foreground">
+                        Recent Projects
+                      </span>
+                      <div className="flex flex-col gap-1.5">
+                        {project.recentProjects.length === 0 ? (
+                          <div className="rounded-lg border border-dashed border-border p-5 text-center text-xs text-muted-foreground">
+                            No recent projects
+                          </div>
+                        ) : (
+                          project.recentProjects.map((p: any) => (
+                            <button
+                              key={p.id}
+                              type="button"
+                              onClick={() => {
+                                project.loadRecentProject(p);
+                                closePanel();
+                              }}
+                              className="flex min-h-[44px] w-full items-center justify-between rounded-lg border border-border bg-background px-3 py-2 text-left transition-colors active:bg-accent"
+                            >
+                              <div className="min-w-0">
+                                <div className="truncate text-xs font-medium text-foreground">
+                                  {p.title}
+                                </div>
+                                <div className="font-mono text-[11px] text-muted-foreground tabular-nums">
+                                  {p.width}×{p.height} ·{' '}
+                                  {new Date(p.timestamp).toLocaleDateString()}
+                                </div>
+                              </div>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                </div>
+              </div>
+              {/* Covers bottom rubber-band gap during upward over-drag */}
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 top-full h-16 bg-card"
+              />
+            </DialogSheetContent>
+          </Dialog>
         </>
       )}
     </div>

@@ -1,28 +1,32 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { FrameTag, Frame } from '../types';
 import {
-  Tag,
-  X,
-  Check,
   Trash2,
   ArrowRight,
   ArrowLeft,
   ArrowLeftRight,
   ArrowRightLeft,
-  Infinity as InfinityIcon,
-} from 'lucide-react';
+  InfinityIcon,
+} from './Icons';
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 import { PopoverArrow } from './ui/popover';
+import { Input } from './ui/input';
+import {
+  SegmentedControl,
+  SegmentedControlIndicator,
+  SegmentedControlItem,
+} from './ui/segmented-control';
+import { cn } from '../lib/utils';
 
 export const TAG_PRESET_COLORS = [
-  '#3b82f6', // Blue
-  '#10b981', // Emerald
-  '#f59e0b', // Amber
-  '#f43f5e', // Rose
-  '#a855f7', // Purple
-  '#ec4899', // Pink
-  '#06b6d4', // Cyan
-  '#84cc16', // Lime
+  '#3b82f6',
+  '#10b981',
+  '#f59e0b',
+  '#f43f5e',
+  '#a855f7',
+  '#ec4899',
+  '#06b6d4',
+  '#84cc16',
 ];
 
 export interface AnimationTagPopoverProps {
@@ -63,7 +67,6 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
     setRepeatMode((initialTag.repeat ?? 0) === 0 ? 'infinite' : 'custom');
   }, [initialTag]);
 
-  // When the popover is closed / unmounted, ensure a blank name falls back to 'Tag'
   useEffect(() => {
     return () => {
       if (isDeletingRef.current) return;
@@ -79,10 +82,11 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
 
   const safeTotal = Math.max(1, totalFrames);
   const safeFrom = Math.max(0, Math.min(safeTotal - 1, isNaN(tag.from) ? 0 : tag.from));
-  const safeTo = Math.max(safeFrom, Math.min(safeTotal - 1, isNaN(tag.to) ? safeTotal - 1 : tag.to));
-  const frameCount = safeTo - safeFrom + 1;
+  const safeTo = Math.max(
+    safeFrom,
+    Math.min(safeTotal - 1, isNaN(tag.to) ? safeTotal - 1 : tag.to)
+  );
 
-  // Calculate total duration in milliseconds
   let durationMs = 0;
   for (let i = safeFrom; i <= safeTo; i++) {
     durationMs += frames[i]?.duration || 100;
@@ -91,15 +95,18 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
   const updateAndSave = (partialTag: Partial<FrameTag>, newRepeatMode?: 'infinite' | 'custom') => {
     const nextTag = { ...tag, ...partialTag };
     const nextRepeatMode = newRepeatMode !== undefined ? newRepeatMode : repeatMode;
-    
+
     const rFrom = Math.max(0, Math.min(safeTotal - 1, isNaN(nextTag.from) ? 0 : nextTag.from));
-    const rTo = Math.max(rFrom, Math.min(safeTotal - 1, isNaN(nextTag.to) ? safeTotal - 1 : nextTag.to));
-    
+    const rTo = Math.max(
+      rFrom,
+      Math.min(safeTotal - 1, isNaN(nextTag.to) ? safeTotal - 1 : nextTag.to)
+    );
+
     const finalTag: FrameTag = {
       ...nextTag,
       from: rFrom,
       to: rTo,
-      name: nextTag.name, // Keep exactly what they are typing, including empty string
+      name: nextTag.name,
       color: nextTag.color || '#3b82f6',
       direction: nextTag.direction || 'forward',
       repeat: nextRepeatMode === 'infinite' ? 0 : (nextTag.repeat ?? 1),
@@ -109,15 +116,15 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
   };
 
   const directions = [
-    { id: 'forward', label: 'Fwd', fullLabel: 'Forward', icon: ArrowRight },
-    { id: 'reverse', label: 'Rev', fullLabel: 'Reverse', icon: ArrowLeft },
-    { id: 'ping-pong', label: 'Ping-Pong', fullLabel: 'Ping-Pong', icon: ArrowLeftRight },
-    { id: 'ping-pong-reverse', label: 'Rev P.P.', fullLabel: 'Reverse Ping-Pong', icon: ArrowRightLeft },
+    { id: 'forward', fullLabel: 'Forward', icon: ArrowRight },
+    { id: 'reverse', fullLabel: 'Reverse', icon: ArrowLeft },
+    { id: 'ping-pong', fullLabel: 'Ping-Pong', icon: ArrowLeftRight },
+    { id: 'ping-pong-reverse', fullLabel: 'Reverse Ping-Pong', icon: ArrowRightLeft },
   ] as const;
 
   return (
     <div
-      className="w-60 bg-popover text-popover-foreground border border-border shadow-xl rounded-lg p-3 flex flex-col gap-3 text-xs select-none outline-none relative"
+      className="relative flex w-64 flex-col gap-3 text-xs text-popover-foreground outline-none select-none"
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === 'Escape') {
           e.preventDefault();
@@ -126,58 +133,62 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
       }}
     >
       <PopoverArrow />
-      {/* Form Fields Table */}
+
       <div className="flex flex-col gap-3">
-        {/* Name */}
         <div className="flex flex-col gap-1">
-          <label className="text-[9px] font-medium text-muted-foreground">Name</label>
-          <input
+          <label className="text-[11px] font-medium text-muted-foreground">Name</label>
+          <Input
             type="text"
             value={tag.name}
             onChange={(e) => updateAndSave({ name: e.target.value })}
             placeholder="e.g. Idle, Walk"
             autoFocus
-            className="w-full bg-background border border-border rounded-md px-2 py-1 text-xs font-medium text-foreground outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+            className="h-7"
           />
         </div>
 
-        {/* Color Swatches */}
-        <div className="flex flex-col gap-1">
-          <label className="text-[9px] font-medium text-muted-foreground">Color</label>
-          <div className="flex items-center gap-1.5 flex-wrap">
+        <div className="flex flex-col gap-1.5">
+          <span className="text-[11px] font-medium text-muted-foreground">Color</span>
+          <div className="flex flex-wrap items-center gap-1.5">
             {TAG_PRESET_COLORS.map((c) => (
               <button
                 key={c}
                 type="button"
+                aria-label={`Tag color ${c}`}
                 onClick={() => updateAndSave({ color: c })}
-                className={`w-4 h-4 rounded-full border transition-transform cursor-pointer ${
+                className={cn(
+                  'h-4 w-4 rounded-full border transition-transform',
                   tag.color === c
-                    ? 'ring-2 ring-primary ring-offset-1 ring-offset-popover scale-110 border-white'
-                    : 'border-black/10 dark:border-white/10 hover:scale-105'
-                }`}
+                    ? 'scale-110 border-foreground ring-2 ring-primary ring-offset-1 ring-offset-popover'
+                    : 'border-border-strong hover:scale-105'
+                )}
                 style={{ backgroundColor: c }}
               />
             ))}
-            <label className="w-4 h-4 rounded-full border border-dashed border-border hover:border-foreground flex items-center justify-center cursor-pointer transition-colors relative overflow-hidden" title="Custom color">
+            <label
+              className="relative flex h-4 w-4 cursor-pointer items-center justify-center overflow-hidden rounded-full border border-dashed border-border-strong text-[11px] text-muted-foreground hover:border-foreground"
+              title="Custom color"
+            >
               <input
                 type="color"
                 value={tag.color || '#3b82f6'}
                 onChange={(e) => updateAndSave({ color: e.target.value })}
-                className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                aria-label="Custom tag color"
+                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
               />
-              <span className="text-[9px] text-muted-foreground font-bold leading-none">+</span>
+              +
             </label>
           </div>
         </div>
 
-        {/* Frame Range & Duration */}
         <div className="flex flex-col gap-1">
-          <label className="text-[9px] font-medium text-muted-foreground">Frames</label>
-          <div className="flex items-center gap-1.5 w-full">
-            <input
+          <span className="text-[11px] font-medium text-muted-foreground">Frames</span>
+          <div className="flex w-full items-center gap-1.5">
+            <Input
               type="number"
-              min="1"
+              min={1}
               max={safeTotal}
+              aria-label="Start frame"
               value={isNaN(tag.from) ? '' : tag.from + 1}
               onChange={(e) => {
                 const val = parseInt(e.target.value, 10);
@@ -185,13 +196,14 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
                   updateAndSave({ from: val - 1 });
                 }
               }}
-              className="w-14 bg-background border border-border rounded-md px-1.5 py-1 text-xs font-mono font-medium text-foreground text-center outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+              className="h-7 w-14 px-1.5 text-center font-mono tabular-nums"
             />
-            <span className="text-muted-foreground text-[10px]">to</span>
-            <input
+            <span className="text-[11px] text-muted-foreground">to</span>
+            <Input
               type="number"
-              min="1"
+              min={1}
               max={safeTotal}
+              aria-label="End frame"
               value={isNaN(tag.to) ? '' : tag.to + 1}
               onChange={(e) => {
                 const val = parseInt(e.target.value, 10);
@@ -199,112 +211,98 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
                   updateAndSave({ to: val - 1 });
                 }
               }}
-              className="w-14 bg-background border border-border rounded-md px-1.5 py-1 text-xs font-mono font-medium text-foreground text-center outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+              className="h-7 w-14 px-1.5 text-center font-mono tabular-nums"
             />
-            <span className="text-[10px] font-mono text-muted-foreground/80 shrink-0 ml-auto">
+            <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums">
               {durationMs}ms
             </span>
           </div>
         </div>
 
-        {/* Direction Segmented Control */}
         <div className="flex flex-col gap-1">
-          <label className="text-[9px] font-medium text-muted-foreground">Direction</label>
-          <div className="grid grid-cols-4 gap-0.5 bg-muted/60 p-0.5 rounded-md border border-border/50 w-full">
+          <span className="text-[11px] font-medium text-muted-foreground">Direction</span>
+          <SegmentedControl<NonNullable<FrameTag['direction']>>
+            value={tag.direction || 'forward'}
+            onValueChange={(next) =>
+              next && updateAndSave({ direction: next as NonNullable<FrameTag['direction']> })
+            }
+            aria-label="Tag playback direction"
+          >
+            <SegmentedControlIndicator />
             {directions.map((dir) => {
-              const isActive = (tag.direction || 'forward') === dir.id;
               const Icon = dir.icon;
               return (
                 <Tooltip key={dir.id}>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={() => updateAndSave({ direction: dir.id })}
-                      className={`py-1 rounded flex items-center justify-center transition-colors ${
-                        isActive
-                          ? 'bg-background text-foreground font-semibold shadow-xs border border-border/40'
-                          : 'text-muted-foreground hover:text-foreground'
-                      }`}
-                    >
-                      <Icon size={12} />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" className="text-[11px] bg-popover text-popover-foreground border border-border">
-                    {dir.fullLabel}
-                  </TooltipContent>
+                  <TooltipTrigger
+                    render={
+                      <SegmentedControlItem value={dir.id} aria-label={dir.fullLabel}>
+                        <Icon size={12} />
+                      </SegmentedControlItem>
+                    }
+                  />
+                  <TooltipContent side="top">{dir.fullLabel}</TooltipContent>
                 </Tooltip>
               );
             })}
-          </div>
+          </SegmentedControl>
         </div>
 
-        {/* Repeats / Loop */}
         <div className="flex flex-col gap-1">
-          <label className="text-[9px] font-medium text-muted-foreground">Repeat</label>
-          <div className="flex items-center gap-1.5 w-full">
-            <div className="flex-1 flex items-center bg-muted/60 p-0.5 rounded-md border border-border/50">
-              <button
-                type="button"
-                onClick={() => {
-                  setRepeatMode('infinite');
+          <span className="text-[11px] font-medium text-muted-foreground">Repeat</span>
+          <div className="flex w-full items-center gap-1.5">
+            <SegmentedControl<'infinite' | 'custom'>
+              value={repeatMode}
+              onValueChange={(next) => {
+                if (!next) return;
+                const mode = next as 'infinite' | 'custom';
+                setRepeatMode(mode);
+                if (mode === 'infinite') {
                   updateAndSave({ repeat: 0 }, 'infinite');
-                }}
-                className={`flex-1 py-0.5 px-1.5 rounded text-[11px] font-medium transition-colors flex items-center justify-center gap-1 ${
-                  repeatMode === 'infinite'
-                    ? 'bg-background text-foreground shadow-xs border border-border/40'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                <InfinityIcon size={11} />
-                <span>Loop</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setRepeatMode('custom');
+                } else {
                   const newRepeat = (tag.repeat ?? 0) === 0 ? 1 : tag.repeat;
                   updateAndSave({ repeat: newRepeat }, 'custom');
-                }}
-                className={`flex-1 py-0.5 px-1.5 rounded text-[11px] font-medium transition-colors text-center ${
-                  repeatMode === 'custom'
-                    ? 'bg-background text-foreground shadow-xs border border-border/40'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                Count
-              </button>
-            </div>
+                }
+              }}
+              className="flex-1"
+              aria-label="Tag repeat mode"
+            >
+              <SegmentedControlIndicator />
+              <SegmentedControlItem value="infinite">
+                <InfinityIcon size={11} />
+                <span>Loop</span>
+              </SegmentedControlItem>
+              <SegmentedControlItem value="custom">Count</SegmentedControlItem>
+            </SegmentedControl>
 
             {repeatMode === 'custom' && (
-              <input
+              <Input
                 type="number"
-                min="1"
+                min={1}
+                aria-label="Repeat count"
                 value={isNaN(tag.repeat ?? 1) ? '' : tag.repeat}
                 onChange={(e) => {
                   const val = parseInt(e.target.value, 10);
                   updateAndSave({ repeat: isNaN(val) ? 1 : Math.max(1, val) }, 'custom');
                 }}
-                className="w-12 bg-background border border-border rounded-md px-1 py-0.5 text-xs font-mono font-medium text-foreground text-center outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+                className="h-7 w-12 px-1 text-center font-mono tabular-nums"
               />
             )}
           </div>
         </div>
       </div>
 
-      {/* Action Footer */}
       {!isNew && onDelete && (
-        <div className="flex items-center justify-between pt-2 border-t border-border/60 mt-1">
+        <div className="mt-1 flex items-center justify-between border-t border-border pt-2">
           <button
             type="button"
             onClick={() => {
               isDeletingRef.current = true;
               onDelete(tag.id);
             }}
-            className="flex items-center gap-1 text-destructive hover:bg-destructive/10 px-2 py-1 rounded-md transition-colors font-medium text-xs"
-            title="Delete tag"
+            className="flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-destructive transition-colors hover:bg-destructive/15"
           >
             <Trash2 size={13} />
-            <span>Delete</span>
+            <span>Delete Tag</span>
           </button>
         </div>
       )}

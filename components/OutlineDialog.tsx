@@ -1,16 +1,16 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { ProjectState } from '../types';
-import { 
-  OutlineOptions, 
-  OutlineMatrix, 
-  OutlinePlacement, 
+import {
+  OutlineOptions,
+  OutlineMatrix,
+  OutlinePlacement,
   OutlineShapePreset,
-  DEFAULT_OUTLINE_MATRIX, 
-  MATRIX_PRESETS, 
-  applyOutlineEffect 
+  DEFAULT_OUTLINE_MATRIX,
+  MATRIX_PRESETS,
+  applyOutlineEffect,
 } from '../utils/outline';
-import { 
-  X, 
+import {
+  X,
   RotateCcw,
   ArrowUpLeft,
   ArrowUp,
@@ -19,8 +19,26 @@ import {
   ArrowRight,
   ArrowDownLeft,
   ArrowDown,
-  ArrowDownRight
-} from 'lucide-react';
+  ArrowDownRight,
+} from './Icons';
+import {
+  Dialog,
+  DialogBackdrop,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from './ui/dialog';
+import {
+  SegmentedControl,
+  SegmentedControlIndicator,
+  SegmentedControlItem,
+} from './ui/segmented-control';
+import { CustomSlider } from './ui/slider';
+import { CustomCheckbox } from './ui/checkbox';
+import { StudioSelect } from './ui/select';
+import { Input } from './ui/input';
+import { cn } from '../lib/utils';
 
 interface OutlineDialogProps {
   isOpen: boolean;
@@ -31,13 +49,18 @@ interface OutlineDialogProps {
   onCancel: (originalState?: ProjectState) => void;
 }
 
+const BG_MODE_OPTIONS = [
+  { value: 'transparent', label: 'Transparent' },
+  { value: 'color', label: 'Solid Color' },
+] as const;
+
 export const OutlineDialog: React.FC<OutlineDialogProps> = ({
   isOpen,
   onClose,
   state,
   onPreview,
   onConfirm,
-  onCancel
+  onCancel,
 }) => {
   const [placement, setPlacement] = useState<OutlinePlacement>('outside');
   const [matrix, setMatrix] = useState<OutlineMatrix>(DEFAULT_OUTLINE_MATRIX);
@@ -48,10 +71,11 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
   const [bgColor, setBgColor] = useState<string>('#ffffff');
   const [targetLayer, setTargetLayer] = useState<'active' | 'new'>('active');
   const [targetFrames, setTargetFrames] = useState<'current' | 'all'>('current');
-  const [limitToSelection, setLimitToSelection] = useState<boolean>(!!state.selection && state.selection.size > 0);
+  const [limitToSelection, setLimitToSelection] = useState<boolean>(
+    !!state.selection && state.selection.size > 0
+  );
   const [livePreview, setLivePreview] = useState<boolean>(true);
 
-  // Snapshot of original state when dialog was opened
   const originalStateRef = useRef<ProjectState>(state);
   const onPreviewRef = useRef(onPreview);
   onPreviewRef.current = onPreview;
@@ -80,29 +104,31 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
     }
   }, [isOpen]);
 
-  const outlineOptions = useMemo<OutlineOptions>(() => ({
-    placement,
-    matrix,
-    thickness,
-    outlineColor,
-    bgMode,
-    bgColor: bgMode === 'color' ? bgColor : undefined,
-    scope: limitToSelection ? 'selection' : 'canvas',
-    targetLayer,
-    targetFrames
-  }), [
-    placement,
-    matrix,
-    thickness,
-    outlineColor,
-    bgMode,
-    bgColor,
-    limitToSelection,
-    targetLayer,
-    targetFrames
-  ]);
+  const outlineOptions = useMemo<OutlineOptions>(
+    () => ({
+      placement,
+      matrix,
+      thickness,
+      outlineColor,
+      bgMode,
+      bgColor: bgMode === 'color' ? bgColor : undefined,
+      scope: limitToSelection ? 'selection' : 'canvas',
+      targetLayer,
+      targetFrames,
+    }),
+    [
+      placement,
+      matrix,
+      thickness,
+      outlineColor,
+      bgMode,
+      bgColor,
+      limitToSelection,
+      targetLayer,
+      targetFrames,
+    ]
+  );
 
-  // Compute live preview safely without infinite re-render loops
   useEffect(() => {
     if (!isOpen) return;
 
@@ -127,11 +153,9 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
       hasPreviewAppliedRef.current = true;
       onPreviewRef.current(newState);
     } catch (e) {
-      console.warn("Outline preview failed", e);
+      console.warn('Outline preview failed', e);
     }
   }, [isOpen, outlineOptions, livePreview]);
-
-  if (!isOpen) return null;
 
   const handlePresetSelect = (preset: OutlineShapePreset) => {
     setShapePreset(preset);
@@ -153,7 +177,7 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
       e: !matrix.e,
       sw: !matrix.sw,
       s: !matrix.s,
-      se: !matrix.se
+      se: !matrix.se,
     });
     setShapePreset('custom');
   };
@@ -167,7 +191,9 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
     setBgMode('transparent');
     setTargetLayer('active');
     setTargetFrames('current');
-    setLimitToSelection(!!originalStateRef.current.selection && originalStateRef.current.selection.size > 0);
+    setLimitToSelection(
+      !!originalStateRef.current.selection && originalStateRef.current.selection.size > 0
+    );
   };
 
   const handleCancel = () => {
@@ -187,470 +213,331 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
     onClose();
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      e.stopPropagation();
-      handleCancel();
-    } else if (e.key === 'Enter' && !e.shiftKey && (e.target instanceof HTMLInputElement === false)) {
-      e.preventDefault();
-      handleSubmit();
-    }
-  };
-
   const hasSelection = !!state.selection && state.selection.size > 0;
   const isAnimated = state.frames.length > 1;
-
-  // Swatches: pick representative distinct colors from the active palette
   const paletteSwatches = state.palette.slice(0, 8);
 
+  const directions: { key: keyof OutlineMatrix; label: string; icon: React.ReactNode }[] = [
+    { key: 'nw', label: 'North-West', icon: <ArrowUpLeft size={12} /> },
+    { key: 'n', label: 'North', icon: <ArrowUp size={12} /> },
+    { key: 'ne', label: 'North-East', icon: <ArrowUpRight size={12} /> },
+    { key: 'w', label: 'West', icon: <ArrowLeft size={12} /> },
+  ];
+  const directionsRight: { key: keyof OutlineMatrix; label: string; icon: React.ReactNode }[] = [
+    { key: 'e', label: 'East', icon: <ArrowRight size={12} /> },
+    { key: 'sw', label: 'South-West', icon: <ArrowDownLeft size={12} /> },
+    { key: 's', label: 'South', icon: <ArrowDown size={12} /> },
+    { key: 'se', label: 'South-East', icon: <ArrowDownRight size={12} /> },
+  ];
+
   return (
-    <div 
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 select-none animate-in fade-in-0 duration-150"
-      onClick={handleCancel}
-      onKeyDown={handleKeyDown}
-      tabIndex={-1}
+    <Dialog
+      open={isOpen}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) handleCancel();
+      }}
     >
-      <form 
-        className="w-[280px] bg-popover text-popover-foreground border border-border shadow-2xl rounded-lg p-3 flex flex-col gap-2.5 text-xs select-none outline-none relative"
-        onClick={e => e.stopPropagation()}
-        onSubmit={handleSubmit}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between pb-1.5 border-b border-border/60">
-          <span className="font-semibold text-xs text-foreground">Outline</span>
-          <button 
-            type="button" 
-            onClick={handleCancel}
-            className="text-muted-foreground hover:text-foreground p-0.5 rounded hover:bg-muted transition-colors"
-            title="Close (Esc)"
-          >
-            <X size={13} />
-          </button>
-        </div>
+      <DialogBackdrop />
+      <DialogContent className="max-w-xs">
+        <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+          <DialogHeader>
+            <DialogTitle>Outline FX</DialogTitle>
+            <button
+              type="button"
+              onClick={handleCancel}
+              aria-label="Close Outline FX"
+              className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <X size={14} />
+            </button>
+          </DialogHeader>
 
-        {/* Placement */}
-        <div className="flex flex-col gap-1">
-          <label className="text-[9px] font-medium text-muted-foreground">Placement</label>
-          <div className="grid grid-cols-3 gap-0.5 bg-muted/60 p-0.5 rounded-md border border-border/50 w-full">
-            <button
-              type="button"
-              onClick={() => setPlacement('outside')}
-              className={`py-1 rounded text-[11px] font-medium transition-colors ${
-                placement === 'outside'
-                  ? 'bg-background text-foreground font-semibold shadow-xs border border-border/40'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              Outside
-            </button>
-            <button
-              type="button"
-              onClick={() => setPlacement('inside')}
-              className={`py-1 rounded text-[11px] font-medium transition-colors ${
-                placement === 'inside'
-                  ? 'bg-background text-foreground font-semibold shadow-xs border border-border/40'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              Inside
-            </button>
-            <button
-              type="button"
-              onClick={() => setPlacement('both')}
-              className={`py-1 rounded text-[11px] font-medium transition-colors ${
-                placement === 'both'
-                  ? 'bg-background text-foreground font-semibold shadow-xs border border-border/40'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              Both
-            </button>
-          </div>
-        </div>
-
-        {/* Shape Presets */}
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center justify-between">
-            <label className="text-[9px] font-medium text-muted-foreground">Shape & Direction</label>
-            <button
-              type="button"
-              onClick={handleInvertMatrix}
-              className="text-[9px] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-0.5"
-              title="Invert matrix"
-            >
-              <RotateCcw size={9} />
-              <span>Invert</span>
-            </button>
-          </div>
-          <div className="grid grid-cols-4 gap-0.5 bg-muted/60 p-0.5 rounded-md border border-border/50 w-full">
-            <button
-              type="button"
-              onClick={() => handlePresetSelect('circle')}
-              className={`py-0.5 rounded text-[10px] font-medium transition-colors text-center ${
-                shapePreset === 'circle'
-                  ? 'bg-background text-foreground font-semibold shadow-xs border border-border/40'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              Cross
-            </button>
-            <button
-              type="button"
-              onClick={() => handlePresetSelect('square')}
-              className={`py-0.5 rounded text-[10px] font-medium transition-colors text-center ${
-                shapePreset === 'square'
-                  ? 'bg-background text-foreground font-semibold shadow-xs border border-border/40'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              Square
-            </button>
-            <button
-              type="button"
-              onClick={() => handlePresetSelect('horizontal')}
-              className={`py-0.5 rounded text-[10px] font-medium transition-colors text-center ${
-                shapePreset === 'horizontal'
-                  ? 'bg-background text-foreground font-semibold shadow-xs border border-border/40'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              Horiz
-            </button>
-            <button
-              type="button"
-              onClick={() => handlePresetSelect('vertical')}
-              className={`py-0.5 rounded text-[10px] font-medium transition-colors text-center ${
-                shapePreset === 'vertical'
-                  ? 'bg-background text-foreground font-semibold shadow-xs border border-border/40'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              Vert
-            </button>
-          </div>
-
-          {/* 3x3 Matrix Grid */}
-          <div className="flex justify-center pt-1">
-            <div className="grid grid-cols-3 gap-1 bg-muted/40 p-1 rounded-md border border-border/50 w-24 h-24">
-              <button
-                type="button"
-                onClick={() => toggleDirection('nw')}
-                className={`rounded flex items-center justify-center transition-colors ${
-                  matrix.nw
-                    ? 'bg-primary text-primary-foreground font-bold shadow-xs'
-                    : 'bg-background/80 text-muted-foreground/40 hover:bg-background hover:text-foreground border border-border/30'
-                }`}
-                title="North-West"
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4 text-xs">
+            {/* Placement */}
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[11px] font-medium text-muted-foreground">Placement</span>
+              <SegmentedControl<OutlinePlacement>
+                value={placement}
+                onValueChange={(next) => next && setPlacement(next as OutlinePlacement)}
+                aria-label="Outline placement"
               >
-                <ArrowUpLeft size={11} />
-              </button>
-              <button
-                type="button"
-                onClick={() => toggleDirection('n')}
-                className={`rounded flex items-center justify-center transition-colors ${
-                  matrix.n
-                    ? 'bg-primary text-primary-foreground font-bold shadow-xs'
-                    : 'bg-background/80 text-muted-foreground/40 hover:bg-background hover:text-foreground border border-border/30'
-                }`}
-                title="North"
-              >
-                <ArrowUp size={11} />
-              </button>
-              <button
-                type="button"
-                onClick={() => toggleDirection('ne')}
-                className={`rounded flex items-center justify-center transition-colors ${
-                  matrix.ne
-                    ? 'bg-primary text-primary-foreground font-bold shadow-xs'
-                    : 'bg-background/80 text-muted-foreground/40 hover:bg-background hover:text-foreground border border-border/30'
-                }`}
-                title="North-East"
-              >
-                <ArrowUpRight size={11} />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => toggleDirection('w')}
-                className={`rounded flex items-center justify-center transition-colors ${
-                  matrix.w
-                    ? 'bg-primary text-primary-foreground font-bold shadow-xs'
-                    : 'bg-background/80 text-muted-foreground/40 hover:bg-background hover:text-foreground border border-border/30'
-                }`}
-                title="West"
-              >
-                <ArrowLeft size={11} />
-              </button>
-              <div className="rounded bg-muted/80 flex items-center justify-center border border-border/30 pointer-events-none">
-                <div className="w-1.5 h-1.5 rounded-full bg-foreground/40" />
-              </div>
-              <button
-                type="button"
-                onClick={() => toggleDirection('e')}
-                className={`rounded flex items-center justify-center transition-colors ${
-                  matrix.e
-                    ? 'bg-primary text-primary-foreground font-bold shadow-xs'
-                    : 'bg-background/80 text-muted-foreground/40 hover:bg-background hover:text-foreground border border-border/30'
-                }`}
-                title="East"
-              >
-                <ArrowRight size={11} />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => toggleDirection('sw')}
-                className={`rounded flex items-center justify-center transition-colors ${
-                  matrix.sw
-                    ? 'bg-primary text-primary-foreground font-bold shadow-xs'
-                    : 'bg-background/80 text-muted-foreground/40 hover:bg-background hover:text-foreground border border-border/30'
-                }`}
-                title="South-West"
-              >
-                <ArrowDownLeft size={11} />
-              </button>
-              <button
-                type="button"
-                onClick={() => toggleDirection('s')}
-                className={`rounded flex items-center justify-center transition-colors ${
-                  matrix.s
-                    ? 'bg-primary text-primary-foreground font-bold shadow-xs'
-                    : 'bg-background/80 text-muted-foreground/40 hover:bg-background hover:text-foreground border border-border/30'
-                }`}
-                title="South"
-              >
-                <ArrowDown size={11} />
-              </button>
-              <button
-                type="button"
-                onClick={() => toggleDirection('se')}
-                className={`rounded flex items-center justify-center transition-colors ${
-                  matrix.se
-                    ? 'bg-primary text-primary-foreground font-bold shadow-xs'
-                    : 'bg-background/80 text-muted-foreground/40 hover:bg-background hover:text-foreground border border-border/30'
-                }`}
-                title="South-East"
-              >
-                <ArrowDownRight size={11} />
-              </button>
+                <SegmentedControlIndicator />
+                <SegmentedControlItem value="outside">Outside</SegmentedControlItem>
+                <SegmentedControlItem value="inside">Inside</SegmentedControlItem>
+                <SegmentedControlItem value="both">Both</SegmentedControlItem>
+              </SegmentedControl>
             </div>
-          </div>
-        </div>
 
-        {/* Thickness */}
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center justify-between">
-            <label className="text-[9px] font-medium text-muted-foreground">Thickness</label>
-            <span className="text-[10px] font-mono text-muted-foreground">{thickness}px</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <input
-              type="range"
-              min="1"
-              max="8"
-              step="1"
-              value={thickness}
-              onChange={(e) => setThickness(parseInt(e.target.value) || 1)}
-              className="flex-1 accent-primary h-1 bg-muted rounded cursor-pointer"
-            />
-            <input
-              type="number"
-              min="1"
-              max="8"
-              value={thickness}
-              onChange={(e) => setThickness(Math.max(1, Math.min(8, parseInt(e.target.value) || 1)))}
-              className="w-11 bg-background border border-border rounded-md px-1 py-0.5 text-xs font-mono font-medium text-foreground text-center outline-none focus:ring-1 focus:ring-primary focus:border-primary"
-            />
-          </div>
-        </div>
-
-        {/* Color */}
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center justify-between">
-            <label className="text-[9px] font-medium text-muted-foreground">Color</label>
-            <button
-              type="button"
-              onClick={() => setOutlineColor(state.primaryColor)}
-              className="text-[9px] text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Use Active
-            </button>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <div className="flex items-center gap-1 flex-wrap flex-1">
-              {paletteSwatches.map((c, i) => (
+            {/* Shape & Direction */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-medium text-muted-foreground">
+                  Shape & Direction
+                </span>
                 <button
-                  key={`${c}-${i}`}
                   type="button"
-                  onClick={() => setOutlineColor(c)}
-                  className={`w-4 h-4 rounded-full border transition-transform cursor-pointer shrink-0 ${
-                    outlineColor.toLowerCase() === c.toLowerCase()
-                      ? 'ring-2 ring-primary ring-offset-1 ring-offset-popover scale-110 border-white'
-                      : 'border-black/10 dark:border-white/10 hover:scale-105'
-                  }`}
-                  style={{ backgroundColor: c }}
-                  title={c}
+                  onClick={handleInvertMatrix}
+                  className="flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <RotateCcw size={10} />
+                  <span>Invert</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-4 gap-1 rounded-md border border-border bg-background p-0.5">
+                {(
+                  [
+                    { id: 'circle', label: 'Cross' },
+                    { id: 'square', label: 'Square' },
+                    { id: 'horizontal', label: 'Horiz' },
+                    { id: 'vertical', label: 'Vert' },
+                  ] as const
+                ).map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => handlePresetSelect(preset.id)}
+                    className={cn(
+                      'h-6 rounded-sm text-[11px] font-medium transition-colors',
+                      shapePreset === preset.id
+                        ? 'border border-border-strong bg-accent text-foreground'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex justify-center pt-1">
+                <div className="grid h-24 w-24 grid-cols-3 gap-1 rounded-md border border-border bg-background p-1">
+                  {directions.map((d) => (
+                    <button
+                      key={d.key}
+                      type="button"
+                      aria-label={d.label}
+                      aria-pressed={matrix[d.key]}
+                      onClick={() => toggleDirection(d.key)}
+                      className={cn(
+                        'flex items-center justify-center rounded-sm transition-colors',
+                        matrix[d.key]
+                          ? 'bg-primary text-primary-foreground'
+                          : 'border border-border bg-card text-muted-foreground hover:text-foreground'
+                      )}
+                    >
+                      {d.icon}
+                    </button>
+                  ))}
+                  <div className="pointer-events-none flex items-center justify-center rounded-sm border border-border bg-muted">
+                    <span className="h-1.5 w-1.5 rounded-full bg-foreground/50" />
+                  </div>
+                  {directionsRight.map((d) => (
+                    <button
+                      key={d.key}
+                      type="button"
+                      aria-label={d.label}
+                      aria-pressed={matrix[d.key]}
+                      onClick={() => toggleDirection(d.key)}
+                      className={cn(
+                        'flex items-center justify-center rounded-sm transition-colors',
+                        matrix[d.key]
+                          ? 'bg-primary text-primary-foreground'
+                          : 'border border-border bg-card text-muted-foreground hover:text-foreground'
+                      )}
+                    >
+                      {d.icon}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Thickness */}
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-medium text-muted-foreground">Thickness</span>
+                <span className="font-mono text-[11px] text-foreground tabular-nums">
+                  {thickness} px
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <CustomSlider
+                  min={1}
+                  max={8}
+                  step={1}
+                  value={thickness}
+                  onValueChange={setThickness}
+                  aria-label="Outline thickness"
+                  className="flex-1"
                 />
-              ))}
-              <label 
-                className="w-4 h-4 rounded-full border border-dashed border-border hover:border-foreground flex items-center justify-center cursor-pointer transition-colors relative overflow-hidden shrink-0" 
-                title="Custom color"
-              >
-                <input
-                  type="color"
+                <Input
+                  type="number"
+                  min={1}
+                  max={8}
+                  value={thickness}
+                  aria-label="Thickness pixels"
+                  onChange={(e) =>
+                    setThickness(Math.max(1, Math.min(8, parseInt(e.target.value, 10) || 1)))
+                  }
+                  className="h-7 w-12 px-1 text-center font-mono tabular-nums"
+                />
+              </div>
+            </div>
+
+            {/* Color */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-medium text-muted-foreground">Color</span>
+                <button
+                  type="button"
+                  onClick={() => setOutlineColor(state.primaryColor)}
+                  className="text-[11px] text-primary hover:underline"
+                >
+                  Use Active
+                </button>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="flex flex-1 flex-wrap items-center gap-1">
+                  {paletteSwatches.map((c, i) => (
+                    <button
+                      key={`${c}-${i}`}
+                      type="button"
+                      aria-label={`Color ${c}`}
+                      onClick={() => setOutlineColor(c)}
+                      className={cn(
+                        'h-4 w-4 shrink-0 rounded-full border transition-transform',
+                        outlineColor.toLowerCase() === c.toLowerCase()
+                          ? 'scale-110 border-foreground ring-2 ring-primary ring-offset-1 ring-offset-card'
+                          : 'border-border-strong hover:scale-105'
+                      )}
+                      style={{ backgroundColor: c }}
+                    />
+                  ))}
+                  <label
+                    className="relative flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-full border border-dashed border-border-strong text-[11px] text-muted-foreground hover:border-foreground"
+                    title="Custom color"
+                  >
+                    <input
+                      type="color"
+                      value={outlineColor}
+                      onChange={(e) => setOutlineColor(e.target.value)}
+                      aria-label="Custom outline color"
+                      className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                    />
+                    +
+                  </label>
+                </div>
+                <Input
+                  type="text"
                   value={outlineColor}
+                  aria-label="Outline hex color"
                   onChange={(e) => setOutlineColor(e.target.value)}
-                  className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                  className="h-7 w-20 shrink-0 px-1.5 text-center font-mono text-[11px] uppercase"
                 />
-                <span className="text-[9px] text-muted-foreground font-bold leading-none">+</span>
-              </label>
+              </div>
             </div>
-            <input
-              type="text"
-              value={outlineColor}
-              onChange={(e) => setOutlineColor(e.target.value)}
-              className="w-16 bg-background border border-border rounded-md px-1 py-0.5 text-[11px] font-mono uppercase text-foreground text-center outline-none focus:ring-1 focus:ring-primary focus:border-primary shrink-0"
-            />
-          </div>
-        </div>
 
-        {/* Background Condition */}
-        <div className="flex items-center justify-between gap-2">
-          <label className="text-[9px] font-medium text-muted-foreground">Background</label>
-          <div className="flex items-center gap-1.5">
-            <select
-              value={bgMode}
-              onChange={(e) => setBgMode(e.target.value as any)}
-              className="bg-background border border-border rounded-md px-1.5 py-0.5 text-[11px] text-foreground outline-none focus:ring-1 focus:ring-primary focus:border-primary"
-            >
-              <option value="transparent">Transparent</option>
-              <option value="color">Color</option>
-            </select>
-            {bgMode === 'color' && (
-              <label className="w-4 h-4 rounded border border-border cursor-pointer relative overflow-hidden shrink-0" title="Background color">
-                <input
-                  type="color"
-                  value={bgColor}
-                  onChange={(e) => setBgColor(e.target.value)}
-                  className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+            {/* Background */}
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-medium text-muted-foreground">Background</span>
+              <div className="flex items-center gap-1.5">
+                <StudioSelect<'transparent' | 'color'>
+                  value={bgMode}
+                  options={BG_MODE_OPTIONS}
+                  onValueChange={(v) => setBgMode(v)}
+                  className="h-7 w-28 text-[11px]"
+                  aria-label="Outline background mode"
                 />
-                <div className="w-full h-full" style={{ backgroundColor: bgColor }} />
-              </label>
+                {bgMode === 'color' && (
+                  <label className="relative h-7 w-7 shrink-0 cursor-pointer overflow-hidden rounded-md border border-border-strong">
+                    <input
+                      type="color"
+                      value={bgColor}
+                      onChange={(e) => setBgColor(e.target.value)}
+                      aria-label="Outline background color"
+                      className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                    />
+                    <span className="block h-full w-full" style={{ backgroundColor: bgColor }} />
+                  </label>
+                )}
+              </div>
+            </div>
+
+            {/* Target Layer */}
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[11px] font-medium text-muted-foreground">Target Layer</span>
+              <SegmentedControl<'active' | 'new'>
+                value={targetLayer}
+                onValueChange={(next) => next && setTargetLayer(next as 'active' | 'new')}
+                aria-label="Target layer"
+              >
+                <SegmentedControlIndicator />
+                <SegmentedControlItem value="active">Active Layer</SegmentedControlItem>
+                <SegmentedControlItem value="new">New Layer</SegmentedControlItem>
+              </SegmentedControl>
+            </div>
+
+            {/* Target Frames */}
+            {isAnimated && (
+              <div className="flex flex-col gap-1.5">
+                <span className="text-[11px] font-medium text-muted-foreground">Target Frames</span>
+                <SegmentedControl<'current' | 'all'>
+                  value={targetFrames}
+                  onValueChange={(next) => next && setTargetFrames(next as 'current' | 'all')}
+                  aria-label="Target frames"
+                >
+                  <SegmentedControlIndicator />
+                  <SegmentedControlItem value="current">Current Frame</SegmentedControlItem>
+                  <SegmentedControlItem value="all">All Frames</SegmentedControlItem>
+                </SegmentedControl>
+              </div>
             )}
-          </div>
-        </div>
 
-        {/* Target Layer */}
-        <div className="flex flex-col gap-1">
-          <label className="text-[9px] font-medium text-muted-foreground">Target Layer</label>
-          <div className="grid grid-cols-2 gap-0.5 bg-muted/60 p-0.5 rounded-md border border-border/50 w-full">
-            <button
-              type="button"
-              onClick={() => setTargetLayer('active')}
-              className={`py-1 rounded text-[11px] font-medium transition-colors ${
-                targetLayer === 'active'
-                  ? 'bg-background text-foreground font-semibold shadow-xs border border-border/40'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              Active Layer
-            </button>
-            <button
-              type="button"
-              onClick={() => setTargetLayer('new')}
-              className={`py-1 rounded text-[11px] font-medium transition-colors ${
-                targetLayer === 'new'
-                  ? 'bg-background text-foreground font-semibold shadow-xs border border-border/40'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              New Layer
-            </button>
-          </div>
-        </div>
+            {/* Options */}
+            <div className="flex flex-col gap-2 border-t border-border pt-2">
+              {hasSelection && (
+                <label className="flex cursor-pointer items-center gap-2 text-[11px] text-foreground select-none">
+                  <CustomCheckbox
+                    checked={limitToSelection}
+                    onCheckedChange={setLimitToSelection}
+                  />
+                  <span>Selected pixels only</span>
+                </label>
+              )}
 
-        {/* Target Frames (only if animated) */}
-        {isAnimated && (
-          <div className="flex flex-col gap-1">
-            <label className="text-[9px] font-medium text-muted-foreground">Target Frames</label>
-            <div className="grid grid-cols-2 gap-0.5 bg-muted/60 p-0.5 rounded-md border border-border/50 w-full">
-              <button
-                type="button"
-                onClick={() => setTargetFrames('current')}
-                className={`py-1 rounded text-[11px] font-medium transition-colors ${
-                  targetFrames === 'current'
-                    ? 'bg-background text-foreground font-semibold shadow-xs border border-border/40'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                Current Frame
-              </button>
-              <button
-                type="button"
-                onClick={() => setTargetFrames('all')}
-                className={`py-1 rounded text-[11px] font-medium transition-colors ${
-                  targetFrames === 'all'
-                    ? 'bg-background text-foreground font-semibold shadow-xs border border-border/40'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                All Frames
-              </button>
+              <div className="flex items-center justify-between">
+                <label className="flex cursor-pointer items-center gap-2 text-[11px] text-muted-foreground hover:text-foreground select-none">
+                  <CustomCheckbox checked={livePreview} onCheckedChange={setLivePreview} />
+                  <span>Live preview</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={handleReset}
+                  className="rounded-sm px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  Reset
+                </button>
+              </div>
             </div>
           </div>
-        )}
 
-        {/* Selection Scope Option */}
-        {hasSelection && (
-          <label className="flex items-center gap-1.5 text-[11px] text-foreground cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={limitToSelection}
-              onChange={(e) => setLimitToSelection(e.target.checked)}
-              className="w-3.5 h-3.5 rounded border-border text-primary accent-primary"
-            />
-            <span>Selected pixels only</span>
-          </label>
-        )}
-
-        {/* Live Preview Toggle & Reset */}
-        <div className="flex items-center justify-between pt-0.5">
-          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={livePreview}
-              onChange={(e) => setLivePreview(e.target.checked)}
-              className="w-3.5 h-3.5 rounded border-border text-primary accent-primary"
-            />
-            <span>Live preview</span>
-          </label>
-          <button
-            type="button"
-            onClick={handleReset}
-            className="text-[11px] text-muted-foreground hover:text-foreground transition-colors px-1 py-0.5 rounded"
-          >
-            Reset
-          </button>
-        </div>
-
-        {/* Footer Actions */}
-        <div className="flex items-center justify-end gap-1.5 pt-2 border-t border-border/60">
-          <button
-            type="button"
-            onClick={handleCancel}
-            className="px-2.5 py-1 rounded-md text-xs font-medium border border-border hover:bg-muted text-foreground transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            className="px-3 py-1 rounded-md text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shadow-xs"
-          >
-            Apply
-          </button>
-        </div>
-      </form>
-    </div>
+          <DialogFooter>
+            <button
+              type="button"
+              onClick={handleCancel}
+              className="h-7 rounded-md px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="h-7 rounded-md bg-primary px-3.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+            >
+              Apply
+            </button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 };
-
