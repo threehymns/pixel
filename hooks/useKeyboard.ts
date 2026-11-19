@@ -1,6 +1,6 @@
 
-import { useEffect } from 'react';
-import { Command, ProjectState, Position } from '../types';
+import { useEffect, useRef } from 'react';
+import { Command, ProjectState, Position, SelectionMode } from '../types';
 
 export function useKeyboard(
   commands: Command[], 
@@ -12,28 +12,40 @@ export function useKeyboard(
       handleMovePixels: (sel: Set<number>, offset: Position) => void;
   }
 ) {
+  const commandsRef = useRef(commands);
+  const stateRef = useRef(state);
+  const updateStateRef = useRef(updateState);
+  const projectActionsRef = useRef(projectActions);
+
+  commandsRef.current = commands;
+  stateRef.current = state;
+  updateStateRef.current = updateState;
+  projectActionsRef.current = projectActions;
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const curState = stateRef.current;
+      const curActions = projectActionsRef.current;
       const isInput = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
-      let key = e.key.toLowerCase();
+      const key = e.key.toLowerCase();
       
       // Batch Delete Support
       if (key === 'delete' || key === 'backspace') {
           if (isInput) return;
-          if (state.selectedLayerIds.length > 1) {
+          if (curState.selectedLayerIds.length > 1) {
               e.preventDefault();
-              projectActions.deleteSelectedLayers();
+              curActions.deleteSelectedLayers();
               return;
           }
-          if (state.selectedFrameIndices.length > 1) {
+          if (curState.selectedFrameIndices.length > 1) {
               e.preventDefault();
-              projectActions.deleteSelectedFrames();
+              curActions.deleteSelectedFrames();
               return;
           }
       }
 
       // Nudge Support for Move Tool
-      if (state.tool === 'move' && state.selection && !isInput) {
+      if (curState.tool === 'move' && curState.selection && !isInput) {
           if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) {
               e.preventDefault();
               const offset = { x: 0, y: 0 };
@@ -42,18 +54,12 @@ export function useKeyboard(
               if (key === 'arrowdown') offset.y = amount;
               if (key === 'arrowleft') offset.x = -amount;
               if (key === 'arrowright') offset.x = amount;
-              projectActions.handleMovePixels(state.selection, offset);
+              curActions.handleMovePixels(curState.selection, offset);
               return;
           }
       }
-
-      const modifiers: string[] = [];
-      if (e.ctrlKey) modifiers.push('Control');
-      if (e.metaKey) modifiers.push('Meta');
-      if (e.altKey) modifiers.push('Alt');
-      if (e.shiftKey) modifiers.push('Shift');
       
-      for (const cmd of commands) {
+      for (const cmd of commandsRef.current) {
           if (!cmd.keys) continue;
           
           const match = cmd.keys.some(k => {
@@ -61,7 +67,7 @@ export function useKeyboard(
              const mainKey = parts[parts.length - 1];
              const reqModifiers = parts.slice(0, parts.length - 1);
              
-             if (mainKey !== e.key.toLowerCase()) return false;
+             if (mainKey !== key) return false;
              
              const hasCtrl = reqModifiers.includes('control') || reqModifiers.includes('ctrl');
              const hasMeta = reqModifiers.includes('meta') || reqModifiers.includes('cmd');
@@ -86,15 +92,23 @@ export function useKeyboard(
           }
       }
 
-      // Selection Modes (Handled by handleKeyUp too)
-      if (e.shiftKey && e.ctrlKey) updateState({...state, selectionMode: 'intersect'});
-      else if (e.shiftKey && e.altKey) updateState({...state, selectionMode: 'subtract'});
-      else if (e.shiftKey) updateState({...state, selectionMode: 'add'});
+      // Selection Modes (Handled by handleKeyUp too) - only update on actual transition
+      let nextSelectionMode: SelectionMode | null = null;
+      if (e.shiftKey && e.ctrlKey) nextSelectionMode = 'intersect';
+      else if (e.shiftKey && e.altKey) nextSelectionMode = 'subtract';
+      else if (e.shiftKey) nextSelectionMode = 'add';
+
+      if (nextSelectionMode && curState.selectionMode !== nextSelectionMode) {
+        updateStateRef.current({ ...curState, selectionMode: nextSelectionMode });
+      }
     };
     
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.key === 'Shift' || e.key === 'Control' || e.key === 'Alt') {
-         updateState({...state, selectionMode: 'replace'});
+        const curState = stateRef.current;
+        if (curState.selectionMode !== 'replace') {
+          updateStateRef.current({ ...curState, selectionMode: 'replace' });
+        }
       }
     };
 
@@ -104,5 +118,5 @@ export function useKeyboard(
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [state, commands, updateState, projectActions]);
+  }, []);
 }

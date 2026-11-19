@@ -7,6 +7,7 @@ import {
   hexToRgb, getPackedColor, getMergedSelectionSegments, Segment, getSelectionBoundingBox, rotateSelectionPixels, scaleSelectionPixels,
   getLayerParentMap, isLayerVisible, getEffectiveLayerOpacity
 } from '../utils';
+import { setLiveZoom } from '../hooks/useCursorStore';
 
 const CURSOR_SVG = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M10 2H14V8H10V2ZM10 16H14V22H10V16ZM2 10H8V14H2V10ZM16 10H22V14H16V10ZM10 10H14V14H10V10Z" fill="white"/></svg>`;
 const CURSOR_URI = `data:image/svg+xml;utf8,${encodeURIComponent(CURSOR_SVG)}`;
@@ -147,6 +148,11 @@ export const Canvas: React.FC<CanvasProps> = ({
     if (!selectionSet || selectionSet.size === 0) return null;
     return getMergedSelectionSegments(selectionSet, state.width, state.height);
   }, [selectionSet, state.width, state.height]);
+
+  const selectionBoundingBox = useMemo(() => {
+    if (!selectionSet || selectionSet.size === 0) return null;
+    return getSelectionBoundingBox(selectionSet, state.width);
+  }, [selectionSet, state.width]);
   
   const callbacks = useRef({ onDrawStart, onDraw, onDrawEnd });
   useEffect(() => {
@@ -161,10 +167,15 @@ export const Canvas: React.FC<CanvasProps> = ({
   const panRef = useRef<Position>({ x: 0, y: 0 });
   const zoomRef = useRef(state.zoom);
 
-  // Performance refs: coordinate deduplication and palette cache
+  // Performance refs: coordinate deduplication, palette cache, and debounced zoom commit
   const lastReportedCoordsRef = useRef<Position | null>(null);
   const tileCanvasesRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   const paletteCacheRef = useRef<Map<number, { palette: string[]; buf: Uint32Array }>>(new Map());
+  const zoomCommitTimerRef = useRef<number | null>(null);
+  const lastCommittedZoomRef = useRef<number>(state.zoom);
+  const prevProjectIdRef = useRef<string>(state.id);
+  const onZoomRef = useRef(onZoom);
+  onZoomRef.current = onZoom;
   
   useEffect(() => {
     panRef.current = pan;
@@ -175,8 +186,47 @@ export const Canvas: React.FC<CanvasProps> = ({
   }, [localZoom]);
 
   useEffect(() => {
-    setLocalZoom(state.zoom);
-  }, [state.zoom]);
+    const projectChanged = prevProjectIdRef.current !== state.id;
+    prevProjectIdRef.current = state.id;
+    if (projectChanged || state.zoom !== lastCommittedZoomRef.current) {
+      if (zoomCommitTimerRef.current !== null) {
+        window.clearTimeout(zoomCommitTimerRef.current);
+        zoomCommitTimerRef.current = null;
+      }
+      setLiveZoom(null);
+      lastCommittedZoomRef.current = state.zoom;
+      zoomRef.current = state.zoom;
+      setLocalZoom(state.zoom);
+    } else if (zoomCommitTimerRef.current === null) {
+      zoomRef.current = state.zoom;
+      setLocalZoom(state.zoom);
+    }
+  }, [state.zoom, state.id]);
+
+  useEffect(() => {
+    return () => {
+      if (zoomCommitTimerRef.current !== null) {
+        window.clearTimeout(zoomCommitTimerRef.current);
+        zoomCommitTimerRef.current = null;
+      }
+      setLiveZoom(null);
+    };
+  }, []);
+
+  const scheduleZoomCommit = useCallback((newZoom: number) => {
+    zoomRef.current = newZoom;
+    setLocalZoom(newZoom);
+    setLiveZoom(newZoom);
+    if (zoomCommitTimerRef.current !== null) {
+      window.clearTimeout(zoomCommitTimerRef.current);
+    }
+    zoomCommitTimerRef.current = window.setTimeout(() => {
+      zoomCommitTimerRef.current = null;
+      lastCommittedZoomRef.current = newZoom;
+      onZoomRef.current(newZoom);
+      setLiveZoom(null);
+    }, 120);
+  }, []);
 
   const [startPos, setStartPos] = useState<Position | null>(null);
   const [polyPoints, setPolyPoints] = useState<Position[]>([]);
@@ -252,8 +302,8 @@ export const Canvas: React.FC<CanvasProps> = ({
     if (!coords) return;
     const { x, y } = coords;
 
-    if (state.tool === 'move' && state.selection) {
-        const box = getSelectionBoundingBox(state.selection, state.width);
+    if (state.tool === 'move' && state.selection && selectionBoundingBox) {
+        const box = selectionBoundingBox;
         
         // Rotation Handle Check
         const rotHandleX = box.x + box.w / 2;
@@ -537,17 +587,22 @@ export const Canvas: React.FC<CanvasProps> = ({
             const newZoom = Math.min(Math.max(currentZoom * Math.exp(-delta * ZOOM_SPEED), 0.1), 128);
             let newPanX = mx - (cx / currentZoom) * newZoom;
             let newPanY = my - (cy / currentZoom) * newZoom;
-            setPan({ x: newPanX, y: newPanY });
-            setLocalZoom(newZoom);
-            onZoom(newZoom);
+            const newPan = { x: newPanX, y: newPanY };
+            panRef.current = newPan;
+            setPan(newPan);
+            scheduleZoomCommit(newZoom);
         } else {
             // Pan logic
             const dX = e.deltaX * (e.deltaMode === 1 ? 33 : 1);
             const dY = e.deltaY * (e.deltaMode === 1 ? 33 : 1);
-            setPan(prev => ({ x: prev.x - dX, y: prev.y - dY }));
+            setPan(prev => {
+              const next = { x: prev.x - dX, y: prev.y - dY };
+              panRef.current = next;
+              return next;
+            });
         }
     });
-  }, [onZoom]);
+  }, [scheduleZoomCommit]);
 
   const handleTouchStart = useCallback((e: TouchEvent) => {
      // Cancel any pending draw trigger
@@ -611,9 +666,10 @@ export const Canvas: React.FC<CanvasProps> = ({
          const canvasY = my - startPan.y;
          let newPanX = mx - (canvasX / startZoom) * newZoom + dx;
          let newPanY = my - (canvasY / startZoom) * newZoom + dy;
-         setPan({ x: newPanX, y: newPanY });
-         setLocalZoom(newZoom);
-         onZoom(newZoom);
+         const newPan = { x: newPanX, y: newPanY };
+         panRef.current = newPan;
+         setPan(newPan);
+         scheduleZoomCommit(newZoom);
       } else if (e.touches.length === 1) {
           // Only move if we aren't waiting for a potential second finger
           if (!touchTimeoutRef.current) {
@@ -621,7 +677,7 @@ export const Canvas: React.FC<CanvasProps> = ({
              handlePointerMove(e.touches[0].clientX, e.touches[0].clientY, { shift: false, ctrl: false, alt: false, meta: false });
           }
       }
-  }, [onZoom, handlePointerMove]);
+  }, [scheduleZoomCommit, handlePointerMove]);
 
   const handleTouchEnd = useCallback((e: TouchEvent) => { 
     if (touchTimeoutRef.current) {
@@ -1004,25 +1060,27 @@ export const Canvas: React.FC<CanvasProps> = ({
 
       // Transformation Handles
       if (state.tool === 'move' && !isMoving) {
-          const box = isScaling && currentBox ? currentBox : getSelectionBoundingBox(selectionSet, state.width);
-          if (!isScaling) {
-              const hx = (box.x + box.w / 2) * z;
-              const hy = (box.y - 1.5) * z;
-              ctx.setLineDash([]); ctx.strokeStyle = 'white'; ctx.beginPath(); ctx.moveTo(hx, box.y * z); ctx.lineTo(hx, hy); ctx.stroke();
-              ctx.fillStyle = isRotating ? 'white' : 'rgba(255,255,255,0.8)';
-              ctx.beginPath(); ctx.arc(hx, hy, 4, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = 'black'; ctx.stroke();
+          const box = isScaling && currentBox ? currentBox : selectionBoundingBox;
+          if (box) {
+            if (!isScaling) {
+                const hx = (box.x + box.w / 2) * z;
+                const hy = (box.y - 1.5) * z;
+                ctx.setLineDash([]); ctx.strokeStyle = 'white'; ctx.beginPath(); ctx.moveTo(hx, box.y * z); ctx.lineTo(hx, hy); ctx.stroke();
+                ctx.fillStyle = isRotating ? 'white' : 'rgba(255,255,255,0.8)';
+                ctx.beginPath(); ctx.arc(hx, hy, 4, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = 'black'; ctx.stroke();
+            }
+            const hs = 4;
+            const handles = [
+                {x: box.x, y: box.y}, {x: box.x + box.w/2, y: box.y}, {x: box.x + box.w, y: box.y},
+                {x: box.x + box.w, y: box.y + box.h/2}, {x: box.x + box.w, y: box.y + box.h},
+                {x: box.x + box.w/2, y: box.y + box.h}, {x: box.x, y: box.y + box.h}, {x: box.x, y: box.y + box.h/2}
+            ];
+            ctx.fillStyle = 'white'; ctx.strokeStyle = 'black'; ctx.setLineDash([]);
+            handles.forEach(h => {
+                ctx.fillRect(h.x * z - hs, h.y * z - hs, hs*2, hs*2);
+                ctx.strokeRect(h.x * z - hs, h.y * z - hs, hs*2, hs*2);
+            });
           }
-          const hs = 4;
-          const handles = [
-              {x: box.x, y: box.y}, {x: box.x + box.w/2, y: box.y}, {x: box.x + box.w, y: box.y},
-              {x: box.x + box.w, y: box.y + box.h/2}, {x: box.x + box.w, y: box.y + box.h},
-              {x: box.x + box.w/2, y: box.y + box.h}, {x: box.x, y: box.y + box.h}, {x: box.x, y: box.y + box.h/2}
-          ];
-          ctx.fillStyle = 'white'; ctx.strokeStyle = 'black'; ctx.setLineDash([]);
-          handles.forEach(h => {
-              ctx.fillRect(h.x * z - hs, h.y * z - hs, hs*2, hs*2);
-              ctx.strokeRect(h.x * z - hs, h.y * z - hs, hs*2, hs*2);
-          });
       }
       ctx.restore();
     }
@@ -1109,7 +1167,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
 
     ctx.restore();
-  }, [containerSize, state, selectionSet, selectionBorderSegments, localZoom, pan, cursorPos, startPos, polyPoints, isMoving, isDrawing, moveOffset, floatingPixels, isRotating, rotationAngle, rotationPivot, isScaling, currentBox]);
+  }, [containerSize, state.showGrid, state.width, state.height, state.symmetry.x, state.symmetry.y, state.tool, state.brushSize, state.brushShape, selectionSet, selectionBorderSegments, selectionBoundingBox, localZoom, pan, cursorPos, startPos, polyPoints, isMoving, isDrawing, moveOffset, isRotating, rotationAngle, rotationPivot, isScaling, currentBox]);
 
   const renderUIRef = useRef(renderUI);
   useLayoutEffect(() => {
@@ -1194,8 +1252,9 @@ export const Canvas: React.FC<CanvasProps> = ({
               ref={(el) => {
                   const key = `${tx}_${ty}`;
                   if (el) {
+                    const prevEl = tileCanvasesRef.current.get(key);
                     tileCanvasesRef.current.set(key, el);
-                    if (artCanvasRef.current) {
+                    if (prevEl !== el && artCanvasRef.current) {
                       const ctx = el.getContext('2d');
                       if (ctx) {
                         ctx.clearRect(0, 0, state.width, state.height);

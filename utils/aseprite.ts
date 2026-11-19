@@ -1295,6 +1295,25 @@ export function encodeAseprite(state: ProjectState): Uint8Array {
   const hasUuids = layers.some(l => l.uuid);
   const headerFlags = 3 | (hasUuids ? 4 : 0);
 
+  const asepriteLayers = convertAppOrderToAsepriteChunkOrder(layers);
+  const asepriteLayerById = new Map<string, Layer>();
+  for (let i = 0; i < asepriteLayers.length; i++) {
+    asepriteLayerById.set(asepriteLayers[i].id, asepriteLayers[i]);
+  }
+
+  interface CelSignatureEntry {
+    frameIdx: number;
+    px: PixelGrid;
+    len: number;
+    nonNullCount: number;
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+  }
+  const seenGridByLayer: Map<PixelGrid, number>[] = asepriteLayers.map(() => new Map());
+  const celBucketsByLayer: Map<number, CelSignatureEntry[]>[] = asepriteLayers.map(() => new Map());
+
   const frameBuffers: Uint8Array[] = [];
 
   for (let frameIdx = 0; frameIdx < numFrames; frameIdx++) {
@@ -1369,7 +1388,6 @@ export function encodeAseprite(state: ProjectState): Uint8Array {
       }
 
       // 4. Layer Chunks (0x2004)
-      const asepriteLayers = convertAppOrderToAsepriteChunkOrder(layers);
       for (let lIdx = 0; lIdx < asepriteLayers.length; lIdx++) {
         const layer = asepriteLayers[lIdx];
         const lWriter = new BinaryWriter(256);
@@ -1394,11 +1412,11 @@ export function encodeAseprite(state: ProjectState): Uint8Array {
         
         let computedChildLevel = layer.childLevel ?? 0;
         if (layer.parentId) {
-          let p = asepriteLayers.find(l => l.id === layer.parentId);
+          let p = asepriteLayerById.get(layer.parentId);
           let depth = 0;
           while (p) {
             depth++;
-            p = asepriteLayers.find(l => l.id === p?.parentId);
+            p = p.parentId ? asepriteLayerById.get(p.parentId) : undefined;
           }
           computedChildLevel = depth;
         }
@@ -1594,20 +1612,104 @@ export function encodeAseprite(state: ProjectState): Uint8Array {
     }
 
     // --- Cel Chunks for this frame ---
-    const asepriteLayers = convertAppOrderToAsepriteChunkOrder(layers);
     for (let lIdx = 0; lIdx < asepriteLayers.length; lIdx++) {
       const layer = asepriteLayers[lIdx];
       const px = frame.layerData[layer.id];
       if (!px) continue;
 
+      const seenGrids = seenGridByLayer[lIdx];
+      const celBuckets = celBucketsByLayer[lIdx];
+
       let linkedFrameIdx = -1;
-      if (frameIdx > 0) {
-        for (let pf = 0; pf < frameIdx; pf++) {
-          const prevPx = frames[pf].layerData[layer.id];
-          if (prevPx && isPixelGridEqual(px, prevPx)) {
-            linkedFrameIdx = pf;
-            break;
+      let minX = width, minY = height, maxX = -1, maxY = -1;
+      let hasPixels = false;
+
+      // O(1) fast path when a frame shares the exact same PixelGrid array reference
+      const refMatch = seenGrids.get(px);
+      if (refMatch !== undefined) {
+        linkedFrameIdx = refMatch;
+      } else {
+        // Single pass over pixels to compute both content signature hash and tight bounding box
+        const pxLen = px.length;
+        let nonNullCount = 0;
+        let hash = (2166136261 ^ pxLen) | 0;
+
+        for (let y = 0; y < height; y++) {
+          const rowOffset = y * width;
+          if (rowOffset >= pxLen) break;
+          const rowEnd = Math.min(width, pxLen - rowOffset);
+          for (let x = 0; x < rowEnd; x++) {
+            const i = rowOffset + x;
+            const val = px[i];
+            if (val === null) continue;
+            if (val === undefined) {
+              hash = Math.imul(hash ^ Math.imul(i + 1, 0x9e3779b1), 16777619);
+              continue;
+            }
+            nonNullCount++;
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+            let vHash: number;
+            if (typeof val === 'number') {
+              vHash = (val + 1) | 0;
+            } else {
+              vHash = 2166136261;
+              for (let c = 0; c < val.length; c++) {
+                vHash = Math.imul(vHash ^ val.charCodeAt(c), 16777619);
+              }
+            }
+            hash = Math.imul(hash ^ Math.imul(i + 1, 0x9e3779b1) ^ vHash, 16777619);
           }
+        }
+
+        for (let i = width * height; i < pxLen; i++) {
+          const val = px[i];
+          if (val === null) continue;
+          hash = Math.imul(hash ^ Math.imul(i + 1, 0x9e3779b1), 16777619);
+        }
+
+        hasPixels = nonNullCount > 0;
+
+        const bucket = celBuckets.get(hash);
+        if (bucket) {
+          for (let b = 0; b < bucket.length; b++) {
+            const entry = bucket[b];
+            if (
+              entry.len === pxLen &&
+              entry.nonNullCount === nonNullCount &&
+              entry.minX === minX &&
+              entry.maxX === maxX &&
+              entry.minY === minY &&
+              entry.maxY === maxY &&
+              isPixelGridEqual(px, entry.px)
+            ) {
+              linkedFrameIdx = entry.frameIdx;
+              break;
+            }
+          }
+        }
+
+        if (linkedFrameIdx >= 0) {
+          seenGrids.set(px, linkedFrameIdx);
+        } else {
+          const entry: CelSignatureEntry = {
+            frameIdx,
+            px,
+            len: pxLen,
+            nonNullCount,
+            minX,
+            maxX,
+            minY,
+            maxY,
+          };
+          if (bucket) {
+            bucket.push(entry);
+          } else {
+            celBuckets.set(hash, [entry]);
+          }
+          seenGrids.set(px, frameIdx);
         }
       }
 
@@ -1629,22 +1731,6 @@ export function encodeAseprite(state: ProjectState): Uint8Array {
         frameChunksWriter.writeBytes(celBytes);
         numChunksInFrame++;
       } else {
-        let minX = width, minY = height, maxX = -1, maxY = -1;
-        let hasPixels = false;
-
-        for (let y = 0; y < height; y++) {
-          for (let x = 0; x < width; x++) {
-            const val = px[y * width + x];
-            if (val !== null && val !== undefined) {
-              if (x < minX) minX = x;
-              if (x > maxX) maxX = x;
-              if (y < minY) minY = y;
-              if (y > maxY) maxY = y;
-              hasPixels = true;
-            }
-          }
-        }
-
         if (hasPixels) {
           const celW = maxX - minX + 1;
           const celH = maxY - minY + 1;
@@ -1763,6 +1849,7 @@ export function encodeAseprite(state: ProjectState): Uint8Array {
 }
 
 function isPixelGridEqual(a: PixelGrid, b: PixelGrid): boolean {
+  if (a === b) return true;
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
     if (a[i] !== b[i]) return false;

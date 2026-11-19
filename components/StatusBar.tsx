@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { ProjectState, Position } from '../types';
 import { SELECTION_TOOLS } from '../constants';
+import { useCursorMousePos, useCursorDragStartPos, useLiveZoom } from '../hooks/useCursorStore';
 import {
   MousePointer2,
   Layers,
@@ -14,20 +15,26 @@ import {
 interface StatusBarProps {
   state: ProjectState;
   isHome: boolean;
-  mousePos: Position | null;
-  dragStartPos: Position | null;
+  mousePos?: Position | null;
+  dragStartPos?: Position | null;
   statusMessage: { text: string; type: 'info' | 'error' | 'success' };
   selectionSize: { w: number; h: number } | null;
 }
 
-export const StatusBar: React.FC<StatusBarProps> = ({
+export const StatusBar: React.FC<StatusBarProps> = React.memo(({
   state,
   isHome,
-  mousePos,
-  dragStartPos,
+  mousePos: mousePosProp,
+  dragStartPos: dragStartPosProp,
   statusMessage,
   selectionSize,
 }) => {
+  const storeMousePos = useCursorMousePos();
+  const storeDragStartPos = useCursorDragStartPos();
+  const liveZoom = useLiveZoom();
+  const mousePos = mousePosProp !== undefined ? mousePosProp : storeMousePos;
+  const dragStartPos = dragStartPosProp !== undefined ? dragStartPosProp : storeDragStartPos;
+
   const dragInfo = useMemo(() => {
     if (!dragStartPos || !mousePos) return null;
     const dx = mousePos.x - dragStartPos.x;
@@ -265,7 +272,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
 
         <div className="flex w-12 items-center justify-end gap-1 font-mono text-foreground">
           <ZoomIn size={11} className="text-muted-foreground" />
-          <span>{Math.round(state.zoom * 100)}%</span>
+          <span>{Math.round((liveZoom ?? state.zoom) * 100)}%</span>
         </div>
 
         <div className="h-3 w-px bg-border" />
@@ -279,4 +286,4 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       </div>
     </div>
   );
-};
+});

@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { ProjectState, Layer, LayerBlendMode } from '../types';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { ProjectState, Layer, LayerBlendMode, Frame } from '../types';
 import {
   Eye,
   EyeOff,
@@ -23,7 +23,7 @@ import {
   Tag,
 } from './Icons';
 import {
-  hexToRgb,
+  getPackedColor,
   getLayerParentMap,
   isLayerVisible,
   getGroupChildren,
@@ -89,6 +89,7 @@ interface LayerThumbnailProps {
 const LayerThumbnail = React.memo<LayerThumbnailProps>(({ pixels, palette, width, height }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const tempCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const imgDataRef = useRef<{ width: number; height: number; imageData: ImageData; data32: Uint32Array } | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -110,37 +111,39 @@ const LayerThumbnail = React.memo<LayerThumbnailProps>(({ pixels, palette, width
     const tempCtx = tempCanvas.getContext('2d');
     if (!tempCtx) return;
 
-    const imgData = tempCtx.createImageData(width, height);
-    const data32 = new Uint32Array(imgData.data.buffer);
+    if (!imgDataRef.current || imgDataRef.current.width !== width || imgDataRef.current.height !== height) {
+      const imageData = tempCtx.createImageData(width, height);
+      imgDataRef.current = {
+        width,
+        height,
+        imageData,
+        data32: new Uint32Array(imageData.data.buffer),
+      };
+    } else {
+      imgDataRef.current.data32.fill(0);
+    }
 
-    const paletteUint32 = new Uint32Array(palette.length);
-    for (let p = 0; p < palette.length; p++) {
+    const { imageData, data32 } = imgDataRef.current;
+    const palLen = palette.length;
+    const paletteUint32 = new Uint32Array(palLen);
+    for (let p = 0; p < palLen; p++) {
       if (palette[p]) {
-        const [r, g, b] = hexToRgb(palette[p]);
-        paletteUint32[p] = (255 << 24) | (b << 16) | (g << 8) | r;
+        paletteUint32[p] = getPackedColor(palette[p], 255);
       }
     }
-    const hexCache = new Map<string, number>();
 
-    for (let i = 0; i < pixels.length; i++) {
+    const len = Math.min(pixels.length, width * height);
+    for (let i = 0; i < len; i++) {
       const val = pixels[i];
       if (val === null || val === undefined) continue;
-      let packed: number;
       if (typeof val === 'number') {
-        packed = paletteUint32[val];
+        if (val >= 0 && val < palLen) data32[i] = paletteUint32[val];
       } else {
-        let cached = hexCache.get(val);
-        if (cached === undefined) {
-          const [r, g, b] = hexToRgb(val);
-          cached = (255 << 24) | (b << 16) | (g << 8) | r;
-          hexCache.set(val, cached);
-        }
-        packed = cached;
+        data32[i] = getPackedColor(val, 255);
       }
-      if (packed) data32[i] = packed;
     }
 
-    tempCtx.putImageData(imgData, 0, 0);
+    tempCtx.putImageData(imageData, 0, 0);
     ctx.imageSmoothingEnabled = false;
 
     const scale = Math.min(canvas.width / width, canvas.height / height);
@@ -161,12 +164,19 @@ const LayerThumbnail = React.memo<LayerThumbnailProps>(({ pixels, palette, width
 
 interface GroupThumbnailProps {
   groupId: string;
-  state: ProjectState;
+  layers: Layer[];
+  activeFrame: Frame | undefined;
+  palette: string[];
+  width: number;
+  height: number;
   collapsed: boolean;
 }
 
-const GroupThumbnail: React.FC<GroupThumbnailProps> = ({ groupId, state, collapsed }) => {
+const GroupThumbnail = React.memo<GroupThumbnailProps>(({ groupId, layers, activeFrame, palette, width, height, collapsed }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const tempCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const layerCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const imgDataRef = useRef<{ width: number; height: number; imageData: ImageData; data32: Uint32Array } | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -176,55 +186,80 @@ const GroupThumbnail: React.FC<GroupThumbnailProps> = ({ groupId, state, collaps
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    const children = getGroupChildren(groupId, state.layers).filter((l) => l.type !== 'group');
-    if (children.length === 0) return;
+    const children = getGroupChildren(groupId, layers).filter((l) => l.type !== 'group');
+    if (children.length === 0 || !activeFrame) return;
 
-    const activeFrame = state.frames[state.activeFrameIndex];
-    if (!activeFrame) return;
-
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = state.width;
-    tempCanvas.height = state.height;
+    if (!tempCanvasRef.current) tempCanvasRef.current = document.createElement('canvas');
+    const tempCanvas = tempCanvasRef.current;
+    if (tempCanvas.width !== width || tempCanvas.height !== height) {
+      tempCanvas.width = width;
+      tempCanvas.height = height;
+    }
     const tempCtx = tempCanvas.getContext('2d');
     if (!tempCtx) return;
+    tempCtx.clearRect(0, 0, width, height);
+
+    if (!layerCanvasRef.current) layerCanvasRef.current = document.createElement('canvas');
+    const layerCanvas = layerCanvasRef.current;
+    if (layerCanvas.width !== width || layerCanvas.height !== height) {
+      layerCanvas.width = width;
+      layerCanvas.height = height;
+    }
+    const lCtx = layerCanvas.getContext('2d');
+    if (!lCtx) return;
+
+    if (!imgDataRef.current || imgDataRef.current.width !== width || imgDataRef.current.height !== height) {
+      const imageData = lCtx.createImageData(width, height);
+      imgDataRef.current = {
+        width,
+        height,
+        imageData,
+        data32: new Uint32Array(imageData.data.buffer),
+      };
+    }
+
+    const { imageData, data32 } = imgDataRef.current;
+    const palLen = palette.length;
+    const paletteUint32 = new Uint32Array(palLen);
+    for (let p = 0; p < palLen; p++) {
+      if (palette[p]) {
+        paletteUint32[p] = getPackedColor(palette[p], 255);
+      }
+    }
+    const totalPixels = width * height;
 
     children.forEach((child) => {
       if (!child.visible) return;
       const pixels = activeFrame.layerData[child.id];
       if (!pixels) return;
 
-      const imgData = tempCtx.createImageData(state.width, state.height);
-      const data32 = new Uint32Array(imgData.data.buffer);
-
-      for (let i = 0; i < pixels.length; i++) {
+      data32.fill(0);
+      const len = Math.min(pixels.length, totalPixels);
+      for (let i = 0; i < len; i++) {
         const val = pixels[i];
         if (val === null || val === undefined) continue;
-        const color = typeof val === 'number' ? state.palette[val] : val;
-        if (!color) continue;
-        const [r, g, b] = hexToRgb(color);
-        data32[i] = (255 << 24) | (b << 16) | (g << 8) | r;
+        if (typeof val === 'number') {
+          if (val >= 0 && val < palLen) data32[i] = paletteUint32[val];
+        } else {
+          data32[i] = getPackedColor(val, 255);
+        }
       }
 
-      const layerCanvas = document.createElement('canvas');
-      layerCanvas.width = state.width;
-      layerCanvas.height = state.height;
-      const lCtx = layerCanvas.getContext('2d');
-      if (lCtx) {
-        lCtx.putImageData(imgData, 0, 0);
-        tempCtx.globalAlpha = (child.opacity ?? 100) / 100;
-        tempCtx.drawImage(layerCanvas, 0, 0);
-      }
+      lCtx.putImageData(imageData, 0, 0);
+      tempCtx.globalAlpha = (child.opacity ?? 100) / 100;
+      tempCtx.drawImage(layerCanvas, 0, 0);
     });
+    tempCtx.globalAlpha = 1;
 
     ctx.imageSmoothingEnabled = false;
-    const scale = Math.min(28 / state.width, 28 / state.height);
-    const w = state.width * scale;
-    const h = state.height * scale;
+    const scale = Math.min(28 / width, 28 / height);
+    const w = width * scale;
+    const h = height * scale;
     const x = (28 - w) / 2;
     const y = (28 - h) / 2;
 
-    ctx.drawImage(tempCanvas, 0, 0, state.width, state.height, x, y, w, h);
-  }, [groupId, state]);
+    ctx.drawImage(tempCanvas, 0, 0, width, height, x, y, w, h);
+  }, [groupId, layers, activeFrame, palette, width, height]);
 
   return (
     <div className="checkerboard-alpha relative flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-sm border border-primary/40">
@@ -234,7 +269,7 @@ const GroupThumbnail: React.FC<GroupThumbnailProps> = ({ groupId, state, collaps
       </div>
     </div>
   );
-};
+});
 
 interface LayersPanelProps {
   state: ProjectState;
@@ -267,7 +302,7 @@ interface DragState {
   position: 'before' | 'after' | 'inside' | 'outside' | 'root-bottom';
 }
 
-export const LayersPanel: React.FC<LayersPanelProps> = ({
+export const LayersPanel: React.FC<LayersPanelProps> = React.memo(({
   state,
   onSelectLayers,
   onUpdateLayer,
@@ -457,6 +492,40 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
 
   const propsLayer = layerPropertiesState?.layer ?? null;
   const propsAnchorEl = propsLayer ? (rowRefs.current.get(propsLayer.id) ?? null) : null;
+
+  const activeFrame = state.frames[state.activeFrameIndex];
+  const parentMap = useMemo(() => getLayerParentMap(state.layers), [state.layers]);
+  const collapsedLayerIds = useMemo(() => {
+    const collapsed = new Set<string>();
+    const layerById = new Map(state.layers.map((l) => [l.id, l]));
+    for (const layer of state.layers) {
+      let curr: Layer | undefined = layer;
+      const visited = new Set<string>();
+      while (curr) {
+        if (visited.has(curr.id)) break;
+        visited.add(curr.id);
+        const parent =
+          parentMap.get(curr.id) || (curr.parentId ? layerById.get(curr.parentId) : undefined);
+        if (parent) {
+          if (parent.collapsed) {
+            collapsed.add(layer.id);
+            break;
+          }
+          curr = parent;
+        } else {
+          break;
+        }
+      }
+    }
+    return collapsed;
+  }, [state.layers, parentMap]);
+
+  const displayLayers = useMemo(() => {
+    const rev = state.layers.slice().reverse();
+    if (!searchQuery.trim()) return rev;
+    const query = searchQuery.toLowerCase();
+    return rev.filter((l) => l.name.toLowerCase().includes(query));
+  }, [state.layers, searchQuery]);
 
   return (
     <div className={`flex flex-col bg-card select-none ${className ?? ''}`}>
@@ -712,39 +781,9 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
               tabIndex={0}
               className="flex-1 space-y-0.5 overflow-y-auto p-1.5 outline-none"
             >
-              {(() => {
-                const activeFrame = state.frames[state.activeFrameIndex];
-                const parentMap = getLayerParentMap(state.layers);
-
-                const isCollapsed = (layer: Layer) => {
-                  let curr: Layer | undefined = layer;
-                  const visited = new Set<string>();
-                  while (curr) {
-                    if (visited.has(curr.id)) break;
-                    visited.add(curr.id);
-                    const parent =
-                      parentMap.get(curr.id) ||
-                      (curr.parentId ? state.layers.find((l) => l.id === curr?.parentId) : undefined);
-                    if (parent) {
-                      if (parent.collapsed) return true;
-                      curr = parent;
-                    } else {
-                      break;
-                    }
-                  }
-                  return false;
-                };
-
-                let displayLayers = state.layers.slice().reverse();
-                if (searchQuery.trim()) {
-                  const query = searchQuery.toLowerCase();
-                  displayLayers = displayLayers.filter((l) => l.name.toLowerCase().includes(query));
-                }
-
-                return (
-                  <>
+              <>
                     {displayLayers.map((layer) => {
-                      if (!searchQuery && isCollapsed(layer)) return null;
+                      if (!searchQuery && collapsedLayerIds.has(layer.id)) return null;
 
                       const isDragging = dragState?.id === layer.id;
                       const isOver = dragState?.overId === layer.id;
@@ -882,7 +921,11 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                                 {isGroup ? (
                                   <GroupThumbnail
                                     groupId={layer.id}
-                                    state={state}
+                                    layers={state.layers}
+                                    activeFrame={activeFrame}
+                                    palette={state.palette}
+                                    width={state.width}
+                                    height={state.height}
                                     collapsed={!!layer.collapsed}
                                   />
                                 ) : (
@@ -1041,8 +1084,6 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                       </div>
                     )}
                   </>
-                );
-              })()}
             </div>
           }
         />
@@ -1061,4 +1102,4 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
       </ContextMenu>
     </div>
   );
-};
+});

@@ -83,8 +83,8 @@ interface DesktopLayoutProps {
   handleFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
   statusMessage: { text: string; type: 'info' | 'error' | 'success' };
-  mousePos: any;
-  dragStartPos: any;
+  mousePos?: any;
+  dragStartPos?: any;
   setMousePos: (pos: any) => void;
   setDragStartPos: (pos: any) => void;
   onScalePixels: (selection: Set<number>, srcBox: any, destBox: any) => void;
@@ -1840,8 +1840,6 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
       <StatusBar
         state={state}
         isHome={isHome}
-        mousePos={mousePos}
-        dragStartPos={dragStartPos}
         statusMessage={statusMessage}
         selectionSize={selectionSize}
       />

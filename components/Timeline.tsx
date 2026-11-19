@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Allotment } from 'allotment';
 import { useMobile } from '../hooks/useMobile';
-import { ProjectState, FrameTag } from '../types';
+import { ProjectState, FrameTag, PixelGrid } from '../types';
 import {
   Eye,
   EyeOff,
@@ -214,7 +214,24 @@ const calculateColumns = (
   return { columns, frameXMap, totalWidth: currentX };
 };
 
-export const Timeline: React.FC<TimelineProps> = ({
+const celContentCache = new WeakMap<PixelGrid, boolean>();
+
+const hasCelContent = (pixels: PixelGrid | undefined): boolean => {
+  if (!pixels || pixels.length === 0) return false;
+  const cached = celContentCache.get(pixels);
+  if (cached !== undefined) return cached;
+  let found = false;
+  for (let i = 0; i < pixels.length; i++) {
+    if (pixels[i] !== null && pixels[i] !== undefined) {
+      found = true;
+      break;
+    }
+  }
+  celContentCache.set(pixels, found);
+  return found;
+};
+
+export const Timeline: React.FC<TimelineProps> = React.memo(({
   state,
   onSelectFrames,
   onAddFrame,
@@ -694,14 +711,43 @@ export const Timeline: React.FC<TimelineProps> = ({
   const canTween = state.selectedFrameIndices.length >= 3;
 
   const allTags = state.tags || [];
-  const { trackTags, maxTracks } = calculateTagTracks(allTags, resizingTagState);
-  const { columns, frameXMap, totalWidth } = calculateColumns(
-    state.frames.length,
-    allTags,
-    collapsedTagIds
+  const { trackTags, maxTracks } = useMemo(
+    () => calculateTagTracks(allTags, resizingTagState),
+    [allTags, resizingTagState]
+  );
+  const { columns, frameXMap, totalWidth } = useMemo(
+    () => calculateColumns(state.frames.length, allTags, collapsedTagIds),
+    [state.frames.length, allTags, collapsedTagIds]
   );
   const tagStripHeight = allTags.length > 0 ? Math.max(28, maxTracks * 26 + 6) : 0;
   const totalHeaderHeight = tagStripHeight + 32;
+
+  const parentMap = useMemo(() => getLayerParentMap(state.layers), [state.layers]);
+  const reversedLayers = useMemo(() => state.layers.slice().reverse(), [state.layers]);
+  const collapsedLayerIds = useMemo(() => {
+    const collapsed = new Set<string>();
+    const layerById = new Map(state.layers.map((l) => [l.id, l]));
+    for (const layer of state.layers) {
+      let curr: typeof layer | undefined = layer;
+      const visited = new Set<string>();
+      while (curr) {
+        if (visited.has(curr.id)) break;
+        visited.add(curr.id);
+        const parent =
+          parentMap.get(curr.id) || (curr.parentId ? layerById.get(curr.parentId) : undefined);
+        if (parent) {
+          if (parent.collapsed) {
+            collapsed.add(layer.id);
+            break;
+          }
+          curr = parent;
+        } else {
+          break;
+        }
+      }
+    }
+    return collapsed;
+  }, [state.layers, parentMap]);
 
   const activeEditingTag = tagPopover?.isOpen ? tagPopover.tag : null;
   const tagPopoverAnchor = activeEditingTag
@@ -1354,33 +1400,9 @@ export const Timeline: React.FC<TimelineProps> = ({
                   onDrop={handleLayerContainerDrop}
                   className="flex flex-col"
                 >
-                  {(() => {
-                    const parentMap = getLayerParentMap(state.layers);
-                    const isCollapsed = (layer: any) => {
-                      let curr = layer;
-                      while (curr) {
-                        const parent =
-                          parentMap.get(curr.id) ||
-                          (curr.parentId
-                            ? state.layers.find((l) => l.id === curr?.parentId)
-                            : undefined);
-                        if (parent) {
-                          if (parent.collapsed) return true;
-                          curr = parent;
-                        } else {
-                          break;
-                        }
-                      }
-                      return false;
-                    };
-
-                    return (
-                      <>
-                        {state.layers
-                          .slice()
-                          .reverse()
-                          .map((layer) => {
-                            if (isCollapsed(layer)) return null;
+                  <>
+                        {reversedLayers.map((layer) => {
+                            if (collapsedLayerIds.has(layer.id)) return null;
 
                             const isDragging =
                               dragState?.type === 'layer' && dragState.id === layer.id;
@@ -1553,8 +1575,6 @@ export const Timeline: React.FC<TimelineProps> = ({
                           <span>New Layer</span>
                         </button>
                       </>
-                    );
-                  })()}
                 </div>
               </div>
             </Allotment.Pane>
@@ -1573,31 +1593,8 @@ export const Timeline: React.FC<TimelineProps> = ({
                       className="h-full w-full overflow-x-auto overflow-y-auto bg-canvas outline-none"
                     >
                       <div className="relative flex min-w-max flex-col">
-                        {(() => {
-                          const parentMap = getLayerParentMap(state.layers);
-                          const isCollapsed = (layer: any) => {
-                            let curr = layer;
-                            while (curr) {
-                              const parent =
-                                parentMap.get(curr.id) ||
-                                (curr.parentId
-                                  ? state.layers.find((l) => l.id === curr?.parentId)
-                                  : undefined);
-                              if (parent) {
-                                if (parent.collapsed) return true;
-                                curr = parent;
-                              } else {
-                                break;
-                              }
-                            }
-                            return false;
-                          };
-
-                          return state.layers
-                            .slice()
-                            .reverse()
-                            .map((layer) => {
-                              if (isCollapsed(layer)) return null;
+                        {reversedLayers.map((layer) => {
+                              if (collapsedLayerIds.has(layer.id)) return null;
 
                               return (
                                 <div
@@ -1621,9 +1618,7 @@ export const Timeline: React.FC<TimelineProps> = ({
 
                                     const frameIdx = col.frameIndex;
                                     const frame = state.frames[frameIdx];
-                                    const hasContent = frame?.layerData[layer.id]?.some(
-                                      (p) => p !== null
-                                    );
+                                    const hasContent = hasCelContent(frame?.layerData[layer.id]);
                                     const isActive =
                                       state.activeFrameIndex === frameIdx &&
                                       state.activeLayerId === layer.id;
@@ -1662,8 +1657,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                                   <div className="pointer-events-none flex w-10 min-w-[40px] shrink-0 items-center justify-center border-r border-border bg-background/20" />
                                 </div>
                               );
-                            });
-                        })()}
+                            })}
                       </div>
 
                       <div
@@ -1683,4 +1677,4 @@ export const Timeline: React.FC<TimelineProps> = ({
       </div>
     </div>
   );
-};
+});

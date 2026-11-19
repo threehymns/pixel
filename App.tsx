@@ -1,6 +1,5 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Position } from './types';
 import { CommandPalette } from './components/CommandPalette';
 import { NewProjectDialog } from './components/NewProjectDialog';
 import { CanvasResizeDialog } from './components/CanvasResizeDialog';
@@ -24,6 +23,7 @@ import { useKeyboard } from './hooks/useKeyboard';
 import { useFileSystem } from './hooks/useFileSystem';
 import { useMobile } from './hooks/useMobile';
 import { useLayout } from './hooks/useLayout';
+import { setCursorMousePos, setCursorDragStartPos } from './hooks/useCursorStore';
 import { getCoords } from './utils';
 
 export default function App() {
@@ -46,12 +46,9 @@ export default function App() {
     isOpen: false,
     initialFormat: 'gif'
   });
-  const [mousePos, setMousePos] = useState<Position | null>(null);
-
   const openExportDialog = (format: ExportFormat = 'gif') => {
     setExportDialog({ isOpen: true, initialFormat: format });
   };
-  const [dragStartPos, setDragStartPos] = useState<Position | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ text: string, type: 'info' | 'error' | 'success' }>({ text: '', type: 'info' });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -222,10 +219,8 @@ export default function App() {
       handleFileChange,
       fileInputRef,
       statusMessage,
-      mousePos,
-      dragStartPos,
-      setMousePos,
-      setDragStartPos,
+      setMousePos: setCursorMousePos,
+      setDragStartPos: setCursorDragStartPos,
       selectionSize,
       layout
   };

@@ -1,5 +1,5 @@
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { ProjectState, Frame, Layer, FrameTag, SavedPalette, PixelGrid, HistoryEntry, ToolType, RecentProject, FileSystemFileHandle, ProjectInstance, ColorMode, PixelValue, Slice } from '../types';
 import { INITIAL_STATE, DEFAULT_PALETTE, GAMEBOY_PALETTE, ENDESGA_64_PALETTE } from '../constants';
 import { parseASE, parseGPL, extractColorsFromPNG, fileToProjectState, renderFrameToCanvas, renderSpriteSheet, getCoords, getIndex, hexToRgb, rgbToHex, findNearestPaletteIndex, getSelectionBoundingBox, getLayerParentMap, isDescendant, getGroupChildren } from '../utils';
@@ -156,14 +156,26 @@ export function useProject() {
   };
   const state = activeInstance.data;
 
-  // Auto-save active project changes to IndexedDB (debounced) so unsaved work is preserved
+  // Keep latest active saveable project in a ref so unload handlers and debounced saves
+  // never force listener churn or capture stale UI extras.
+  const activeProjectRef = useRef<ProjectState | null>(null);
+  const isSaveableProject =
+    activeProjectId !== 'home' &&
+    activeIndex >= 0 &&
+    Boolean(state?.id) &&
+    state.id !== 'default';
+  activeProjectRef.current = isSaveableProject ? state : null;
+
+  // Auto-save active project changes to IndexedDB (debounced) only when actual document
+  // content or metadata changes — not on high-frequency UI-only changes (zoom, tool, selection, etc.).
   useEffect(() => {
-    if (activeProjectId === 'home' || activeIndex < 0) return;
-    const currentProject = projects[activeIndex]?.data;
-    if (!currentProject || !currentProject.id || currentProject.id === 'default') return;
+    if (!isSaveableProject) return;
+    const scheduledProjectId = state.id;
 
     const timer = setTimeout(() => {
-      saveRecentProject(currentProject)
+      const latestProject = activeProjectRef.current;
+      if (!latestProject || latestProject.id !== scheduledProjectId) return;
+      saveRecentProject(latestProject)
         .then(newEntry => {
           setRecentProjects(prev => {
             const filtered = prev.filter(p => p.id !== newEntry.id);
@@ -173,16 +185,37 @@ export function useProject() {
         .catch(err => {
           console.warn("Auto-saving recent project to IndexedDB failed:", err);
         });
-    }, 600);
+    }, 1500);
 
     return () => clearTimeout(timer);
-  }, [state, activeProjectId, activeIndex]);
+  }, [
+    isSaveableProject,
+    activeProjectId,
+    state.id,
+    state.title,
+    state.width,
+    state.height,
+    state.colorMode,
+    state.frames,
+    state.layers,
+    state.palette,
+    state.paletteLibrary,
+    state.paletteNames,
+    state.tags,
+    state.slices,
+    state.tilesets,
+    state.externalFiles,
+    state.colorProfile,
+    state.transparentIndex,
+    state.grid,
+    state.pixelRatio,
+    state.userData,
+  ]);
 
-  // Save on window unload/hide so last-second unsaved work is never lost
+  // Save on window unload/hide so last-second unsaved work (including UI state) is never lost
   useEffect(() => {
     const handleBeforeUnload = () => {
-      if (activeProjectId === 'home' || activeIndex < 0) return;
-      const currentProject = projects[activeIndex]?.data;
+      const currentProject = activeProjectRef.current;
       if (currentProject && currentProject.id && currentProject.id !== 'default') {
         saveRecentProject(currentProject).catch(() => {});
       }
@@ -194,7 +227,7 @@ export function useProject() {
       window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('pagehide', handleBeforeUnload);
     };
-  }, [state, activeProjectId, activeIndex]);
+  }, []);
 
   /**
    * Helper to merge current UI state into a historical snapshot.

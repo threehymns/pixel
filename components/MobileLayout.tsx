@@ -88,8 +88,8 @@ interface MobileLayoutProps {
   fileInputRef: React.RefObject<HTMLInputElement | null>;
   handleFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   statusMessage: { text: string; type: 'info' | 'error' | 'success' };
-  mousePos: Position | null;
-  dragStartPos: Position | null;
+  mousePos?: Position | null;
+  dragStartPos?: Position | null;
   selectionSize: { w: number; h: number } | null;
   setMousePos: (pos: Position | null) => void;
   setDragStartPos: (pos: Position | null) => void;

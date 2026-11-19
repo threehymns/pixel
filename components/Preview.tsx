@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ProjectState } from '../types';
+import { Frame, Layer, ProjectState } from '../types';
 import { renderFrameToCanvas } from '../utils';
 import { Play, Pause, X } from './Icons';
 import { CustomSlider } from './ui/slider';
@@ -18,9 +18,18 @@ interface PreviewProps {
   isFloating?: boolean;
 }
 
-export const Preview: React.FC<PreviewProps> = ({ state, onClose, isFloating = true }) => {
+interface CachedFrameRender {
+  layers: Layer[];
+  palette: string[];
+  width: number;
+  height: number;
+  canvas: HTMLCanvasElement;
+}
+
+export const Preview: React.FC<PreviewProps> = React.memo(({ state, onClose, isFloating = true }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const frameCacheRef = useRef<WeakMap<Frame, CachedFrameRender>>(new WeakMap());
   const [isPlaying, setIsPlaying] = useState(false);
   const [previewFrame, setPreviewFrame] = useState(0);
   const [fps, setFps] = useState(12);
@@ -151,11 +160,37 @@ export const Preview: React.FC<PreviewProps> = ({ state, onClose, isFloating = t
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     const frameIndex = isPlaying ? previewFrame : state.activeFrameIndex;
-    if (state.frames[frameIndex]) {
-      const frameCanvas = renderFrameToCanvas(state, frameIndex);
-      ctx.drawImage(frameCanvas, 0, 0, canvas.width, canvas.height);
+    const frame = state.frames[frameIndex];
+    if (frame) {
+      let cached = frameCacheRef.current.get(frame);
+      if (
+        !cached ||
+        cached.layers !== state.layers ||
+        cached.palette !== state.palette ||
+        cached.width !== state.width ||
+        cached.height !== state.height
+      ) {
+        cached = {
+          layers: state.layers,
+          palette: state.palette,
+          width: state.width,
+          height: state.height,
+          canvas: renderFrameToCanvas(state, frameIndex),
+        };
+        frameCacheRef.current.set(frame, cached);
+      }
+      ctx.drawImage(cached.canvas, 0, 0, canvas.width, canvas.height);
     }
-  }, [state, previewFrame, isPlaying]);
+  }, [
+    state.frames,
+    state.layers,
+    state.palette,
+    state.width,
+    state.height,
+    state.activeFrameIndex,
+    previewFrame,
+    isPlaying,
+  ]);
 
   const currentFrameNumber = (isPlaying ? previewFrame : state.activeFrameIndex) + 1;
 
@@ -290,4 +325,4 @@ export const Preview: React.FC<PreviewProps> = ({ state, onClose, isFloating = t
       {content}
     </div>
   );
-};
+});
