@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 
 export interface PaneGroup {
   id: string;
@@ -180,8 +180,27 @@ export function useLayout() {
   const [dragOverIndex, setDragOverIndex] = useState<{ slotId: string, groupId?: string, index: number } | null>(null);
   const [dragOverZone, setDragOverZone] = useState<DragOverZone | null>(null);
 
+  const layoutStateRef = useRef({
+    slots,
+    floatingPanes,
+    draggedPane,
+    dragOverSlot,
+    dragOverIndex,
+    dragOverZone,
+  });
+  useLayoutEffect(() => {
+    layoutStateRef.current = {
+      slots,
+      floatingPanes,
+      draggedPane,
+      dragOverSlot,
+      dragOverIndex,
+      dragOverZone,
+    };
+  });
+
   const togglePaneVisibility = (paneId: string) => {
-    const isFloating = floatingPanes.some(p => p.id === paneId);
+    const isFloating = layoutStateRef.current.floatingPanes.some(p => p.id === paneId);
     if (isFloating) {
       setFloatingPanes(curr => curr.filter(p => p.id !== paneId));
       return;
@@ -259,63 +278,67 @@ export function useLayout() {
   };
 
   const handleDragOver = (e: React.DragEvent, slotId: string) => {
-    if (!draggedPane) return;
+    const cur = layoutStateRef.current;
+    if (!cur.draggedPane) return;
     e.preventDefault();
-    if (dragOverSlot !== slotId) setDragOverSlot(slotId);
+    if (cur.dragOverSlot !== slotId) setDragOverSlot(slotId);
   };
 
   const handleDragOverBody = (slotId: string, groupId: string, position: DragZonePosition) => {
-    if (!draggedPane) return;
-    if (dragOverSlot !== slotId) setDragOverSlot(slotId);
+    const cur = layoutStateRef.current;
+    if (!cur.draggedPane) return;
+    if (cur.dragOverSlot !== slotId) setDragOverSlot(slotId);
     
     if (
-      !dragOverZone ||
-      dragOverZone.slotId !== slotId ||
-      dragOverZone.groupId !== groupId ||
-      dragOverZone.position !== position
+      !cur.dragOverZone ||
+      cur.dragOverZone.slotId !== slotId ||
+      cur.dragOverZone.groupId !== groupId ||
+      cur.dragOverZone.position !== position
     ) {
       setDragOverZone({ slotId, groupId, position });
     }
     
-    if (dragOverIndex !== null) {
+    if (cur.dragOverIndex !== null) {
       setDragOverIndex(null);
     }
   };
 
   const handleDragOverTabBar = (e: React.DragEvent, slotId: string, groupId: string) => {
-    if (!draggedPane) return;
+    const cur = layoutStateRef.current;
+    if (!cur.draggedPane) return;
     e.preventDefault();
-    if (dragOverSlot !== slotId) setDragOverSlot(slotId);
+    if (cur.dragOverSlot !== slotId) setDragOverSlot(slotId);
 
     if (
-      !dragOverZone ||
-      dragOverZone.slotId !== slotId ||
-      dragOverZone.groupId !== groupId ||
-      dragOverZone.position !== 'tab-bar'
+      !cur.dragOverZone ||
+      cur.dragOverZone.slotId !== slotId ||
+      cur.dragOverZone.groupId !== groupId ||
+      cur.dragOverZone.position !== 'tab-bar'
     ) {
       setDragOverZone({ slotId, groupId, position: 'tab-bar' });
     }
 
-    const slot = slots[slotId as 'left' | 'right' | 'bottom'];
+    const slot = cur.slots[slotId as 'left' | 'right' | 'bottom'];
     const group = slot?.groups.find(g => g.id === groupId);
     const count = group?.panes.length || 0;
 
-    if (!dragOverIndex || dragOverIndex.slotId !== slotId || dragOverIndex.groupId !== groupId || dragOverIndex.index !== count) {
+    if (!cur.dragOverIndex || cur.dragOverIndex.slotId !== slotId || cur.dragOverIndex.groupId !== groupId || cur.dragOverIndex.index !== count) {
       setDragOverIndex({ slotId, groupId, index: count });
     }
   };
 
   const handleDragOverTab = (e: React.DragEvent, paneId: string, slotId: string, groupId: string, index: number) => {
-    if (!draggedPane) return;
+    const cur = layoutStateRef.current;
+    if (!cur.draggedPane) return;
     e.preventDefault();
     e.stopPropagation();
-    if (dragOverSlot !== slotId) setDragOverSlot(slotId);
+    if (cur.dragOverSlot !== slotId) setDragOverSlot(slotId);
 
     if (
-      !dragOverZone ||
-      dragOverZone.slotId !== slotId ||
-      dragOverZone.groupId !== groupId ||
-      dragOverZone.position !== 'tab-bar'
+      !cur.dragOverZone ||
+      cur.dragOverZone.slotId !== slotId ||
+      cur.dragOverZone.groupId !== groupId ||
+      cur.dragOverZone.position !== 'tab-bar'
     ) {
       setDragOverZone({ slotId, groupId, position: 'tab-bar' });
     }
@@ -324,7 +347,7 @@ export function useLayout() {
     const midX = rect.left + rect.width / 2;
     const targetIndex = e.clientX < midX ? index : index + 1;
 
-    if (!dragOverIndex || dragOverIndex.slotId !== slotId || dragOverIndex.groupId !== groupId || dragOverIndex.index !== targetIndex) {
+    if (!cur.dragOverIndex || cur.dragOverIndex.slotId !== slotId || cur.dragOverIndex.groupId !== groupId || cur.dragOverIndex.index !== targetIndex) {
       setDragOverIndex({ slotId, groupId, index: targetIndex });
     }
   };
@@ -541,7 +564,7 @@ export function useLayout() {
   };
 
   const handleAddPaneToSlot = (slotId: 'left' | 'right' | 'bottom', paneId: string) => {
-    const slot = slots[slotId];
+    const slot = layoutStateRef.current.slots[slotId];
     const targetGroupId = slot.groups[0]?.id || `g-${slotId}-1`;
     handleAddPaneToGroup(slotId, targetGroupId, paneId);
   };
@@ -595,9 +618,12 @@ export function useLayout() {
 
   const handleDrop = (e: React.DragEvent, slotId: 'left' | 'right' | 'bottom', targetGroupId?: string) => {
     e.preventDefault();
-    if (!draggedPane) return;
+    const cur = layoutStateRef.current;
+    if (!cur.draggedPane) return;
 
-    const { paneId, sourceSlot } = draggedPane;
+    const { paneId, sourceSlot } = cur.draggedPane;
+    const curDragOverZone = cur.dragOverZone;
+    const curDragOverIndex = cur.dragOverIndex;
 
     if (sourceSlot === 'floating') {
       setFloatingPanes(curr => curr.filter(p => p.id !== paneId));
@@ -632,13 +658,13 @@ export function useLayout() {
 
       // 2. Add paneId to target slot/group
       const targetSlot = updated[slotId];
-      const isSplitDrop = dragOverZone?.slotId === slotId && (
-        dragOverZone.position === 'body-bottom' ||
-        dragOverZone.position === 'body-left' ||
-        dragOverZone.position === 'body-right'
+      const isSplitDrop = curDragOverZone?.slotId === slotId && (
+        curDragOverZone.position === 'body-bottom' ||
+        curDragOverZone.position === 'body-left' ||
+        curDragOverZone.position === 'body-right'
       );
 
-      const splitDir: SplitDirection = (dragOverZone?.position === 'body-left' || dragOverZone?.position === 'body-right')
+      const splitDir: SplitDirection = (curDragOverZone?.position === 'body-left' || curDragOverZone?.position === 'body-right')
         ? 'horizontal'
         : 'vertical';
 
@@ -650,7 +676,7 @@ export function useLayout() {
         };
 
         const targetIdx = targetGroupId ? targetSlot.groups.findIndex(g => g.id === targetGroupId) : 0;
-        const insertIdx = (dragOverZone?.position === 'body-left') 
+        const insertIdx = (curDragOverZone?.position === 'body-left') 
           ? (targetIdx !== -1 ? targetIdx : 0)
           : (targetIdx !== -1 ? targetIdx + 1 : targetSlot.groups.length);
 
@@ -675,8 +701,8 @@ export function useLayout() {
             if (idx === targetGroupIdx) {
               const filterPanes = g.panes.filter(p => p !== paneId);
               let insertIdx = filterPanes.length;
-              if (dragOverIndex && dragOverIndex.slotId === slotId && dragOverIndex.groupId === g.id) {
-                insertIdx = Math.min(dragOverIndex.index, filterPanes.length);
+              if (curDragOverIndex && curDragOverIndex.slotId === slotId && curDragOverIndex.groupId === g.id) {
+                insertIdx = Math.min(curDragOverIndex.index, filterPanes.length);
               }
               filterPanes.splice(insertIdx, 0, paneId);
               return {

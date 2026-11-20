@@ -3,6 +3,7 @@ import { Allotment } from 'allotment';
 import { ProjectState, ToolType } from '../types';
 import { SELECTION_TOOLS } from '../constants';
 import { DragZonePosition } from '../hooks/useLayout';
+import { ProjectStateUpdater } from '../hooks/useProject';
 import { Canvas } from './Canvas';
 import { Palette } from './Palette';
 import { Timeline } from './Timeline';
@@ -73,16 +74,73 @@ import {
   Zap,
 } from './Icons';
 
+const NOOP = () => {};
+
+const SHAPE_TOOLS: ToolType[] = ['rect', 'filled-rect', 'ellipse', 'filled-ellipse'];
+const EFFECT_TOOLS: ToolType[] = ['blur', 'sharpen'];
+const BRUSH_OPTION_TOOLS: ToolType[] = [
+  'pencil',
+  'eraser',
+  'smudge',
+  'line',
+  'rect',
+  'filled-rect',
+  'ellipse',
+  'filled-ellipse',
+  'blur',
+  'sharpen',
+];
+const DOCK_SLOTS = ['left', 'right', 'bottom'] as const;
+
+const PANE_METADATA: Record<string, { title: string; icon: React.ReactNode }> = {
+  'file-tree': { title: 'Files', icon: <FolderOpen size={13} /> },
+  palette: { title: 'Palette', icon: <PaletteIcon size={13} /> },
+  layers: { title: 'Layers', icon: <Layers size={13} /> },
+  history: { title: 'History', icon: <Clock size={13} /> },
+  timeline: { title: 'Timeline', icon: <PlaySquare size={13} /> },
+  preview: { title: 'Preview', icon: <Play size={13} /> },
+};
+
+const getToolIcon = (t: ToolType, size = 18) => {
+  switch (t) {
+    case 'rect-select':
+      return <BoxSelect size={size} />;
+    case 'ellipse-select':
+      return <Circle size={size} />;
+    case 'lasso-select':
+      return <Lasso size={size} />;
+    case 'poly-lasso-select':
+      return <Scissors size={size} />;
+    case 'magic-wand':
+      return <Wand2 size={size} />;
+    case 'rect':
+      return <Square size={size} />;
+    case 'filled-rect':
+      return <Square size={size} className="fill-current" />;
+    case 'ellipse':
+      return <Circle size={size} />;
+    case 'filled-ellipse':
+      return <Circle size={size} className="fill-current" />;
+    case 'blur':
+      return <Droplets size={size} />;
+    case 'sharpen':
+      return <Zap size={size} />;
+    case 'smudge':
+      return <Hand size={size} />;
+    default:
+      return <BoxSelect size={size} />;
+  }
+};
+
 interface DesktopLayoutProps {
   state: ProjectState;
-  updateState: (s: ProjectState, config?: any) => void;
+  updateState: (s: ProjectStateUpdater, config?: any) => void;
   commands: any[];
   project: any;
   canvasTools: any;
   fileSystem: any;
   handleFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
-  statusMessage: { text: string; type: 'info' | 'error' | 'success' };
   mousePos?: any;
   dragStartPos?: any;
   setMousePos: (pos: any) => void;
@@ -102,6 +160,576 @@ interface TabMenuPayload {
   groupId?: string;
 }
 
+interface ToolRailProps {
+  tool: ToolType;
+  primaryColor: string;
+  secondaryColor: string;
+  onSelectTool: (tool: ToolType) => void;
+  onSetPrimaryColor: (color: string) => void;
+  onSetSecondaryColor: (color: string) => void;
+  onSwapColors: () => void;
+}
+
+const ToolRail: React.FC<ToolRailProps> = ({
+  tool,
+  primaryColor,
+  secondaryColor,
+  onSelectTool,
+  onSetPrimaryColor,
+  onSetSecondaryColor,
+  onSwapColors,
+}) => {
+  const [prevTool, setPrevTool] = useState<ToolType>(tool);
+  const [lastSelectionTool, setLastSelectionTool] = useState<ToolType>('rect-select');
+  const [lastShapeTool, setLastShapeTool] = useState<ToolType>('rect');
+  const [lastEffectTool, setLastEffectTool] = useState<ToolType>('blur');
+
+  if (tool !== prevTool) {
+    setPrevTool(tool);
+    if (SELECTION_TOOLS.includes(tool)) {
+      setLastSelectionTool(tool);
+    }
+    if (SHAPE_TOOLS.includes(tool)) {
+      setLastShapeTool(tool);
+    }
+    if (EFFECT_TOOLS.includes(tool)) {
+      setLastEffectTool(tool);
+    }
+  }
+
+  return (
+    <div className="flex h-full w-full flex-col items-center overflow-x-hidden overflow-y-auto border-r border-border bg-card py-2 no-scrollbar">
+      <div className="flex flex-col gap-1 p-1">
+        <ToolButton
+          active={tool === 'pencil'}
+          onClick={() => onSelectTool('pencil')}
+          icon={<Pencil size={17} />}
+          label="Pencil"
+          shortcut="B"
+        />
+        <ToolButton
+          active={tool === 'eraser'}
+          onClick={() => onSelectTool('eraser')}
+          icon={<Eraser size={17} />}
+          label="Eraser"
+          shortcut="E"
+        />
+        <ToolButton
+          active={tool === 'line'}
+          onClick={() => onSelectTool('line')}
+          icon={<Minus size={17} className="-rotate-45" />}
+          label="Line"
+          shortcut="L"
+        />
+
+        <Popover>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <PopoverTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label="Shape Tools"
+                      onClick={() => {
+                        if (!SHAPE_TOOLS.includes(tool)) {
+                          onSelectTool(lastShapeTool);
+                        }
+                      }}
+                      className={`relative flex items-center justify-center rounded-md p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                        SHAPE_TOOLS.includes(tool)
+                          ? 'bg-primary text-primary-foreground shadow-xs'
+                          : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                      }`}
+                    />
+                  }
+                />
+              }
+            >
+              {getToolIcon(lastShapeTool, 17)}
+              <span className="clip-path-triangle absolute right-0.5 bottom-0.5 h-1.5 w-1.5 rounded-tl-xs bg-current opacity-60" />
+            </TooltipTrigger>
+            <TooltipContent side="right" sideOffset={8}>
+              <span>Shape Tools</span>
+              <TooltipShortcut>U</TooltipShortcut>
+            </TooltipContent>
+          </Tooltip>
+          <PopoverContent side="right" align="start" className="flex w-44 flex-col gap-0.5 p-1.5">
+            <PopoverClose
+              render={
+                <button
+                  type="button"
+                  onClick={() => onSelectTool('rect')}
+                  className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
+                    tool === 'rect'
+                      ? 'bg-primary font-medium text-primary-foreground'
+                      : 'text-foreground hover:bg-accent'
+                  }`}
+                />
+              }
+            >
+              <Square size={14} />
+              <span className="flex-1">Rectangle</span>
+              <kbd className="font-mono text-[11px] opacity-70">U</kbd>
+            </PopoverClose>
+            <PopoverClose
+              render={
+                <button
+                  type="button"
+                  onClick={() => onSelectTool('filled-rect')}
+                  className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
+                    tool === 'filled-rect'
+                      ? 'bg-primary font-medium text-primary-foreground'
+                      : 'text-foreground hover:bg-accent'
+                  }`}
+                />
+              }
+            >
+              <Square size={14} className="fill-current" />
+              <span className="flex-1">Filled Rect</span>
+              <kbd className="font-mono text-[11px] opacity-70">U</kbd>
+            </PopoverClose>
+            <PopoverClose
+              render={
+                <button
+                  type="button"
+                  onClick={() => onSelectTool('ellipse')}
+                  className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
+                    tool === 'ellipse'
+                      ? 'bg-primary font-medium text-primary-foreground'
+                      : 'text-foreground hover:bg-accent'
+                  }`}
+                />
+              }
+            >
+              <Circle size={14} />
+              <span className="flex-1">Ellipse</span>
+              <kbd className="font-mono text-[11px] opacity-70">⇧U</kbd>
+            </PopoverClose>
+            <PopoverClose
+              render={
+                <button
+                  type="button"
+                  onClick={() => onSelectTool('filled-ellipse')}
+                  className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
+                    tool === 'filled-ellipse'
+                      ? 'bg-primary font-medium text-primary-foreground'
+                      : 'text-foreground hover:bg-accent'
+                  }`}
+                />
+              }
+            >
+              <Circle size={14} className="fill-current" />
+              <span className="flex-1">Filled Ellipse</span>
+              <kbd className="font-mono text-[11px] opacity-70">⇧U</kbd>
+            </PopoverClose>
+          </PopoverContent>
+        </Popover>
+
+        <ToolButton
+          active={tool === 'bucket'}
+          onClick={() => onSelectTool('bucket')}
+          icon={<PaintBucket size={17} />}
+          label="Fill Bucket"
+          shortcut="G"
+        />
+        <ToolButton
+          active={tool === 'eyedropper'}
+          onClick={() => onSelectTool('eyedropper')}
+          icon={<Pipette size={17} />}
+          label="Eyedropper"
+          shortcut="I"
+        />
+        <ToolButton
+          active={tool === 'smudge'}
+          onClick={() => onSelectTool('smudge')}
+          icon={<Hand size={17} />}
+          label="Smudge / Push"
+          shortcut="S"
+        />
+
+        <Popover>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <PopoverTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label="Effect Brushes"
+                      onClick={() => {
+                        if (!EFFECT_TOOLS.includes(tool)) {
+                          onSelectTool(lastEffectTool);
+                        }
+                      }}
+                      className={`relative flex items-center justify-center rounded-md p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                        EFFECT_TOOLS.includes(tool)
+                          ? 'bg-primary text-primary-foreground shadow-xs'
+                          : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                      }`}
+                    />
+                  }
+                />
+              }
+            >
+              {getToolIcon(lastEffectTool, 17)}
+              <span className="clip-path-triangle absolute right-0.5 bottom-0.5 h-1.5 w-1.5 rounded-tl-xs bg-current opacity-60" />
+            </TooltipTrigger>
+            <TooltipContent side="right" sideOffset={8}>
+              <span>Effect Brushes</span>
+              <TooltipShortcut>R</TooltipShortcut>
+            </TooltipContent>
+          </Tooltip>
+          <PopoverContent side="right" align="start" className="flex w-44 flex-col gap-0.5 p-1.5">
+            <PopoverClose
+              render={
+                <button
+                  type="button"
+                  onClick={() => onSelectTool('blur')}
+                  className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
+                    tool === 'blur'
+                      ? 'bg-primary font-medium text-primary-foreground'
+                      : 'text-foreground hover:bg-accent'
+                  }`}
+                />
+              }
+            >
+              <Droplets size={14} />
+              <span className="flex-1">Blur</span>
+              <kbd className="font-mono text-[11px] opacity-70">R</kbd>
+            </PopoverClose>
+            <PopoverClose
+              render={
+                <button
+                  type="button"
+                  onClick={() => onSelectTool('sharpen')}
+                  className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
+                    tool === 'sharpen'
+                      ? 'bg-primary font-medium text-primary-foreground'
+                      : 'text-foreground hover:bg-accent'
+                  }`}
+                />
+              }
+            >
+              <Zap size={14} />
+              <span className="flex-1">Sharpen</span>
+              <kbd className="font-mono text-[11px] opacity-70">⇧R</kbd>
+            </PopoverClose>
+          </PopoverContent>
+        </Popover>
+
+        <div className="my-1 h-px w-full bg-border" />
+
+        <ToolButton
+          active={tool === 'move'}
+          onClick={() => onSelectTool('move')}
+          icon={<MousePointer2 size={17} />}
+          label="Move"
+          shortcut="V"
+        />
+
+        <Popover>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <PopoverTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label="Selection Tools"
+                      onClick={() => {
+                        if (!SELECTION_TOOLS.includes(tool)) {
+                          onSelectTool(lastSelectionTool);
+                        }
+                      }}
+                      className={`relative flex items-center justify-center rounded-md p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                        SELECTION_TOOLS.includes(tool)
+                          ? 'bg-primary text-primary-foreground shadow-xs'
+                          : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                      }`}
+                    />
+                  }
+                />
+              }
+            >
+              {getToolIcon(lastSelectionTool, 17)}
+              <span className="clip-path-triangle absolute right-0.5 bottom-0.5 h-1.5 w-1.5 rounded-tl-xs bg-current opacity-60" />
+            </TooltipTrigger>
+            <TooltipContent side="right" sideOffset={8}>
+              <span>Selection Tools</span>
+              <TooltipShortcut>M</TooltipShortcut>
+            </TooltipContent>
+          </Tooltip>
+          <PopoverContent side="right" align="start" className="flex w-48 flex-col gap-0.5 p-1.5">
+            {SELECTION_TOOLS.map((t) => (
+              <PopoverClose
+                key={t}
+                render={
+                  <button
+                    type="button"
+                    onClick={() => onSelectTool(t)}
+                    className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
+                      tool === t
+                        ? 'bg-primary font-medium text-primary-foreground'
+                        : 'text-foreground hover:bg-accent'
+                    }`}
+                  />
+                }
+              >
+                {getToolIcon(t, 14)}
+                <span className="capitalize">
+                  {t.replace('-select', '').replace('poly-', 'Poly ').replace('-', ' ')} Select
+                </span>
+              </PopoverClose>
+            ))}
+          </PopoverContent>
+        </Popover>
+      </div>
+
+      <div className="flex-1" />
+
+      {/* Primary / Secondary Swatches & Atomic Swap */}
+      <div className="relative mb-2 h-10 w-10 shrink-0">
+        <Popover>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <PopoverTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label="Secondary Color"
+                      className="absolute right-0 bottom-0 h-6 w-6 rounded-sm border border-border-strong shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      style={{ backgroundColor: secondaryColor }}
+                    />
+                  }
+                />
+              }
+            />
+            <TooltipContent side="right">Secondary Color</TooltipContent>
+          </Tooltip>
+          <PopoverContent
+            side="right"
+            align="end"
+            sideOffset={10}
+            className="w-auto border-none bg-transparent p-0 shadow-none"
+          >
+            <ColorPicker color={secondaryColor} onChange={onSetSecondaryColor} />
+          </PopoverContent>
+        </Popover>
+
+        <Popover>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <PopoverTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label="Primary Color"
+                      className="absolute top-0 left-0 z-10 h-6 w-6 rounded-sm border border-border-strong shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      style={{ backgroundColor: primaryColor }}
+                    />
+                  }
+                />
+              }
+            />
+            <TooltipContent side="right">Primary Color</TooltipContent>
+          </Tooltip>
+          <PopoverContent
+            side="right"
+            align="end"
+            sideOffset={10}
+            className="w-auto border-none bg-transparent p-0 shadow-none"
+          >
+            <ColorPicker color={primaryColor} onChange={onSetPrimaryColor} />
+          </PopoverContent>
+        </Popover>
+
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                aria-label="Swap Primary and Secondary Colors"
+                onClick={onSwapColors}
+                className="absolute top-0 right-0 z-20 flex h-4 w-4 items-center justify-center rounded-bl-sm border-b border-l border-border bg-card text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+            }
+          >
+            <ArrowRightLeft size={9} className="rotate-45" />
+          </TooltipTrigger>
+          <TooltipContent side="right">
+            <span>Swap Colors</span>
+            <TooltipShortcut>X</TooltipShortcut>
+          </TooltipContent>
+        </Tooltip>
+      </div>
+    </div>
+  );
+};
+
+interface DockPaneContentProps {
+  paneId: string;
+  state: ProjectState;
+  project: any;
+  fileSystem: any;
+  layerPropertiesState?: { isOpen: boolean; layer: any };
+  onCloseLayerProperties?: () => void;
+  activeTagPopover?: any;
+  onCloseTagPopover?: () => void;
+  onPaletteColorSelect: (c: string, isPrimary: boolean) => void;
+  onPaletteAddColor: (c: string) => void;
+  onPaletteColorsSelected: (selectedColors: string[]) => void;
+  onSelectLayers: (ids: string[], active: string) => void;
+  onSelectFrames: (indices: number[], active: number, layerId?: string) => void;
+  onTimelineSelectLayer: (id: string) => void;
+  onTimelineToggleLayerVisibility: (id: string) => void;
+  onTimelineToggleLayerLock: (id: string) => void;
+  onClosePreview: () => void;
+  isFloating?: boolean;
+}
+
+const DockPaneContent: React.FC<DockPaneContentProps> = ({
+  paneId,
+  state,
+  project,
+  fileSystem,
+  layerPropertiesState,
+  onCloseLayerProperties,
+  activeTagPopover,
+  onCloseTagPopover,
+  onPaletteColorSelect,
+  onPaletteAddColor,
+  onPaletteColorsSelected,
+  onSelectLayers,
+  onSelectFrames,
+  onTimelineSelectLayer,
+  onTimelineToggleLayerVisibility,
+  onTimelineToggleLayerLock,
+  onClosePreview,
+  isFloating = false,
+}) => {
+  switch (paneId) {
+    case 'file-tree':
+      return (
+        <FileTree
+          rootHandle={fileSystem.rootHandle}
+          onOpenFolder={fileSystem.openFolder}
+          onFileOpen={project.loadProjectFromFile}
+          onResizeStart={NOOP}
+          width={0}
+        />
+      );
+    case 'palette':
+      return (
+        <Palette
+          width={0}
+          colors={state.palette}
+          palettes={state.paletteLibrary}
+          activePaletteId={state.activePaletteId}
+          primaryColor={state.primaryColor}
+          secondaryColor={state.secondaryColor}
+          onColorSelect={onPaletteColorSelect}
+          onAddColor={onPaletteAddColor}
+          onSelectPalette={project.selectPalette}
+          onImportPalette={project.importPalette}
+          onResizeStart={NOOP}
+          onColorsSelected={onPaletteColorsSelected}
+        />
+      );
+    case 'layers':
+      return (
+        <LayersPanel
+          layers={state.layers}
+          activeFrame={state.frames[state.activeFrameIndex]}
+          activeLayerId={state.activeLayerId}
+          selectedLayerIds={state.selectedLayerIds}
+          palette={state.palette}
+          width={state.width}
+          height={state.height}
+          onSelectLayers={onSelectLayers}
+          onUpdateLayer={project.updateLayer}
+          onAddLayer={project.addLayer}
+          onAddGroupLayer={project.addGroupLayer}
+          onGroupSelectedLayers={project.groupSelectedLayers}
+          onUngroupSelectedLayers={project.ungroupSelectedLayers}
+          onAddLayerToGroup={project.addLayerToGroup}
+          onToggleCollapseAllGroups={project.toggleCollapseAllGroups}
+          onDuplicateLayer={project.duplicateLayer}
+          onDeleteLayer={project.deleteLayer}
+          onDuplicateSelectedLayers={project.duplicateSelectedLayers}
+          onDeleteSelectedLayers={project.deleteSelectedLayers}
+          onReorderLayers={project.reorderLayers}
+          onOpenLayerProperties={project.openLayerPropertiesDialog}
+          layerPropertiesState={layerPropertiesState}
+          onCloseLayerProperties={onCloseLayerProperties}
+          className="h-full w-full flex-1"
+        />
+      );
+    case 'history':
+      return (
+        <HistoryPanel
+          history={project.history}
+          historyIndex={project.historyIndex}
+          onJumpToHistory={project.jumpToHistory}
+          className="h-full w-full flex-1"
+        />
+      );
+    case 'timeline':
+      return (
+        <Timeline
+          layers={state.layers}
+          frames={state.frames}
+          activeFrameIndex={state.activeFrameIndex}
+          activeLayerId={state.activeLayerId}
+          selectedFrameIndices={state.selectedFrameIndices}
+          selectedLayerIds={state.selectedLayerIds}
+          tags={state.tags}
+          onSelectFrames={onSelectFrames}
+          onAddFrame={project.addFrame}
+          onDuplicateFrame={project.duplicateFrame}
+          onDeleteFrame={project.deleteFrame}
+          onDuplicateSelectedFrames={project.duplicateSelectedFrames}
+          onDeleteSelectedFrames={project.deleteSelectedFrames}
+          onInsertFrame={project.insertFrame}
+          onTweenFrames={project.tweenFrames}
+          onSetFrameDuration={project.setFrameDuration}
+          onAddTag={project.addTag}
+          onSaveTag={project.saveTag}
+          onDeleteTag={project.deleteTag}
+          onOpenTagProperties={project.openTagPropertiesDialog}
+          activeTagPopover={activeTagPopover}
+          onCloseTagPopover={onCloseTagPopover}
+          onSelectLayer={onTimelineSelectLayer}
+          onAddLayer={project.addLayer}
+          onAddGroupLayer={project.addGroupLayer}
+          onUpdateLayer={project.updateLayer}
+          onToggleLayerVisibility={onTimelineToggleLayerVisibility}
+          onToggleLayerLock={onTimelineToggleLayerLock}
+          onReorderLayers={project.reorderLayers}
+          onReorderFrames={project.reorderFrames}
+        />
+      );
+    case 'preview':
+      return (
+        <Preview
+          width={0}
+          frames={state.frames}
+          layers={state.layers}
+          palette={state.palette}
+          spriteWidth={state.width}
+          spriteHeight={state.height}
+          activeFrameIndex={state.activeFrameIndex}
+          onClose={onClosePreview}
+          isFloating={isFloating}
+        />
+      );
+    default:
+      return null;
+  }
+};
+
 const FloatingWindow: React.FC<{
   pane: any;
   metadata: { title: string; icon: React.ReactNode };
@@ -109,7 +737,7 @@ const FloatingWindow: React.FC<{
   handleDragStart: (e: React.DragEvent, paneId: string, sourceSlot: string) => void;
   handleDragEnd: () => void;
   handleClosePane: (paneId: string) => void;
-  renderPaneContent: (paneId: string) => React.ReactNode;
+  children: React.ReactNode;
   onContextMenu?: (e: React.MouseEvent) => void;
 }> = ({
   pane,
@@ -118,7 +746,7 @@ const FloatingWindow: React.FC<{
   handleDragStart,
   handleDragEnd,
   handleClosePane,
-  renderPaneContent,
+  children,
   onContextMenu,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
@@ -190,9 +818,7 @@ const FloatingWindow: React.FC<{
         </button>
       </div>
 
-      <div className="relative min-h-0 flex-1 overflow-hidden bg-card">
-        {renderPaneContent(pane.id)}
-      </div>
+      <div className="relative min-h-0 flex-1 overflow-hidden bg-card">{children}</div>
     </div>
   );
 };
@@ -206,9 +832,6 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
   fileSystem,
   handleFileChange,
   fileInputRef,
-  statusMessage,
-  mousePos,
-  dragStartPos,
   setMousePos,
   setDragStartPos,
   onScalePixels,
@@ -219,9 +842,6 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
   layerPropertiesState,
   onCloseLayerProperties,
 }) => {
-  const [lastSelectionTool, setLastSelectionTool] = useState<ToolType>('rect-select');
-  const [lastShapeTool, setLastShapeTool] = useState<ToolType>('rect');
-  const [lastEffectTool, setLastEffectTool] = useState<ToolType>('blur');
   const tabMenu = useMemo(() => createMenuController<TabMenuPayload>(), []);
 
   const {
@@ -252,71 +872,84 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
     setSlotVisibility,
   } = layout;
 
-  const PANE_METADATA: Record<string, { title: string; icon: React.ReactNode }> = {
-    'file-tree': { title: 'Files', icon: <FolderOpen size={13} /> },
-    palette: { title: 'Palette', icon: <PaletteIcon size={13} /> },
-    layers: { title: 'Layers', icon: <Layers size={13} /> },
-    history: { title: 'History', icon: <Clock size={13} /> },
-    timeline: { title: 'Timeline', icon: <PlaySquare size={13} /> },
-    preview: { title: 'Preview', icon: <Play size={13} /> },
-  };
-
   const isPreviewDocked = Object.values(slots).some(
     (s: any) => s.visible && s.groups.some((g: any) => g.panes.includes('preview'))
   );
   const isPreviewFloating = floatingPanes.some((fp: any) => fp.id === 'preview');
   const isPreviewVisible = isPreviewDocked || isPreviewFloating;
 
-  const noop = () => {};
+  const handleSelectTool = (tool: ToolType) => {
+    updateState((prev) => ({ ...prev, tool }));
+  };
+
+  const handleSetPrimaryColor = (primaryColor: string) => {
+    updateState((prev) => ({ ...prev, primaryColor }));
+  };
+
+  const handleSetSecondaryColor = (secondaryColor: string) => {
+    updateState((prev) => ({ ...prev, secondaryColor }));
+  };
+
+  const handleSwapColors = () => {
+    updateState((prev) => ({
+      ...prev,
+      primaryColor: prev.secondaryColor,
+      secondaryColor: prev.primaryColor,
+      ...(prev.inkType === 'shading' ? { shades: [...prev.shades].reverse() } : {}),
+    }));
+  };
 
   const handlePaletteColorSelect = (c: string, isPrimary: boolean) => {
-    updateState(isPrimary ? { ...state, primaryColor: c } : { ...state, secondaryColor: c });
+    updateState((prev) => (isPrimary ? { ...prev, primaryColor: c } : { ...prev, secondaryColor: c }));
   };
 
   const handlePaletteAddColor = (c: string) => {
-    const updatedLibrary = state.paletteLibrary.map((p) =>
-      p.id === state.activePaletteId ? { ...p, colors: [...p.colors, c] } : p
-    );
-    updateState({ ...state, paletteLibrary: updatedLibrary, palette: [...state.palette, c] });
+    updateState((prev) => ({
+      ...prev,
+      paletteLibrary: prev.paletteLibrary.map((p) =>
+        p.id === prev.activePaletteId ? { ...p, colors: [...p.colors, c] } : p
+      ),
+      palette: [...prev.palette, c],
+    }));
   };
 
   const handlePaletteColorsSelected = (selectedColors: string[]) => {
-    updateState({ ...state, shades: selectedColors, inkType: 'shading' });
+    updateState((prev) => ({ ...prev, shades: selectedColors, inkType: 'shading' }));
   };
 
   const handleSelectLayers = (ids: string[], active: string) => {
-    updateState({ ...state, selectedLayerIds: ids, activeLayerId: active });
+    updateState((prev) => ({ ...prev, selectedLayerIds: ids, activeLayerId: active }));
   };
 
   const handleSelectFrames = (indices: number[], active: number, layerId?: string) => {
-    const nextState = {
-      ...state,
+    updateState((prev) => ({
+      ...prev,
       selectedFrameIndices: indices,
       activeFrameIndex: active,
-    };
-    if (layerId) {
-      nextState.activeLayerId = layerId;
-      nextState.selectedLayerIds = [layerId];
-    }
-    updateState(nextState);
+      ...(layerId ? { activeLayerId: layerId, selectedLayerIds: [layerId] } : {}),
+    }));
   };
 
   const handleTimelineSelectLayer = (id: string) => {
-    updateState({ ...state, activeLayerId: id, selectedLayerIds: [id] });
+    updateState((prev) => ({ ...prev, activeLayerId: id, selectedLayerIds: [id] }));
   };
 
   const handleTimelineToggleLayerVisibility = (id: string) => {
-    updateState({
-      ...state,
-      layers: state.layers.map((l) => (l.id === id ? { ...l, visible: !l.visible } : l)),
-    });
+    updateState((prev) => ({
+      ...prev,
+      layers: prev.layers.map((l) => (l.id === id ? { ...l, visible: !l.visible } : l)),
+    }));
   };
 
   const handleTimelineToggleLayerLock = (id: string) => {
-    updateState({
-      ...state,
-      layers: state.layers.map((l) => (l.id === id ? { ...l, locked: !l.locked } : l)),
-    });
+    updateState((prev) => ({
+      ...prev,
+      layers: prev.layers.map((l) => (l.id === id ? { ...l, locked: !l.locked } : l)),
+    }));
+  };
+
+  const handleClosePreview = () => {
+    handleClosePane('preview');
   };
 
   const handleCanvasDrawStart = (pos: any, modifiers?: any) => {
@@ -333,115 +966,26 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
   };
 
   const handleCanvasSelectionUpdate = (sel: Set<number> | null) => {
-    updateState({ ...state, selection: sel }, { action: 'Select Area', tool: state.tool });
+    const currentTool = project.getActiveState().tool;
+    updateState((prev) => ({ ...prev, selection: sel }), { action: 'Select Area', tool: currentTool });
   };
 
   const handleCanvasZoom = (z: number) => {
-    updateState({ ...state, zoom: z });
+    updateState((prev) => ({ ...prev, zoom: z }));
   };
 
-  const renderPaneContent = (paneId: string) => {
-    switch (paneId) {
-      case 'file-tree':
-        return (
-          <FileTree
-            rootHandle={fileSystem.rootHandle}
-            onOpenFolder={fileSystem.openFolder}
-            onFileOpen={project.loadProjectFromFile}
-            onResizeStart={noop}
-            width={0}
-          />
-        );
-      case 'palette':
-        return (
-          <Palette
-            width={0}
-            colors={state.palette}
-            palettes={state.paletteLibrary}
-            activePaletteId={state.activePaletteId}
-            primaryColor={state.primaryColor}
-            secondaryColor={state.secondaryColor}
-            onColorSelect={handlePaletteColorSelect}
-            onAddColor={handlePaletteAddColor}
-            onSelectPalette={project.selectPalette}
-            onImportPalette={project.importPalette}
-            onResizeStart={noop}
-            onColorsSelected={handlePaletteColorsSelected}
-          />
-        );
-      case 'layers':
-        return (
-          <LayersPanel
-            state={state}
-            onSelectLayers={handleSelectLayers}
-            onUpdateLayer={project.updateLayer}
-            onAddLayer={project.addLayer}
-            onAddGroupLayer={project.addGroupLayer}
-            onGroupSelectedLayers={project.groupSelectedLayers}
-            onUngroupSelectedLayers={project.ungroupSelectedLayers}
-            onAddLayerToGroup={project.addLayerToGroup}
-            onToggleCollapseAllGroups={project.toggleCollapseAllGroups}
-            onDuplicateLayer={project.duplicateLayer}
-            onDeleteLayer={project.deleteLayer}
-            onDuplicateSelectedLayers={project.duplicateSelectedLayers}
-            onDeleteSelectedLayers={project.deleteSelectedLayers}
-            onReorderLayers={project.reorderLayers}
-            onOpenLayerProperties={project.openLayerPropertiesDialog}
-            layerPropertiesState={layerPropertiesState}
-            onCloseLayerProperties={onCloseLayerProperties}
-            className="h-full w-full flex-1"
-          />
-        );
-      case 'history':
-        return (
-          <HistoryPanel
-            history={project.history}
-            historyIndex={project.historyIndex}
-            onJumpToHistory={project.jumpToHistory}
-            className="h-full w-full flex-1"
-          />
-        );
-      case 'timeline':
-        return (
-          <Timeline
-            state={state}
-            onSelectFrames={handleSelectFrames}
-            onAddFrame={project.addFrame}
-            onDuplicateFrame={project.duplicateFrame}
-            onDeleteFrame={project.deleteFrame}
-            onDuplicateSelectedFrames={project.duplicateSelectedFrames}
-            onDeleteSelectedFrames={project.deleteSelectedFrames}
-            onInsertFrame={project.insertFrame}
-            onTweenFrames={project.tweenFrames}
-            onSetFrameDuration={project.setFrameDuration}
-            onAddTag={project.addTag}
-            onSaveTag={project.saveTag}
-            onDeleteTag={project.deleteTag}
-            onOpenTagProperties={project.openTagPropertiesDialog}
-            activeTagPopover={activeTagPopover}
-            onCloseTagPopover={onCloseTagPopover}
-            onSelectLayer={handleTimelineSelectLayer}
-            onAddLayer={project.addLayer}
-            onAddGroupLayer={project.addGroupLayer}
-            onUpdateLayer={project.updateLayer}
-            onToggleLayerVisibility={handleTimelineToggleLayerVisibility}
-            onToggleLayerLock={handleTimelineToggleLayerLock}
-            onReorderLayers={project.reorderLayers}
-            onReorderFrames={project.reorderFrames}
-          />
-        );
-      case 'preview':
-        return (
-          <Preview
-            width={0}
-            state={state}
-            onClose={() => handleClosePane('preview')}
-            isFloating={false}
-          />
-        );
-      default:
-        return null;
-    }
+  const removeShade = (index: number) => {
+    updateState((prev) => {
+      const newShades = [...prev.shades];
+      newShades.splice(index, 1);
+      return { ...prev, shades: newShades };
+    });
+  };
+
+  const addShade = (color: string) => {
+    updateState((prev) =>
+      prev.shades.includes(color) ? prev : { ...prev, shades: [...prev.shades, color] }
+    );
   };
 
   const slotTabListRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
@@ -694,7 +1238,25 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
           </div>
 
           <div className="relative min-h-0 flex-1 overflow-hidden bg-card">
-            {renderPaneContent(group.activePaneId)}
+            <DockPaneContent
+              paneId={group.activePaneId}
+              state={state}
+              project={project}
+              fileSystem={fileSystem}
+              layerPropertiesState={layerPropertiesState}
+              onCloseLayerProperties={onCloseLayerProperties}
+              activeTagPopover={activeTagPopover}
+              onCloseTagPopover={onCloseTagPopover}
+              onPaletteColorSelect={handlePaletteColorSelect}
+              onPaletteAddColor={handlePaletteAddColor}
+              onPaletteColorsSelected={handlePaletteColorsSelected}
+              onSelectLayers={handleSelectLayers}
+              onSelectFrames={handleSelectFrames}
+              onTimelineSelectLayer={handleTimelineSelectLayer}
+              onTimelineToggleLayerVisibility={handleTimelineToggleLayerVisibility}
+              onTimelineToggleLayerLock={handleTimelineToggleLayerLock}
+              onClosePreview={handleClosePreview}
+            />
 
             {isBodyTopHover && (
               <div className="pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-center gap-1.5 border-2 border-dashed border-primary/80 bg-primary/10 select-none">
@@ -749,71 +1311,55 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
 
   const { activeProjectId } = project;
   const isHome = activeProjectId === 'home';
+  const activeLayerName = state.layers.find((l) => l.id === state.activeLayerId)?.name;
 
-  const getToolIcon = (t: ToolType, size = 18) => {
-    switch (t) {
-      case 'rect-select':
-        return <BoxSelect size={size} />;
-      case 'ellipse-select':
-        return <Circle size={size} />;
-      case 'lasso-select':
-        return <Lasso size={size} />;
-      case 'poly-lasso-select':
-        return <Scissors size={size} />;
-      case 'magic-wand':
-        return <Wand2 size={size} />;
-      case 'rect':
-        return <Square size={size} />;
-      case 'filled-rect':
-        return <Square size={size} className="fill-current" />;
-      case 'ellipse':
-        return <Circle size={size} />;
-      case 'filled-ellipse':
-        return <Circle size={size} className="fill-current" />;
-      case 'blur':
-        return <Droplets size={size} />;
-      case 'sharpen':
-        return <Zap size={size} />;
-      case 'smudge':
-        return <Hand size={size} />;
-      default:
-        return <BoxSelect size={size} />;
-    }
-  };
+  const toolRailElement = (
+    <ToolRail
+      tool={state.tool}
+      primaryColor={state.primaryColor}
+      secondaryColor={state.secondaryColor}
+      onSelectTool={handleSelectTool}
+      onSetPrimaryColor={handleSetPrimaryColor}
+      onSetSecondaryColor={handleSetSecondaryColor}
+      onSwapColors={handleSwapColors}
+    />
+  );
 
-  useEffect(() => {
-    if (SELECTION_TOOLS.includes(state.tool)) {
-      setLastSelectionTool(state.tool);
-    }
-    if (['rect', 'filled-rect', 'ellipse', 'filled-ellipse'].includes(state.tool)) {
-      setLastShapeTool(state.tool);
-    }
-    if (['blur', 'sharpen'].includes(state.tool)) {
-      setLastEffectTool(state.tool);
-    }
-  }, [state.tool]);
-
-  const removeShade = (index: number) => {
-    const newShades = [...state.shades];
-    newShades.splice(index, 1);
-    updateState({ ...state, shades: newShades });
-  };
-
-  const addShade = (color: string) => {
-    if (state.shades.includes(color)) return;
-    updateState({ ...state, shades: [...state.shades, color] });
-  };
-
-  const handleSwapColors = () => {
-    const nextPrimary = state.secondaryColor;
-    const nextSecondary = state.primaryColor;
-    updateState({
-      ...state,
-      primaryColor: nextPrimary,
-      secondaryColor: nextSecondary,
-      ...(state.inkType === 'shading' ? { shades: [...state.shades].reverse() } : {}),
-    });
-  };
+  const canvasElement = (
+    <Canvas
+      projectId={state.id}
+      frames={state.frames}
+      activeFrameIndex={state.activeFrameIndex}
+      layers={state.layers}
+      activeLayerId={state.activeLayerId}
+      palette={state.palette}
+      width={state.width}
+      height={state.height}
+      zoom={state.zoom}
+      tool={state.tool}
+      brushSize={state.brushSize}
+      brushShape={state.brushShape}
+      showGrid={state.showGrid}
+      onionSkin={state.onionSkin}
+      tiled={state.tiled}
+      symmetryX={state.symmetry.x}
+      symmetryY={state.symmetry.y}
+      selection={state.selection}
+      selectionMode={state.selectionMode}
+      fillContiguous={state.fillContiguous}
+      rotationAlgorithm={state.rotationAlgorithm}
+      referenceImage={state.referenceImage}
+      onDrawStart={handleCanvasDrawStart}
+      onDraw={canvasTools.handleDraw}
+      onDrawEnd={handleCanvasDrawEnd}
+      onSelectionUpdate={handleCanvasSelectionUpdate}
+      onMovePixels={canvasTools.handleMovePixels}
+      onRotatePixels={canvasTools.handleRotatePixels}
+      onScalePixels={onScalePixels}
+      onZoom={handleCanvasZoom}
+      onMousePosUpdate={setMousePos}
+    />
+  );
 
   return (
     <div className="flex h-full flex-col bg-background">
@@ -861,7 +1407,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
       </div>
 
       <TabStrip
-        projects={project.projects}
+        tabs={project.tabs}
         activeProjectId={project.activeProjectId}
         onSelectProject={project.setActiveProjectId}
         onCloseProject={project.closeProject}
@@ -904,7 +1450,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                 value={state.inkType}
                 onValueChange={(val) => {
                   if (val === 'simple' || val === 'shading') {
-                    updateState({ ...state, inkType: val });
+                    updateState((prev) => ({ ...prev, inkType: val }));
                   }
                 }}
                 className="w-auto shrink-0"
@@ -942,10 +1488,12 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                                 e.stopPropagation();
                                 const fromIdx = parseInt(e.dataTransfer.getData('text/plain'), 10);
                                 if (!isNaN(fromIdx) && fromIdx !== idx) {
-                                  const newShades = [...state.shades];
-                                  const [moved] = newShades.splice(fromIdx, 1);
-                                  newShades.splice(idx, 0, moved);
-                                  updateState({ ...state, shades: newShades });
+                                  updateState((prev) => {
+                                    const newShades = [...prev.shades];
+                                    const [moved] = newShades.splice(fromIdx, 1);
+                                    newShades.splice(idx, 0, moved);
+                                    return { ...prev, shades: newShades };
+                                  });
                                 }
                               }}
                               className="group relative h-full w-4 cursor-grab border border-border/40 active:cursor-grabbing"
@@ -1000,7 +1548,9 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                         render={
                           <button
                             type="button"
-                            onClick={() => updateState({ ...state, shades: [...state.shades].reverse() })}
+                            onClick={() =>
+                              updateState((prev) => ({ ...prev, shades: [...prev.shades].reverse() }))
+                            }
                             disabled={state.shades.length < 2}
                             className="w-full rounded-sm px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-accent disabled:opacity-45"
                           />
@@ -1012,7 +1562,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                         render={
                           <button
                             type="button"
-                            onClick={() => updateState({ ...state, shades: [] })}
+                            onClick={() => updateState((prev) => ({ ...prev, shades: [] }))}
                             className="w-full rounded-sm px-2 py-1.5 text-left text-xs text-destructive transition-colors hover:bg-destructive/15"
                           />
                         }
@@ -1032,7 +1582,10 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                   <ToolButton
                     active={state.symmetry.x}
                     onClick={() =>
-                      updateState({ ...state, symmetry: { ...state.symmetry, x: !state.symmetry.x } })
+                      updateState((prev) => ({
+                        ...prev,
+                        symmetry: { ...prev.symmetry, x: !prev.symmetry.x },
+                      }))
                     }
                     icon={<FlipHorizontal size={14} />}
                     label="Horizontal Symmetry"
@@ -1041,7 +1594,10 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                   <ToolButton
                     active={state.symmetry.y}
                     onClick={() =>
-                      updateState({ ...state, symmetry: { ...state.symmetry, y: !state.symmetry.y } })
+                      updateState((prev) => ({
+                        ...prev,
+                        symmetry: { ...prev.symmetry, y: !prev.symmetry.y },
+                      }))
                     }
                     icon={<FlipVertical size={14} />}
                     label="Vertical Symmetry"
@@ -1050,18 +1606,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                 </div>
               </div>
 
-              {[
-                'pencil',
-                'eraser',
-                'smudge',
-                'line',
-                'rect',
-                'filled-rect',
-                'ellipse',
-                'filled-ellipse',
-                'blur',
-                'sharpen',
-              ].includes(state.tool) && (
+              {BRUSH_OPTION_TOOLS.includes(state.tool) && (
                 <>
                   <div className="h-4 w-px bg-border" />
                   <div className="flex items-center gap-2">
@@ -1070,7 +1615,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                       min={1}
                       max={10}
                       value={state.brushSize}
-                      onValueChange={(val) => updateState({ ...state, brushSize: val })}
+                      onValueChange={(val) => updateState((prev) => ({ ...prev, brushSize: val }))}
                       aria-label="Brush size"
                       className="w-24"
                     />
@@ -1082,14 +1627,14 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                   <div className="flex items-center gap-0.5 rounded-md border border-border bg-card p-0.5">
                     <ToolButton
                       active={state.brushShape === 'square'}
-                      onClick={() => updateState({ ...state, brushShape: 'square' })}
+                      onClick={() => updateState((prev) => ({ ...prev, brushShape: 'square' }))}
                       icon={<Square size={14} />}
                       label="Square Brush"
                       tooltipSide="bottom"
                     />
                     <ToolButton
                       active={state.brushShape === 'circle'}
-                      onClick={() => updateState({ ...state, brushShape: 'circle' })}
+                      onClick={() => updateState((prev) => ({ ...prev, brushShape: 'circle' }))}
                       icon={<Circle size={14} />}
                       label="Circle Brush"
                       tooltipSide="bottom"
@@ -1104,7 +1649,9 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                       <CustomCheckbox
                         id="pixelPerfect"
                         checked={state.pixelPerfect}
-                        onCheckedChange={(checked) => updateState({ ...state, pixelPerfect: !!checked })}
+                        onCheckedChange={(checked) =>
+                          updateState((prev) => ({ ...prev, pixelPerfect: !!checked }))
+                        }
                       />
                       <span>Pixel Perfect</span>
                     </label>
@@ -1117,7 +1664,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                         value={state.smudgeMode || 'blend'}
                         onValueChange={(val) => {
                           if (val === 'blend' || val === 'push') {
-                            updateState({ ...state, smudgeMode: val });
+                            updateState((prev) => ({ ...prev, smudgeMode: val }));
                           }
                         }}
                         className="w-auto shrink-0"
@@ -1140,7 +1687,9 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                           max={100}
                           step={5}
                           value={Math.round((state.smudgeStrength ?? 0.7) * 100)}
-                          onValueChange={(val) => updateState({ ...state, smudgeStrength: val / 100 })}
+                          onValueChange={(val) =>
+                            updateState((prev) => ({ ...prev, smudgeStrength: val / 100 }))
+                          }
                           aria-label="Smudge strength"
                           className="w-20"
                         />
@@ -1163,7 +1712,9 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                     <CustomCheckbox
                       id="contiguous"
                       checked={state.fillContiguous}
-                      onCheckedChange={(checked) => updateState({ ...state, fillContiguous: !!checked })}
+                      onCheckedChange={(checked) =>
+                        updateState((prev) => ({ ...prev, fillContiguous: !!checked }))
+                      }
                     />
                     <span>Contiguous</span>
                   </label>
@@ -1179,7 +1730,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                       value={state.rotationAlgorithm}
                       onValueChange={(val) => {
                         if (val === 'nearest' || val === 'rotsprite') {
-                          updateState({ ...state, rotationAlgorithm: val });
+                          updateState((prev) => ({ ...prev, rotationAlgorithm: val }));
                         }
                       }}
                       className="w-auto shrink-0"
@@ -1207,7 +1758,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
               />
               <ToolButton
                 active={state.showGrid}
-                onClick={() => updateState({ ...state, showGrid: !state.showGrid })}
+                onClick={() => updateState((prev) => ({ ...prev, showGrid: !prev.showGrid }))}
                 icon={<Grid size={15} />}
                 label="Toggle Grid"
                 shortcut="Shift+G"
@@ -1215,7 +1766,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
               />
               <ToolButton
                 active={state.onionSkin}
-                onClick={() => updateState({ ...state, onionSkin: !state.onionSkin })}
+                onClick={() => updateState((prev) => ({ ...prev, onionSkin: !prev.onionSkin }))}
                 icon={<Eye size={15} />}
                 label="Onion Skin"
                 shortcut="Alt+O"
@@ -1252,7 +1803,6 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                 handleDragStart={handleDragStart}
                 handleDragEnd={handleDragEnd}
                 handleClosePane={handleClosePane}
-                renderPaneContent={renderPaneContent}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -1261,7 +1811,28 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                     anchor: { x: e.clientX, y: e.clientY },
                   });
                 }}
-              />
+              >
+                <DockPaneContent
+                  paneId={pane.id}
+                  state={state}
+                  project={project}
+                  fileSystem={fileSystem}
+                  layerPropertiesState={layerPropertiesState}
+                  onCloseLayerProperties={onCloseLayerProperties}
+                  activeTagPopover={activeTagPopover}
+                  onCloseTagPopover={onCloseTagPopover}
+                  onPaletteColorSelect={handlePaletteColorSelect}
+                  onPaletteAddColor={handlePaletteAddColor}
+                  onPaletteColorsSelected={handlePaletteColorsSelected}
+                  onSelectLayers={handleSelectLayers}
+                  onSelectFrames={handleSelectFrames}
+                  onTimelineSelectLayer={handleTimelineSelectLayer}
+                  onTimelineToggleLayerVisibility={handleTimelineToggleLayerVisibility}
+                  onTimelineToggleLayerLock={handleTimelineToggleLayerLock}
+                  onClosePreview={handleClosePreview}
+                  isFloating
+                />
+              </FloatingWindow>
             ))}
 
             <Allotment vertical>
@@ -1280,404 +1851,13 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
 
                   {/* Left Tool Rail (44px) */}
                   <Allotment.Pane minSize={44} maxSize={44} priority={1 as any}>
-                    <div className="flex h-full w-full flex-col items-center overflow-x-hidden overflow-y-auto border-r border-border bg-card py-2 no-scrollbar">
-                      <div className="flex flex-col gap-1 p-1">
-                        <ToolButton
-                          active={state.tool === 'pencil'}
-                          onClick={() => updateState({ ...state, tool: 'pencil' })}
-                          icon={<Pencil size={17} />}
-                          label="Pencil"
-                          shortcut="B"
-                        />
-                        <ToolButton
-                          active={state.tool === 'eraser'}
-                          onClick={() => updateState({ ...state, tool: 'eraser' })}
-                          icon={<Eraser size={17} />}
-                          label="Eraser"
-                          shortcut="E"
-                        />
-                        <ToolButton
-                          active={state.tool === 'line'}
-                          onClick={() => updateState({ ...state, tool: 'line' })}
-                          icon={<Minus size={17} className="-rotate-45" />}
-                          label="Line"
-                          shortcut="L"
-                        />
-
-                        <Popover>
-                          <Tooltip>
-                            <TooltipTrigger
-                              render={
-                                <PopoverTrigger
-                                  render={
-                                    <button
-                                      type="button"
-                                      aria-label="Shape Tools"
-                                      onClick={() => {
-                                        if (
-                                          !['rect', 'filled-rect', 'ellipse', 'filled-ellipse'].includes(
-                                            state.tool
-                                          )
-                                        ) {
-                                          updateState({ ...state, tool: lastShapeTool });
-                                        }
-                                      }}
-                                      className={`relative flex items-center justify-center rounded-md p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                                        ['rect', 'filled-rect', 'ellipse', 'filled-ellipse'].includes(
-                                          state.tool
-                                        )
-                                          ? 'bg-primary text-primary-foreground shadow-xs'
-                                          : 'text-muted-foreground hover:bg-accent hover:text-foreground'
-                                      }`}
-                                    />
-                                  }
-                                />
-                              }
-                            >
-                              {getToolIcon(lastShapeTool, 17)}
-                              <span className="clip-path-triangle absolute right-0.5 bottom-0.5 h-1.5 w-1.5 rounded-tl-xs bg-current opacity-60" />
-                            </TooltipTrigger>
-                            <TooltipContent side="right" sideOffset={8}>
-                              <span>Shape Tools</span>
-                              <TooltipShortcut>U</TooltipShortcut>
-                            </TooltipContent>
-                          </Tooltip>
-                          <PopoverContent side="right" align="start" className="flex w-44 flex-col gap-0.5 p-1.5">
-                            <PopoverClose
-                              render={
-                                <button
-                                  type="button"
-                                  onClick={() => updateState({ ...state, tool: 'rect' })}
-                                  className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
-                                    state.tool === 'rect'
-                                      ? 'bg-primary font-medium text-primary-foreground'
-                                      : 'text-foreground hover:bg-accent'
-                                  }`}
-                                />
-                              }
-                            >
-                              <Square size={14} />
-                              <span className="flex-1">Rectangle</span>
-                              <kbd className="font-mono text-[11px] opacity-70">U</kbd>
-                            </PopoverClose>
-                            <PopoverClose
-                              render={
-                                <button
-                                  type="button"
-                                  onClick={() => updateState({ ...state, tool: 'filled-rect' })}
-                                  className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
-                                    state.tool === 'filled-rect'
-                                      ? 'bg-primary font-medium text-primary-foreground'
-                                      : 'text-foreground hover:bg-accent'
-                                  }`}
-                                />
-                              }
-                            >
-                              <Square size={14} className="fill-current" />
-                              <span className="flex-1">Filled Rect</span>
-                              <kbd className="font-mono text-[11px] opacity-70">U</kbd>
-                            </PopoverClose>
-                            <PopoverClose
-                              render={
-                                <button
-                                  type="button"
-                                  onClick={() => updateState({ ...state, tool: 'ellipse' })}
-                                  className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
-                                    state.tool === 'ellipse'
-                                      ? 'bg-primary font-medium text-primary-foreground'
-                                      : 'text-foreground hover:bg-accent'
-                                  }`}
-                                />
-                              }
-                            >
-                              <Circle size={14} />
-                              <span className="flex-1">Ellipse</span>
-                              <kbd className="font-mono text-[11px] opacity-70">⇧U</kbd>
-                            </PopoverClose>
-                            <PopoverClose
-                              render={
-                                <button
-                                  type="button"
-                                  onClick={() => updateState({ ...state, tool: 'filled-ellipse' })}
-                                  className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
-                                    state.tool === 'filled-ellipse'
-                                      ? 'bg-primary font-medium text-primary-foreground'
-                                      : 'text-foreground hover:bg-accent'
-                                  }`}
-                                />
-                              }
-                            >
-                              <Circle size={14} className="fill-current" />
-                              <span className="flex-1">Filled Ellipse</span>
-                              <kbd className="font-mono text-[11px] opacity-70">⇧U</kbd>
-                            </PopoverClose>
-                          </PopoverContent>
-                        </Popover>
-
-                        <ToolButton
-                          active={state.tool === 'bucket'}
-                          onClick={() => updateState({ ...state, tool: 'bucket' })}
-                          icon={<PaintBucket size={17} />}
-                          label="Fill Bucket"
-                          shortcut="G"
-                        />
-                        <ToolButton
-                          active={state.tool === 'eyedropper'}
-                          onClick={() => updateState({ ...state, tool: 'eyedropper' })}
-                          icon={<Pipette size={17} />}
-                          label="Eyedropper"
-                          shortcut="I"
-                        />
-                        <ToolButton
-                          active={state.tool === 'smudge'}
-                          onClick={() => updateState({ ...state, tool: 'smudge' })}
-                          icon={<Hand size={17} />}
-                          label="Smudge / Push"
-                          shortcut="S"
-                        />
-
-                        <Popover>
-                          <Tooltip>
-                            <TooltipTrigger
-                              render={
-                                <PopoverTrigger
-                                  render={
-                                    <button
-                                      type="button"
-                                      aria-label="Effect Brushes"
-                                      onClick={() => {
-                                        if (!['blur', 'sharpen'].includes(state.tool)) {
-                                          updateState({ ...state, tool: lastEffectTool });
-                                        }
-                                      }}
-                                      className={`relative flex items-center justify-center rounded-md p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                                        ['blur', 'sharpen'].includes(state.tool)
-                                          ? 'bg-primary text-primary-foreground shadow-xs'
-                                          : 'text-muted-foreground hover:bg-accent hover:text-foreground'
-                                      }`}
-                                    />
-                                  }
-                                />
-                              }
-                            >
-                              {getToolIcon(lastEffectTool, 17)}
-                              <span className="clip-path-triangle absolute right-0.5 bottom-0.5 h-1.5 w-1.5 rounded-tl-xs bg-current opacity-60" />
-                            </TooltipTrigger>
-                            <TooltipContent side="right" sideOffset={8}>
-                              <span>Effect Brushes</span>
-                              <TooltipShortcut>R</TooltipShortcut>
-                            </TooltipContent>
-                          </Tooltip>
-                          <PopoverContent side="right" align="start" className="flex w-44 flex-col gap-0.5 p-1.5">
-                            <PopoverClose
-                              render={
-                                <button
-                                  type="button"
-                                  onClick={() => updateState({ ...state, tool: 'blur' })}
-                                  className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
-                                    state.tool === 'blur'
-                                      ? 'bg-primary font-medium text-primary-foreground'
-                                      : 'text-foreground hover:bg-accent'
-                                  }`}
-                                />
-                              }
-                            >
-                              <Droplets size={14} />
-                              <span className="flex-1">Blur</span>
-                              <kbd className="font-mono text-[11px] opacity-70">R</kbd>
-                            </PopoverClose>
-                            <PopoverClose
-                              render={
-                                <button
-                                  type="button"
-                                  onClick={() => updateState({ ...state, tool: 'sharpen' })}
-                                  className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
-                                    state.tool === 'sharpen'
-                                      ? 'bg-primary font-medium text-primary-foreground'
-                                      : 'text-foreground hover:bg-accent'
-                                  }`}
-                                />
-                              }
-                            >
-                              <Zap size={14} />
-                              <span className="flex-1">Sharpen</span>
-                              <kbd className="font-mono text-[11px] opacity-70">⇧R</kbd>
-                            </PopoverClose>
-                          </PopoverContent>
-                        </Popover>
-
-                        <div className="my-1 h-px w-full bg-border" />
-
-                        <ToolButton
-                          active={state.tool === 'move'}
-                          onClick={() => updateState({ ...state, tool: 'move' })}
-                          icon={<MousePointer2 size={17} />}
-                          label="Move"
-                          shortcut="V"
-                        />
-
-                        <Popover>
-                          <Tooltip>
-                            <TooltipTrigger
-                              render={
-                                <PopoverTrigger
-                                  render={
-                                    <button
-                                      type="button"
-                                      aria-label="Selection Tools"
-                                      onClick={() => {
-                                        if (!SELECTION_TOOLS.includes(state.tool)) {
-                                          updateState({ ...state, tool: lastSelectionTool });
-                                        }
-                                      }}
-                                      className={`relative flex items-center justify-center rounded-md p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                                        SELECTION_TOOLS.includes(state.tool)
-                                          ? 'bg-primary text-primary-foreground shadow-xs'
-                                          : 'text-muted-foreground hover:bg-accent hover:text-foreground'
-                                      }`}
-                                    />
-                                  }
-                                />
-                              }
-                            >
-                              {getToolIcon(lastSelectionTool, 17)}
-                              <span className="clip-path-triangle absolute right-0.5 bottom-0.5 h-1.5 w-1.5 rounded-tl-xs bg-current opacity-60" />
-                            </TooltipTrigger>
-                            <TooltipContent side="right" sideOffset={8}>
-                              <span>Selection Tools</span>
-                              <TooltipShortcut>M</TooltipShortcut>
-                            </TooltipContent>
-                          </Tooltip>
-                          <PopoverContent side="right" align="start" className="flex w-48 flex-col gap-0.5 p-1.5">
-                            {SELECTION_TOOLS.map((t) => (
-                              <PopoverClose
-                                key={t}
-                                render={
-                                  <button
-                                    type="button"
-                                    onClick={() => updateState({ ...state, tool: t })}
-                                    className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
-                                      state.tool === t
-                                        ? 'bg-primary font-medium text-primary-foreground'
-                                        : 'text-foreground hover:bg-accent'
-                                    }`}
-                                  />
-                                }
-                              >
-                                {getToolIcon(t, 14)}
-                                <span className="capitalize">
-                                  {t.replace('-select', '').replace('poly-', 'Poly ').replace('-', ' ')}{' '}
-                                  Select
-                                </span>
-                              </PopoverClose>
-                            ))}
-                          </PopoverContent>
-                        </Popover>
-                      </div>
-
-                      <div className="flex-1" />
-
-                      {/* Primary / Secondary Swatches & Atomic Swap */}
-                      <div className="relative mb-2 h-10 w-10 shrink-0">
-                        <Popover>
-                          <Tooltip>
-                            <TooltipTrigger
-                              render={
-                                <PopoverTrigger
-                                  render={
-                                    <button
-                                      type="button"
-                                      aria-label="Secondary Color"
-                                      className="absolute right-0 bottom-0 h-6 w-6 rounded-sm border border-border-strong shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                      style={{ backgroundColor: state.secondaryColor }}
-                                    />
-                                  }
-                                />
-                              }
-                            />
-                            <TooltipContent side="right">Secondary Color</TooltipContent>
-                          </Tooltip>
-                          <PopoverContent
-                            side="right"
-                            align="end"
-                            sideOffset={10}
-                            className="w-auto border-none bg-transparent p-0 shadow-none"
-                          >
-                            <ColorPicker
-                              color={state.secondaryColor}
-                              onChange={(c) => updateState({ ...state, secondaryColor: c })}
-                            />
-                          </PopoverContent>
-                        </Popover>
-
-                        <Popover>
-                          <Tooltip>
-                            <TooltipTrigger
-                              render={
-                                <PopoverTrigger
-                                  render={
-                                    <button
-                                      type="button"
-                                      aria-label="Primary Color"
-                                      className="absolute top-0 left-0 z-10 h-6 w-6 rounded-sm border border-border-strong shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                      style={{ backgroundColor: state.primaryColor }}
-                                    />
-                                  }
-                                />
-                              }
-                            />
-                            <TooltipContent side="right">Primary Color</TooltipContent>
-                          </Tooltip>
-                          <PopoverContent
-                            side="right"
-                            align="end"
-                            sideOffset={10}
-                            className="w-auto border-none bg-transparent p-0 shadow-none"
-                          >
-                            <ColorPicker
-                              color={state.primaryColor}
-                              onChange={(c) => updateState({ ...state, primaryColor: c })}
-                            />
-                          </PopoverContent>
-                        </Popover>
-
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={
-                              <button
-                                type="button"
-                                aria-label="Swap Primary and Secondary Colors"
-                                onClick={handleSwapColors}
-                                className="absolute top-0 right-0 z-20 flex h-4 w-4 items-center justify-center rounded-bl-sm border-b border-l border-border bg-card text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                              />
-                            }
-                          >
-                            <ArrowRightLeft size={9} className="rotate-45" />
-                          </TooltipTrigger>
-                          <TooltipContent side="right">
-                            <span>Swap Colors</span>
-                            <TooltipShortcut>X</TooltipShortcut>
-                          </TooltipContent>
-                        </Tooltip>
-                      </div>
-                    </div>
+                    {toolRailElement}
                   </Allotment.Pane>
 
                   {/* Central Canvas Stage */}
                   <Allotment.Pane priority={10 as any}>
                     <div className="relative flex h-full w-full min-w-0 flex-col overflow-hidden bg-canvas">
-                      <Canvas
-                        state={state}
-                        onDrawStart={handleCanvasDrawStart}
-                        onDraw={canvasTools.handleDraw}
-                        onDrawEnd={handleCanvasDrawEnd}
-                        onSelectionUpdate={handleCanvasSelectionUpdate}
-                        onMovePixels={canvasTools.handleMovePixels}
-                        onRotatePixels={canvasTools.handleRotatePixels}
-                        onScalePixels={onScalePixels}
-                        onZoom={handleCanvasZoom}
-                        onMousePosUpdate={setMousePos}
-                      />
+                      {canvasElement}
                     </div>
                   </Allotment.Pane>
 
@@ -1831,9 +2011,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                         </MenuItemIcon>
                         <span>Float Window</span>
                       </MenuItem>
-                      {(['left', 'right', 'bottom'] as const)
-                        .filter((s) => s !== ctx.slotId)
-                        .map((targetSlot) => (
+                      {DOCK_SLOTS.filter((s) => s !== ctx.slotId).map((targetSlot) => (
                           <MenuItem
                             key={targetSlot}
                             value={`move-${targetSlot}`}
@@ -1855,7 +2033,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                   <>
                     <MenuSeparator />
                     <MenuGroup>
-                      {(['left', 'right', 'bottom'] as const).map((targetSlot) => (
+                      {DOCK_SLOTS.map((targetSlot) => (
                         <MenuItem
                           key={targetSlot}
                           value={`dock-${targetSlot}`}
@@ -1879,9 +2057,16 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
       </Menu>
 
       <StatusBar
-        state={state}
+        tool={state.tool}
+        inkType={state.inkType}
+        smudgeMode={state.smudgeMode}
+        width={state.width}
+        height={state.height}
+        activeFrameIndex={state.activeFrameIndex}
+        frameCount={state.frames.length}
+        zoom={state.zoom}
+        activeLayerName={activeLayerName}
         isHome={isHome}
-        statusMessage={statusMessage}
         selectionSize={selectionSize}
       />
     </div>

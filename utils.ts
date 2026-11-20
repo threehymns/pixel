@@ -606,7 +606,10 @@ let scratchLayerCtx: CanvasRenderingContext2D | null = null;
 let scratchLayerImgData: ImageData | null = null;
 let scratchLayerData32: Uint32Array | null = null;
 
-export const renderFrameToCanvas = (state: ProjectState, frameIndex: number): HTMLCanvasElement => {
+export const renderFrameToCanvas = (
+    state: Pick<ProjectState, 'width' | 'height' | 'frames' | 'palette' | 'layers'>,
+    frameIndex: number
+): HTMLCanvasElement => {
     const canvas = document.createElement('canvas');
     canvas.width = state.width;
     canvas.height = state.height;

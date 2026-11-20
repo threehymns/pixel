@@ -7,6 +7,35 @@ import { encodeAseprite } from '../utils/aseprite';
 import { saveRecentProject, getRecentProjects, loadRecentProjectState, clearAllRecents } from '../utils/storage';
 import { applyOutlineEffect, DEFAULT_OUTLINE_MATRIX } from '../utils/outline';
 
+export type ProjectStateUpdater = ProjectState | ((prev: ProjectState) => ProjectState);
+
+export interface ProjectTabItem {
+  id: string;
+  title: string;
+  isDirty: boolean;
+}
+
+function deriveProjectTabs(projects: ProjectInstance[], prevTabs?: ProjectTabItem[]): ProjectTabItem[] {
+  if (prevTabs && prevTabs.length === projects.length) {
+    let same = true;
+    for (let i = 0; i < projects.length; i++) {
+      const p = projects[i];
+      const prev = prevTabs[i];
+      const isDirty = p.historyIndex !== p.lastSavedHistoryIndex;
+      if (prev.id !== p.data.id || prev.title !== p.data.title || prev.isDirty !== isDirty) {
+        same = false;
+        break;
+      }
+    }
+    if (same) return prevTabs;
+  }
+  return projects.map(p => ({
+    id: p.data.id,
+    title: p.data.title,
+    isDirty: p.historyIndex !== p.lastSavedHistoryIndex,
+  }));
+}
+
 // UI fields that should not be affected by Undo/Redo
 const UI_FIELDS: (keyof ProjectState)[] = [
     'tool',
@@ -250,8 +279,65 @@ function applyFloydSteinbergDither(
   }
 }
 
+/**
+ * Helper to merge current UI state into a historical snapshot.
+ * This ensures Undo/Redo doesn't change things like tool, colors, or zoom.
+ */
+function mergeUIState(snapshot: ProjectState, current: ProjectState): ProjectState {
+    const merged = { ...snapshot };
+    
+    // Preserve UI fields from the current state
+    UI_FIELDS.forEach(field => {
+        (merged as any)[field] = current[field];
+    });
+
+    // Attempt to preserve current selection in timeline if still valid
+    const hasLayer = snapshot.layers.some(l => l.id === current.activeLayerId);
+    if (hasLayer) {
+        merged.activeLayerId = current.activeLayerId;
+        merged.selectedLayerIds = current.selectedLayerIds.filter(id => 
+            snapshot.layers.some(l => l.id === id)
+        );
+        if (merged.selectedLayerIds.length === 0) merged.selectedLayerIds = [merged.activeLayerId];
+    }
+
+    const hasFrame = snapshot.frames.length > current.activeFrameIndex;
+    if (hasFrame) {
+        merged.activeFrameIndex = current.activeFrameIndex;
+        merged.selectedFrameIndices = current.selectedFrameIndices.filter(i => i < snapshot.frames.length);
+        if (merged.selectedFrameIndices.length === 0) merged.selectedFrameIndices = [merged.activeFrameIndex];
+    }
+
+    return merged;
+}
+
+const EMPTY_HISTORY: HistoryEntry[] = [];
+const FALLBACK_INSTANCE: ProjectInstance = {
+  data: INITIAL_STATE,
+  history: EMPTY_HISTORY,
+  historyIndex: 0,
+  lastSavedHistoryIndex: 0,
+};
+
 export function useProject() {
-  const [projects, setProjects] = useState<ProjectInstance[]>([]);
+  const [projectStore, setProjectStore] = useState<{ projects: ProjectInstance[]; tabs: ProjectTabItem[] }>({
+    projects: [],
+    tabs: [],
+  });
+  const projects = projectStore.projects;
+  const tabs = projectStore.tabs;
+
+  const setProjects = (updater: (prev: ProjectInstance[]) => ProjectInstance[]) => {
+    setProjectStore(prevStore => {
+      const nextProjects = updater(prevStore.projects);
+      if (nextProjects === prevStore.projects) return prevStore;
+      return {
+        projects: nextProjects,
+        tabs: deriveProjectTabs(nextProjects, prevStore.tabs),
+      };
+    });
+  };
+
   const [activeProjectId, setActiveProjectId] = useState<string>('home');
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
 
@@ -296,7 +382,7 @@ export function useProject() {
 
   const loadRecentProject = async (recent: RecentProject) => {
     // Check if already open by ID
-    const existing = projects.find(p => p.data.id === recent.id);
+    const existing = latestRef.current.projects.find(p => p.data.id === recent.id);
     if (existing) {
       setActiveProjectId(existing.data.id);
       return;
@@ -338,17 +424,18 @@ export function useProject() {
   };
 
   const activeIndex = projects.findIndex(p => p.data.id === activeProjectId);
-  const activeInstance = activeIndex >= 0 ? projects[activeIndex] : {
-      data: INITIAL_STATE, 
-      history: [],
-      historyIndex: 0,
-      lastSavedHistoryIndex: 0
-  };
+  const activeInstance = activeIndex >= 0 ? projects[activeIndex] : FALLBACK_INSTANCE;
   const state = activeInstance.data;
 
-  // Keep latest active saveable project in a ref so unload handlers and debounced saves
-  // never force listener churn or capture stale UI extras.
+  // Keep latest active saveable project and mutable refs synced in useLayoutEffect
+  // so all action callbacks remain permanently referentially stable for React Compiler.
   const activeProjectRef = useRef<ProjectState | null>(null);
+  const latestRef = useRef({
+    state,
+    activeProjectId,
+    projects,
+    activeInstance,
+  });
   const isSaveableProject =
     activeProjectId !== 'home' &&
     activeIndex >= 0 &&
@@ -356,7 +443,13 @@ export function useProject() {
     state.id !== 'default';
   useLayoutEffect(() => {
     activeProjectRef.current = isSaveableProject ? state : null;
-  }, [isSaveableProject, state]);
+    latestRef.current = {
+      state,
+      activeProjectId,
+      projects,
+      activeInstance,
+    };
+  });
 
   // Auto-save active project changes to IndexedDB (debounced) only when actual document
   // content or metadata changes — not on high-frequency UI-only changes (zoom, tool, selection, etc.).
@@ -421,43 +514,11 @@ export function useProject() {
     };
   }, []);
 
-  /**
-   * Helper to merge current UI state into a historical snapshot.
-   * This ensures Undo/Redo doesn't change things like tool, colors, or zoom.
-   */
-  const mergeUIState = (snapshot: ProjectState, current: ProjectState): ProjectState => {
-      const merged = { ...snapshot };
-      
-      // Preserve UI fields from the current state
-      UI_FIELDS.forEach(field => {
-          (merged as any)[field] = current[field];
-      });
-
-      // Attempt to preserve current selection in timeline if still valid
-      const hasLayer = snapshot.layers.some(l => l.id === current.activeLayerId);
-      if (hasLayer) {
-          merged.activeLayerId = current.activeLayerId;
-          merged.selectedLayerIds = current.selectedLayerIds.filter(id => 
-              snapshot.layers.some(l => l.id === id)
-          );
-          if (merged.selectedLayerIds.length === 0) merged.selectedLayerIds = [merged.activeLayerId];
-      }
-
-      const hasFrame = snapshot.frames.length > current.activeFrameIndex;
-      if (hasFrame) {
-          merged.activeFrameIndex = current.activeFrameIndex;
-          merged.selectedFrameIndices = current.selectedFrameIndices.filter(i => i < snapshot.frames.length);
-          if (merged.selectedFrameIndices.length === 0) merged.selectedFrameIndices = [merged.activeFrameIndex];
-      }
-
-      return merged;
-  };
-
   const createProject = (config?: { width: number, height: number, colorMode: ColorMode, title?: string, paletteId?: string }) => {
     const w = config?.width ?? INITIAL_STATE.width;
     const h = config?.height ?? INITIAL_STATE.height;
     const mode = config?.colorMode ?? INITIAL_STATE.colorMode;
-    const title = config?.title?.trim() || `Untitled-${projects.length + 1}`;
+    const title = config?.title?.trim() || `Untitled-${latestRef.current.projects.length + 1}`;
     const chosenPalette = config?.paletteId
       ? INITIAL_STATE.paletteLibrary.find(p => p.id === config.paletteId)
       : undefined;
@@ -516,29 +577,35 @@ export function useProject() {
   };
 
   const updateState = (
-      newState: ProjectState, 
+      updater: ProjectStateUpdater,
       historyConfig?: { action: string, tool?: ToolType }
   ) => {
-    if (activeProjectId === 'home') return;
-
-    let cleanSelection: Set<number> | null = null;
-    if (newState.selection) {
-      if (newState.selection instanceof Set) {
-        cleanSelection = newState.selection.size > 0 ? newState.selection : null;
-      } else {
-        const arr = Array.isArray(newState.selection) ? newState.selection : [];
-        const numSet = new Set<number>();
-        for (let i = 0; i < arr.length; i++) {
-          const n = Number(arr[i]);
-          if (!isNaN(n)) numSet.add(n);
-        }
-        cleanSelection = numSet.size > 0 ? numSet : null;
-      }
-    }
-    const sanitizedState = { ...newState, selection: cleanSelection };
+    const curActiveId = latestRef.current.activeProjectId;
+    if (curActiveId === 'home') return;
 
     setProjects(prev => prev.map(p => {
-      if (p.data.id !== activeProjectId) return p;
+      if (p.data.id !== curActiveId) return p;
+
+      const newState = typeof updater === 'function' ? updater(p.data) : updater;
+      if (newState === p.data && !historyConfig) return p;
+
+      let cleanSelection: Set<number> | null = null;
+      if (newState.selection) {
+        if (newState.selection instanceof Set) {
+          cleanSelection = newState.selection.size > 0 ? newState.selection : null;
+        } else {
+          const arr = Array.isArray(newState.selection) ? newState.selection : [];
+          const numSet = new Set<number>();
+          for (let i = 0; i < arr.length; i++) {
+            const n = Number(arr[i]);
+            if (!isNaN(n)) numSet.add(n);
+          }
+          cleanSelection = numSet.size > 0 ? numSet : null;
+        }
+      }
+      const sanitizedState = newState.selection === cleanSelection
+        ? newState
+        : { ...newState, selection: cleanSelection };
 
       let newHistory = p.history;
       let newIndex = p.historyIndex;
@@ -565,8 +632,9 @@ export function useProject() {
   };
 
   const markSaved = () => {
+      const curActiveId = latestRef.current.activeProjectId;
       setProjects(prev => prev.map(p => {
-          if (p.data.id === activeProjectId) {
+          if (p.data.id === curActiveId) {
               return { ...p, lastSavedHistoryIndex: p.historyIndex };
           }
           return p;
@@ -574,6 +642,7 @@ export function useProject() {
   };
 
   const saveProjectAs = async () => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
 
     const isInIframe = window.self !== window.top;
@@ -655,6 +724,7 @@ export function useProject() {
   };
 
   const saveProject = async () => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     if (!state.fileHandle) {
         await saveProjectAs();
@@ -697,6 +767,7 @@ export function useProject() {
   };
 
   const closeProject = (id: string) => {
+    const { projects, activeProjectId } = latestRef.current;
     const projToClose = projects.find(p => p.data.id === id);
     if (projToClose && projToClose.data && projToClose.data.id !== 'default') {
       saveRecentProject(projToClose.data)
@@ -725,6 +796,7 @@ export function useProject() {
   };
 
   const switchTab = (direction: 'next' | 'prev') => {
+      const { projects, activeProjectId } = latestRef.current;
       if (activeProjectId === 'home') {
           if (projects.length > 0) {
               setActiveProjectId(direction === 'next' ? projects[0].data.id : projects[projects.length - 1].data.id);
@@ -740,9 +812,10 @@ export function useProject() {
   };
 
   const undo = () => {
-    if (activeProjectId === 'home') return;
+    const curActiveId = latestRef.current.activeProjectId;
+    if (curActiveId === 'home') return;
     setProjects(prev => prev.map(p => {
-        if (p.data.id !== activeProjectId) return p;
+        if (p.data.id !== curActiveId) return p;
         if (p.historyIndex > 0) {
             const newIndex = p.historyIndex - 1;
             const historicalState = p.history[newIndex].state;
@@ -757,9 +830,10 @@ export function useProject() {
   };
 
   const redo = () => {
-     if (activeProjectId === 'home') return;
+     const curActiveId = latestRef.current.activeProjectId;
+     if (curActiveId === 'home') return;
      setProjects(prev => prev.map(p => {
-        if (p.data.id !== activeProjectId) return p;
+        if (p.data.id !== curActiveId) return p;
         if (p.historyIndex < p.history.length - 1) {
             const newIndex = p.historyIndex + 1;
             const historicalState = p.history[newIndex].state;
@@ -774,9 +848,10 @@ export function useProject() {
   };
 
   const jumpToHistory = (index: number) => {
-    if (activeProjectId === 'home') return;
+    const curActiveId = latestRef.current.activeProjectId;
+    if (curActiveId === 'home') return;
     setProjects(prev => prev.map(p => {
-      if (p.data.id !== activeProjectId) return p;
+      if (p.data.id !== curActiveId) return p;
       if (index >= 0 && index < p.history.length) {
         const historicalState = p.history[index].state;
         return { 
@@ -790,6 +865,7 @@ export function useProject() {
   };
 
   const setColorMode = (mode: ColorMode) => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home' || state.colorMode === mode) return;
 
     let newPalette = [...state.palette];
@@ -845,6 +921,7 @@ export function useProject() {
   };
 
   const addFrame = () => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     const newFrame: Frame = { id: `frame-${Date.now()}`, layerData: {} };
     state.layers.forEach(l => newFrame.layerData[l.id] = new Array(state.width * state.height).fill(null));
@@ -860,6 +937,7 @@ export function useProject() {
   };
 
   const duplicateFrame = () => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     const current = state.frames[state.activeFrameIndex];
     if (!current) return;
@@ -879,6 +957,7 @@ export function useProject() {
   };
 
   const duplicateSelectedFrames = () => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     const selected = [...state.selectedFrameIndices].sort((a, b) => a - b);
     if (selected.length === 0) return;
@@ -910,6 +989,7 @@ export function useProject() {
   };
 
   const deleteFrame = () => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     if (state.frames.length <= 1) return; 
     updateState(
@@ -919,6 +999,7 @@ export function useProject() {
   };
 
   const deleteSelectedFrames = () => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     const selected = state.selectedFrameIndices;
     if (selected.length === 0 || selected.length === state.frames.length) return;
@@ -941,6 +1022,7 @@ export function useProject() {
   };
 
   const insertFrame = (index: number) => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     const newFrame: Frame = { id: `frame-${Date.now()}`, layerData: {} };
     state.layers.forEach(l => newFrame.layerData[l.id] = new Array(state.width * state.height).fill(null));
@@ -958,6 +1040,7 @@ export function useProject() {
   };
 
   const tweenFrames = () => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     const selected = [...state.selectedFrameIndices].sort((a, b) => a - b);
     if (selected.length < 3) {
@@ -1059,6 +1142,7 @@ export function useProject() {
   };
 
   const addLayer = () => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     const newId = `layer-${Date.now()}`;
     const newName = getNextLayerName(state.layers, 'Layer');
@@ -1105,6 +1189,7 @@ export function useProject() {
   };
 
   const addGroupLayer = () => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     const newId = `group-${Date.now()}`;
     const newGroupName = getNextLayerName(state.layers, 'Group');
@@ -1133,6 +1218,7 @@ export function useProject() {
   };
 
   const deleteLayer = (id: string) => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     if (state.layers.length <= 1) return; 
     
@@ -1155,6 +1241,7 @@ export function useProject() {
   };
 
   const deleteSelectedLayers = () => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     const selected = state.selectedLayerIds;
     if (selected.length === 0 || selected.length === state.layers.length) return;
@@ -1178,6 +1265,7 @@ export function useProject() {
   };
 
   const duplicateLayer = (id: string) => {
+     const { activeProjectId, state } = latestRef.current;
      if (activeProjectId === 'home') return;
      const layerIndex = state.layers.findIndex(l => l.id === id);
      if (layerIndex === -1) return;
@@ -1204,6 +1292,7 @@ export function useProject() {
   };
 
   const duplicateSelectedLayers = () => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     const selected = [...state.selectedLayerIds];
     if (selected.length === 0) return;
@@ -1233,6 +1322,7 @@ export function useProject() {
   };
 
   const updateLayer = (id: string, updates: Partial<Layer>) => {
+      const { activeProjectId, state } = latestRef.current;
       if (activeProjectId === 'home') return;
       const newLayers = state.layers.map(l => l.id === id ? { ...l, ...updates } : l);
       const action = updates.name ? 'Rename Layer' : 'Layer Properties';
@@ -1243,6 +1333,7 @@ export function useProject() {
   };
 
   const groupSelectedLayers = () => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     const selectedIds = state.selectedLayerIds.length > 0 ? state.selectedLayerIds : [state.activeLayerId];
     if (selectedIds.length === 0) return;
@@ -1310,6 +1401,7 @@ export function useProject() {
   };
 
   const ungroupSelectedLayers = () => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     const selectedIds = state.selectedLayerIds.length > 0 ? state.selectedLayerIds : [state.activeLayerId];
     const groupLayersToUngroup = state.layers.filter(l => l.type === 'group' && selectedIds.includes(l.id));
@@ -1349,6 +1441,7 @@ export function useProject() {
   };
 
   const addLayerToGroup = (groupId: string) => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     const group = state.layers.find(l => l.id === groupId);
     if (!group) return;
@@ -1387,6 +1480,7 @@ export function useProject() {
   };
 
   const toggleCollapseAllGroups = (forceCollapse?: boolean) => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     const groupLayers = state.layers.filter(l => l.type === 'group');
     if (groupLayers.length === 0) return;
@@ -1404,6 +1498,7 @@ export function useProject() {
   };
 
   const reorderLayers = (dId: string, tId: string, pos: 'before' | 'after' | 'inside' | 'outside' | 'root-bottom') => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
 
     const draggedLayer = state.layers.find(l => l.id === dId);
@@ -1516,6 +1611,7 @@ export function useProject() {
   };
 
   const reorderFrames = (from: number, to: number) => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     if (from === to) return;
     
@@ -1543,6 +1639,7 @@ export function useProject() {
   };
 
   const importPalette = async (file: File) => {
+    const { activeProjectId } = latestRef.current;
     if (activeProjectId === 'home') return;
     try {
       let colors: string[] = [];
@@ -1562,19 +1659,21 @@ export function useProject() {
       if (colors.length === 0) { alert("No colors found."); return; }
       const newPalette: SavedPalette = { id: `pal-${Date.now()}`, name: name, colors: colors };
       updateState(
-          { ...state, paletteLibrary: [...state.paletteLibrary, newPalette], palette: newPalette.colors, activePaletteId: newPalette.id },
+          (prev) => ({ ...prev, paletteLibrary: [...prev.paletteLibrary, newPalette], palette: newPalette.colors, activePaletteId: newPalette.id }),
           { action: `Import Palette: ${name}` }
       );
     } catch (e) { console.error(e); alert("Failed to import palette."); }
   };
 
   const selectPalette = (id: string) => {
+      const { activeProjectId, state } = latestRef.current;
       if (activeProjectId === 'home') return;
       const selected = state.paletteLibrary.find(p => p.id === id);
       if (selected) updateState({ ...state, palette: selected.colors, activePaletteId: selected.id });
   };
 
   const resizeCanvas = (newWidth: number, newHeight: number, anchor: string = 'cc') => {
+      const { activeProjectId, state } = latestRef.current;
       if (activeProjectId === 'home') return;
       if (newWidth === state.width && newHeight === state.height) return;
 
@@ -1622,16 +1721,19 @@ export function useProject() {
   };
 
   const setReferenceImage = (config: ProjectState['referenceImage']) => {
+      const { activeProjectId, state } = latestRef.current;
       if (activeProjectId === 'home') return;
       updateState({ ...state, referenceImage: config }, { action: 'Update Reference Image' });
   };
 
   const setTiled = (tiled: boolean) => {
+      const { activeProjectId, state } = latestRef.current;
       if (activeProjectId === 'home') return;
       updateState({ ...state, tiled }, { action: tiled ? 'Enable Tiled Mode' : 'Disable Tiled Mode' });
   };
 
   const flipPixels = (axis: 'h' | 'v') => {
+      const { activeProjectId, state } = latestRef.current;
       if (activeProjectId === 'home') return;
       const { frames, width, height, activeFrameIndex, selectedLayerIds, selection } = state;
       
@@ -1693,6 +1795,7 @@ export function useProject() {
   };
 
   const centerContent = () => {
+      const { activeProjectId, state } = latestRef.current;
       if (activeProjectId === 'home') return;
       const { frames, width, height, activeFrameIndex, selectedLayerIds } = state;
       
@@ -1770,6 +1873,7 @@ export function useProject() {
   };
 
   const generateOutline = () => {
+      const { activeProjectId, state } = latestRef.current;
       if (activeProjectId === 'home') return;
       const { newState, actionSummary } = applyOutlineEffect(state, {
         placement: 'outside',
@@ -1785,6 +1889,7 @@ export function useProject() {
   };
 
   const strokeSelection = () => {
+      const { activeProjectId, state } = latestRef.current;
       if (activeProjectId === 'home') return;
       const { frames, width, height, activeFrameIndex, activeLayerId, selection, primaryColor, colorMode, palette } = state;
       if (!selection || selection.size === 0) return;
@@ -1821,6 +1926,7 @@ export function useProject() {
   };
 
   const clearSelection = () => {
+      const { activeProjectId, state } = latestRef.current;
       if (activeProjectId === 'home') return;
       const { frames, width, height, activeFrameIndex, selectedLayerIds, selection } = state;
       if (!selection || selection.size === 0) return;
@@ -1843,6 +1949,7 @@ export function useProject() {
   };
 
   const cropCanvas = () => {
+      const { activeProjectId, state } = latestRef.current;
       if (activeProjectId === 'home') return;
       const { frames, width, height, activeFrameIndex, selectedLayerIds, selection } = state;
       if (!selection || selection.size === 0) return;
@@ -1874,6 +1981,7 @@ export function useProject() {
   };
 
   const downloadImage = () => {
+     const { activeProjectId, state } = latestRef.current;
      if (activeProjectId === 'home') return;
      const canvas = renderFrameToCanvas(state, state.activeFrameIndex);
      const link = document.createElement('a'); 
@@ -1883,6 +1991,7 @@ export function useProject() {
   };
 
   const downloadSpriteSheet = () => {
+     const { activeProjectId, state } = latestRef.current;
      if (activeProjectId === 'home') return;
      const canvas = renderSpriteSheet(state);
      const link = document.createElement('a'); 
@@ -1892,12 +2001,14 @@ export function useProject() {
   };
 
   const setFrameDuration = (frameIndex: number, duration: number) => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     const newFrames = state.frames.map((f, i) => i === frameIndex ? { ...f, duration } : f);
     updateState({ ...state, frames: newFrames }, { action: `Set Frame Duration (${duration}ms)` });
   };
 
   const addTag = (name: string, from: number, to: number, color?: string) => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     const newTag: FrameTag = {
       id: `tag-${Date.now()}`,
@@ -1912,6 +2023,7 @@ export function useProject() {
   };
 
   const saveTag = (tag: FrameTag) => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     const existingTags = state.tags || [];
     const exists = existingTags.some(t => t.id === tag.id);
@@ -1922,6 +2034,7 @@ export function useProject() {
   };
 
   const deleteTag = (tagId: string) => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     const newTags = (state.tags || []).filter(t => t.id !== tagId);
     updateState({ ...state, tags: newTags }, { action: 'Delete Tag' });
@@ -1934,6 +2047,7 @@ export function useProject() {
     colorMode?: ColorMode;
     grid?: { x: number; y: number; width: number; height: number };
   }) => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     updateState({
       ...state,
@@ -1946,13 +2060,21 @@ export function useProject() {
   };
 
   const updateSlices = (slices: Slice[]) => {
+    const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     updateState({ ...state, slices }, { action: 'Update Slices' });
+  };
+
+  const getActiveState = () => latestRef.current.state;
+  const getActiveHistoryInfo = () => {
+    const inst = latestRef.current.activeInstance;
+    return { history: inst.history, historyIndex: inst.historyIndex };
   };
 
   return {
     state,
     projects,
+    tabs,
     activeProjectId,
     setActiveProjectId,
     recentProjects,
@@ -1971,6 +2093,8 @@ export function useProject() {
     setColorMode,
     history: activeInstance.history, 
     historyIndex: activeInstance.historyIndex, 
+    getActiveState,
+    getActiveHistoryInfo,
     addFrame,
     duplicateFrame,
     duplicateSelectedFrames,

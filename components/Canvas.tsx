@@ -1,6 +1,16 @@
 
 import React, { useRef, useEffect, useState, useCallback, useLayoutEffect, useMemo } from 'react';
-import { ProjectState, Position, Modifiers, PixelGrid, PixelValue } from '../types';
+import {
+  ProjectState,
+  Frame,
+  Layer,
+  ToolType,
+  SelectionMode,
+  Position,
+  Modifiers,
+  PixelGrid,
+  PixelValue,
+} from '../types';
 import { 
   getIndex, getCoords,
   getRectSelection, getEllipseSelection, getPolygonSelection, getWandSelection,
@@ -75,7 +85,28 @@ const getCircleContour = (size: number): Segment[] => {
 };
 
 interface CanvasProps {
-  state: ProjectState;
+  projectId: string;
+  frames: Frame[];
+  activeFrameIndex: number;
+  layers: Layer[];
+  activeLayerId: string;
+  palette: string[];
+  width: number;
+  height: number;
+  zoom: number;
+  tool: ToolType;
+  brushSize: number;
+  brushShape: 'square' | 'circle';
+  showGrid: boolean;
+  onionSkin: boolean;
+  tiled: boolean;
+  symmetryX: boolean;
+  symmetryY: boolean;
+  selection: Set<number> | null;
+  selectionMode: SelectionMode;
+  fillContiguous: boolean;
+  rotationAlgorithm: 'nearest' | 'rotsprite';
+  referenceImage: ProjectState['referenceImage'];
   onDrawStart: (pos: Position, modifiers: Modifiers) => void;
   onDraw: (x: number, y: number, modifiers: Modifiers) => void;
   onDrawEnd: () => void;
@@ -88,7 +119,28 @@ interface CanvasProps {
 }
 
 export const Canvas: React.FC<CanvasProps> = ({ 
-  state, 
+  projectId,
+  frames,
+  activeFrameIndex,
+  layers,
+  activeLayerId,
+  palette,
+  width,
+  height,
+  zoom,
+  tool,
+  brushSize,
+  brushShape,
+  showGrid,
+  onionSkin,
+  tiled,
+  symmetryX,
+  symmetryY,
+  selection,
+  selectionMode,
+  fillContiguous,
+  rotationAlgorithm,
+  referenceImage,
   onDrawStart, 
   onDraw, 
   onDrawEnd,
@@ -113,7 +165,16 @@ export const Canvas: React.FC<CanvasProps> = ({
   const cursorRef = useRef<HTMLDivElement>(null);
   const mousePosRef = useRef<{x: number, y: number}>({ x: -100, y: -100 });
   const touchTimeoutRef = useRef<number | null>(null);
-  const stateRef = useRef(state);
+  const liveStateRef = useRef({
+    projectId,
+    frames,
+    activeFrameIndex,
+    layers,
+    palette,
+    width,
+    height,
+    tiled,
+  });
   const renderUIRef = useRef<() => void>(() => {});
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
 
@@ -149,31 +210,31 @@ export const Canvas: React.FC<CanvasProps> = ({
   }, [refreshContainerRect]);
 
   const selectionSet = useMemo(() => {
-    if (!state.selection) return null;
-    if (state.selection instanceof Set) {
-      return state.selection.size > 0 ? state.selection : null;
+    if (!selection) return null;
+    if (selection instanceof Set) {
+      return selection.size > 0 ? selection : null;
     }
-    const arr = Array.isArray(state.selection) ? Array.from(state.selection as any) : [];
+    const arr = Array.isArray(selection) ? Array.from(selection as any) : [];
     const numSet = new Set<number>();
     for (let i = 0; i < arr.length; i++) {
       const n = Number(arr[i]);
       if (!isNaN(n)) numSet.add(n);
     }
     return numSet.size > 0 ? numSet : null;
-  }, [state.selection]);
+  }, [selection]);
 
   // Precompute merged boundary segments for active selection.
   // Reduces marching-ants rendering complexity from O(Selection Area) to O(Selection Corners),
   // improving performance by 100x-1000x on high-resolution canvas selections.
   const selectionBorderSegments = useMemo(() => {
     if (!selectionSet || selectionSet.size === 0) return null;
-    return getMergedSelectionSegments(selectionSet, state.width, state.height);
-  }, [selectionSet, state.width, state.height]);
+    return getMergedSelectionSegments(selectionSet, width, height);
+  }, [selectionSet, width, height]);
 
   const selectionBoundingBox = useMemo(() => {
     if (!selectionSet || selectionSet.size === 0) return null;
-    return getSelectionBoundingBox(selectionSet, state.width);
-  }, [selectionSet, state.width]);
+    return getSelectionBoundingBox(selectionSet, width);
+  }, [selectionSet, width]);
   
   const callbacks = useRef({ onDrawStart, onDraw, onDrawEnd });
   useEffect(() => {
@@ -185,20 +246,29 @@ export const Canvas: React.FC<CanvasProps> = ({
   const uiRafIdRef = useRef<number | null>(null);
   const [showCursor, setShowCursor] = useState(false);
   const [pan, setPan] = useState<Position>({ x: 0, y: 0 });
-  const [localZoom, setLocalZoom] = useState(state.zoom);
+  const [localZoom, setLocalZoom] = useState(zoom);
   const panRef = useRef<Position>({ x: 0, y: 0 });
-  const zoomRef = useRef(state.zoom);
+  const zoomRef = useRef(zoom);
 
   // Performance refs: coordinate deduplication, palette cache, and debounced zoom commit
   const lastReportedCoordsRef = useRef<Position | null>(null);
   const tileCanvasesRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   const paletteCacheRef = useRef<Map<number, { palette: string[]; buf: Uint32Array }>>(new Map());
   const zoomCommitTimerRef = useRef<number | null>(null);
-  const lastCommittedZoomRef = useRef<number>(state.zoom);
-  const prevProjectIdRef = useRef<string>(state.id);
+  const lastCommittedZoomRef = useRef<number>(zoom);
+  const prevProjectIdRef = useRef<string>(projectId);
   const onZoomRef = useRef(onZoom);
   useLayoutEffect(() => {
-    stateRef.current = state;
+    liveStateRef.current = {
+      projectId,
+      frames,
+      activeFrameIndex,
+      layers,
+      palette,
+      width,
+      height,
+      tiled,
+    };
     onZoomRef.current = onZoom;
   });
   
@@ -211,22 +281,22 @@ export const Canvas: React.FC<CanvasProps> = ({
   }, [localZoom]);
 
   useEffect(() => {
-    const projectChanged = prevProjectIdRef.current !== state.id;
-    prevProjectIdRef.current = state.id;
-    if (projectChanged || state.zoom !== lastCommittedZoomRef.current) {
+    const projectChanged = prevProjectIdRef.current !== projectId;
+    prevProjectIdRef.current = projectId;
+    if (projectChanged || zoom !== lastCommittedZoomRef.current) {
       if (zoomCommitTimerRef.current !== null) {
         window.clearTimeout(zoomCommitTimerRef.current);
         zoomCommitTimerRef.current = null;
       }
       setLiveZoom(null);
-      lastCommittedZoomRef.current = state.zoom;
-      zoomRef.current = state.zoom;
-      setLocalZoom(state.zoom);
+      lastCommittedZoomRef.current = zoom;
+      zoomRef.current = zoom;
+      setLocalZoom(zoom);
     } else if (zoomCommitTimerRef.current === null) {
-      zoomRef.current = state.zoom;
-      setLocalZoom(state.zoom);
+      zoomRef.current = zoom;
+      setLocalZoom(zoom);
     }
-  }, [state.zoom, state.id]);
+  }, [zoom, projectId]);
 
   useEffect(() => {
     return () => {
@@ -271,7 +341,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   const [currentBox, setCurrentBox] = useState<{x: number, y: number, w: number, h: number} | null>(null);
 
   const gestureState = useRef({
-      startZoom: state.zoom,
+      startZoom: zoom,
       startDist: 0,
       startPan: { x: 0, y: 0 },
       startCenter: { x: 0, y: 0 }
@@ -280,18 +350,18 @@ export const Canvas: React.FC<CanvasProps> = ({
   const lastCenteredRef = useRef<string | null>(null);
   
   useLayoutEffect(() => {
-    if (state.id) {
-      if (lastCenteredRef.current !== state.id && containerSize.width > 0 && containerSize.height > 0) {
-        const contentW = state.width * state.zoom;
-        const contentH = state.height * state.zoom;
+    if (projectId) {
+      if (lastCenteredRef.current !== projectId && containerSize.width > 0 && containerSize.height > 0) {
+        const contentW = width * zoom;
+        const contentH = height * zoom;
         setPan({
           x: (containerSize.width - contentW) / 2,
           y: (containerSize.height - contentH) / 2
         });
-        lastCenteredRef.current = state.id;
+        lastCenteredRef.current = projectId;
       }
     }
-  }, [state.id, state.width, state.height, state.zoom, containerSize]);
+  }, [projectId, width, height, zoom, containerSize]);
 
   const getPixelCoords = useCallback((clientX: number, clientY: number) => {
     const el = containerRef.current;
@@ -331,7 +401,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     if (!coords) return;
     const { x, y } = coords;
 
-    if (state.tool === 'move' && state.selection && selectionBoundingBox) {
+    if (tool === 'move' && selection && selectionBoundingBox) {
         const box = selectionBoundingBox;
         
         // Rotation Handle Check
@@ -342,15 +412,15 @@ export const Canvas: React.FC<CanvasProps> = ({
             setRotationPivot({ x: box.x + box.w / 2, y: box.y + box.h / 2 });
             setRotationAngle(0);
             
-            const frame = state.frames[state.activeFrameIndex];
+            const frame = frames[activeFrameIndex];
             if (frame) {
-              const layerData = frame.layerData[state.activeLayerId];
+              const layerData = frame.layerData[activeLayerId];
               if (layerData) {
                 const floats = new Map<number, PixelValue>();
-                state.selection.forEach(idx => floats.set(idx, layerData[idx]));
+                selection.forEach(idx => floats.set(idx, layerData[idx]));
                 setFloatingPixels(floats);
-                rotSpriteCacheRef.current = state.rotationAlgorithm === 'rotsprite'
-                  ? prepareRotSpriteBuffer(state.selection, layerData, state.width)
+                rotSpriteCacheRef.current = rotationAlgorithm === 'rotsprite'
+                  ? prepareRotSpriteBuffer(selection, layerData, width)
                   : null;
               }
             }
@@ -377,11 +447,11 @@ export const Canvas: React.FC<CanvasProps> = ({
                 setCurrentBox({...box});
                 setMoveStart({x, y});
 
-                const frame = state.frames[state.activeFrameIndex];
-                const layerData = frame?.layerData?.[state.activeLayerId];
+                const frame = frames[activeFrameIndex];
+                const layerData = frame?.layerData?.[activeLayerId];
                 if (layerData) {
                   const floats = new Map<number, PixelValue>();
-                  state.selection.forEach(idx => floats.set(idx, layerData[idx]));
+                  selection.forEach(idx => floats.set(idx, layerData[idx]));
                   setFloatingPixels(floats);
                 }
                 return;
@@ -389,51 +459,51 @@ export const Canvas: React.FC<CanvasProps> = ({
         }
     }
 
-    if (state.tool === 'move' && state.selection && state.selection.has(getIndex(x, y, state.width))) {
+    if (tool === 'move' && selection && selection.has(getIndex(x, y, width))) {
       setIsMoving(true);
       setMoveStart({x, y});
       setMoveOffset({x: 0, y: 0});
       
-      const frame = state.frames[state.activeFrameIndex];
+      const frame = frames[activeFrameIndex];
       if (frame) {
-        const layerData = frame.layerData[state.activeLayerId];
+        const layerData = frame.layerData[activeLayerId];
         if (layerData) {
           const floats = new Map<number, PixelValue>();
-          state.selection.forEach(idx => floats.set(idx, layerData[idx]));
+          selection.forEach(idx => floats.set(idx, layerData[idx]));
           setFloatingPixels(floats);
         }
       }
       return;
     }
 
-    if (state.tool === 'poly-lasso-select') {
+    if (tool === 'poly-lasso-select') {
       setPolyPoints(prev => [...prev, { x, y }]);
       return;
     }
 
-    if (['rect-select', 'ellipse-select', 'lasso-select'].includes(state.tool)) {
+    if (['rect-select', 'ellipse-select', 'lasso-select'].includes(tool)) {
       setIsDrawing(true);
       const pos = { x, y };
       setStartPos(pos);
       callbacks.current.onDrawStart(pos, modifiers);
-      if (state.tool === 'lasso-select') setPolyPoints([pos]);
+      if (tool === 'lasso-select') setPolyPoints([pos]);
       return;
     }
 
-    if (state.tool === 'magic-wand') {
-      if (x < 0 || x >= state.width || y < 0 || y >= state.height) return;
-      const frame = state.frames[state.activeFrameIndex];
+    if (tool === 'magic-wand') {
+      if (x < 0 || x >= width || y < 0 || y >= height) return;
+      const frame = frames[activeFrameIndex];
       if (frame) {
-        const layerData = frame.layerData[state.activeLayerId];
+        const layerData = frame.layerData[activeLayerId];
         if (layerData) {
-          const newSel = getWandSelection(layerData, x, y, state.width, state.height, state.fillContiguous);
+          const newSel = getWandSelection(layerData, x, y, width, height, fillContiguous);
           combineSelection(newSel);
         }
       }
       return;
     }
 
-    if (x >= 0 && x < state.width && y >= 0 && y < state.height) {
+    if (x >= 0 && x < width && y >= 0 && y < height) {
       setIsDrawing(true);
       callbacks.current.onDrawStart({x, y}, modifiers);
       callbacks.current.onDraw(x, y, modifiers);
@@ -525,11 +595,11 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
 
     if (isDrawing) {
-      if (state.tool === 'lasso-select') {
+      if (tool === 'lasso-select') {
         setPolyPoints(prev => [...prev, { x, y }]);
-      } else if (['rect-select', 'ellipse-select'].includes(state.tool)) {
-      } else if (['pencil', 'eraser', 'smudge', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'blur', 'sharpen'].includes(state.tool)) {
-        if (x >= 0 && x < state.width && y >= 0 && y < state.height) {
+      } else if (['rect-select', 'ellipse-select'].includes(tool)) {
+      } else if (['pencil', 'eraser', 'smudge', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'blur', 'sharpen'].includes(tool)) {
+        if (x >= 0 && x < width && y >= 0 && y < height) {
           callbacks.current.onDraw(x, y, modifiers);
         }
       }
@@ -537,8 +607,8 @@ export const Canvas: React.FC<CanvasProps> = ({
   };
 
   const handlePointerUp = () => {
-    if (isScaling && initialBox && currentBox && state.selection) {
-        onScalePixels(state.selection, initialBox, currentBox);
+    if (isScaling && initialBox && currentBox && selection) {
+        onScalePixels(selection, initialBox, currentBox);
         setIsScaling(false);
         setScaleHandle(null);
         setInitialBox(null);
@@ -547,8 +617,8 @@ export const Canvas: React.FC<CanvasProps> = ({
         return;
     }
 
-    if (isRotating && rotationPivot && state.selection) {
-        onRotatePixels(state.selection, rotationAngle, rotationPivot);
+    if (isRotating && rotationPivot && selection) {
+        onRotatePixels(selection, rotationAngle, rotationPivot);
         rotSpriteCacheRef.current = null;
         setIsRotating(false);
         setRotationPivot(null);
@@ -557,8 +627,8 @@ export const Canvas: React.FC<CanvasProps> = ({
         return;
     }
 
-    if (isMoving && moveStart && state.selection && floatingPixels) {
-      onMovePixels(state.selection, moveOffset);
+    if (isMoving && moveStart && selection && floatingPixels) {
+      onMovePixels(selection, moveOffset);
       setIsMoving(false);
       setMoveStart(null);
       setFloatingPixels(null);
@@ -566,21 +636,21 @@ export const Canvas: React.FC<CanvasProps> = ({
       return;
     }
 
-    if (state.tool === 'poly-lasso-select') return;
+    if (tool === 'poly-lasso-select') return;
 
     if (isDrawing) {
-      if (['rect-select', 'ellipse-select', 'lasso-select'].includes(state.tool) && startPos) {
+      if (['rect-select', 'ellipse-select', 'lasso-select'].includes(tool) && startPos) {
          const cp = cursorPosRef.current || startPos;
          let newSel = new Set<number>();
          const clamp = (val: number, max: number) => Math.max(0, Math.min(max - 1, val));
-         const sx = clamp(startPos.x, state.width);
-         const sy = clamp(startPos.y, state.height);
-         const cx = clamp(cp.x, state.width);
-         const cy = clamp(cp.y, state.height);
+         const sx = clamp(startPos.x, width);
+         const sy = clamp(startPos.y, height);
+         const cx = clamp(cp.x, width);
+         const cy = clamp(cp.y, height);
 
-         if (state.tool === 'rect-select') newSel = getRectSelection(sx, sy, cx, cy, state.width);
-         else if (state.tool === 'ellipse-select') newSel = getEllipseSelection(sx, sy, cx, cy, state.width);
-         else if (state.tool === 'lasso-select') newSel = getPolygonSelection(polyPoints.length > 0 ? polyPoints : [startPos], state.width, state.height);
+         if (tool === 'rect-select') newSel = getRectSelection(sx, sy, cx, cy, width);
+         else if (tool === 'ellipse-select') newSel = getEllipseSelection(sx, sy, cx, cy, width);
+         else if (tool === 'lasso-select') newSel = getPolygonSelection(polyPoints.length > 0 ? polyPoints : [startPos], width, height);
          combineSelection(newSel);
       }
       setIsDrawing(false);
@@ -593,7 +663,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   const combineSelection = (newSelection: Set<number>) => {
     let finalSel = new Set<number>();
     const current = selectionSet || new Set<number>();
-    switch (state.selectionMode) {
+    switch (selectionMode) {
       case 'replace': finalSel = newSelection; break;
       case 'add': 
         finalSel = new Set<number>();
@@ -796,53 +866,53 @@ export const Canvas: React.FC<CanvasProps> = ({
     
     if (!offscreenCanvasRef.current) offscreenCanvasRef.current = document.createElement('canvas');
     const offscreen = offscreenCanvasRef.current;
-    if (offscreen.width !== state.width || offscreen.height !== state.height) {
-        offscreen.width = state.width; offscreen.height = state.height;
+    if (offscreen.width !== width || offscreen.height !== height) {
+        offscreen.width = width; offscreen.height = height;
     }
     const offCtx = offscreen.getContext('2d');
     if (!offCtx) return;
 
     if (!layerCanvasRef.current) layerCanvasRef.current = document.createElement('canvas');
     const layerCanvas = layerCanvasRef.current;
-    if (layerCanvas.width !== state.width || layerCanvas.height !== state.height) {
-        layerCanvas.width = state.width; layerCanvas.height = state.height;
+    if (layerCanvas.width !== width || layerCanvas.height !== height) {
+        layerCanvas.width = width; layerCanvas.height = height;
     }
     const layerCtx = layerCanvas.getContext('2d');
     if (!layerCtx) return;
     
-    const currentFrame = state.frames[state.activeFrameIndex];
+    const currentFrame = frames[activeFrameIndex];
     if (!currentFrame) return;
 
     const getReusedImageData = (ref: React.MutableRefObject<ImageData | null>) => {
-      if (!ref.current || ref.current.width !== state.width || ref.current.height !== state.height) {
-        ref.current = offCtx.createImageData(state.width, state.height);
+      if (!ref.current || ref.current.width !== width || ref.current.height !== height) {
+        ref.current = offCtx.createImageData(width, height);
       } else {
         new Uint32Array(ref.current.data.buffer).fill(0);
       }
       return ref.current;
     };
 
-    const totalPixels = state.width * state.height;
-    const palLen = state.palette.length;
-    const parentMap = getLayerParentMap(state.layers);
+    const totalPixels = width * height;
+    const palLen = palette.length;
+    const parentMap = getLayerParentMap(layers);
 
     // 1. Draw Onion Skin to offscreen
-    if (state.onionSkin && state.activeFrameIndex > 0 && state.frames[state.activeFrameIndex - 1]) {
-      const prevFrame = state.frames[state.activeFrameIndex - 1];
+    if (onionSkin && activeFrameIndex > 0 && frames[activeFrameIndex - 1]) {
+      const prevFrame = frames[activeFrameIndex - 1];
       const imgData = getReusedImageData(onionSkinImageDataRef);
       const data32 = new Uint32Array(imgData.data.buffer);
 
-      for (let lIdx = 0; lIdx < state.layers.length; lIdx++) {
-        const layer = state.layers[lIdx];
+      for (let lIdx = 0; lIdx < layers.length; lIdx++) {
+        const layer = layers[lIdx];
         if (layer.type === 'group') continue;
-        if (!isLayerVisible(layer, state.layers, parentMap)) continue;
+        if (!isLayerVisible(layer, layers, parentMap)) continue;
         const pixels = prevFrame.layerData[layer.id];
         if (!pixels) continue;
-        const effOpacity = getEffectiveLayerOpacity(layer, state.layers, parentMap);
+        const effOpacity = getEffectiveLayerOpacity(layer, layers, parentMap);
         const alpha = Math.round((effOpacity / 100) * 80);
         if (alpha <= 0) continue;
 
-        const paletteUint32 = getPaletteForAlpha(state.palette, alpha);
+        const paletteUint32 = getPaletteForAlpha(palette, alpha);
         const pxLen = Math.min(pixels.length, totalPixels);
         for (let i = 0; i < pxLen; i++) {
             const val = pixels[i];
@@ -857,39 +927,39 @@ export const Canvas: React.FC<CanvasProps> = ({
       offCtx.putImageData(imgData, 0, 0);
       onionSkinValidRef.current = true;
     } else {
-      offCtx.clearRect(0, 0, state.width, state.height);
+      offCtx.clearRect(0, 0, width, height);
       onionSkinValidRef.current = false;
     }
 
     // 2. Draw Layers to offscreen with per-layer rasterization cache
     const activeLive = getLiveStroke();
 
-    for (let lIdx = 0; lIdx < state.layers.length; lIdx++) {
-      const layer = state.layers[lIdx];
+    for (let lIdx = 0; lIdx < layers.length; lIdx++) {
+      const layer = layers[lIdx];
       if (layer.type === 'group') continue;
-      if (!isLayerVisible(layer, state.layers, parentMap)) continue;
+      if (!isLayerVisible(layer, layers, parentMap)) continue;
 
       const useLive = activeLive &&
-        activeLive.projectId === state.id &&
-        activeLive.frameIndex === state.activeFrameIndex &&
+        activeLive.projectId === projectId &&
+        activeLive.frameIndex === activeFrameIndex &&
         activeLive.layerId === layer.id;
       const layerPixels = useLive ? activeLive.pixels : currentFrame.layerData[layer.id];
       if (!layerPixels) continue;
       
-      const isTargetLayer = layer.id === state.activeLayerId;
-      const isFloatingActive = (isMoving || isRotating || isScaling) && isTargetLayer && Boolean(state.selection);
+      const isTargetLayer = layer.id === activeLayerId;
+      const isFloatingActive = (isMoving || isRotating || isScaling) && isTargetLayer && Boolean(selection);
       
-      const effOpacity = getEffectiveLayerOpacity(layer, state.layers, parentMap);
+      const effOpacity = getEffectiveLayerOpacity(layer, layers, parentMap);
       const alpha = Math.round((effOpacity / 100) * 255);
       if (alpha <= 0) continue;
 
       let layerCache = layerCanvasCacheRef.current.get(layer.id);
-      if (!layerCache || layerCache.lastWidth !== state.width || layerCache.lastHeight !== state.height) {
+      if (!layerCache || layerCache.lastWidth !== width || layerCache.lastHeight !== height) {
         const c = document.createElement('canvas');
-        c.width = state.width;
-        c.height = state.height;
+        c.width = width;
+        c.height = height;
         const cCtx = c.getContext('2d')!;
-        const imgData = cCtx.createImageData(state.width, state.height);
+        const imgData = cCtx.createImageData(width, height);
         layerCache = {
           canvas: c,
           ctx: cCtx,
@@ -899,8 +969,8 @@ export const Canvas: React.FC<CanvasProps> = ({
           lastOpacity: -1,
           lastVisible: true,
           lastPalette: null,
-          lastWidth: state.width,
-          lastHeight: state.height,
+          lastWidth: width,
+          lastHeight: height,
         };
         layerCanvasCacheRef.current.set(layer.id, layerCache);
       }
@@ -908,17 +978,17 @@ export const Canvas: React.FC<CanvasProps> = ({
       const isDirty = isFloatingActive ||
         layerCache.lastPixels !== layerPixels ||
         layerCache.lastOpacity !== alpha ||
-        layerCache.lastPalette !== state.palette;
+        layerCache.lastPalette !== palette;
 
       if (isDirty) {
         const data32 = layerCache.data32;
         data32.fill(0);
 
-        const paletteUint32 = getPaletteForAlpha(state.palette, alpha);
+        const paletteUint32 = getPaletteForAlpha(palette, alpha);
         const pxLen = Math.min(layerPixels.length, totalPixels);
 
-        if (isFloatingActive && state.selection) {
-          const sel = state.selection;
+        if (isFloatingActive && selection) {
+          const sel = selection;
           for (let i = 0; i < pxLen; i++) {
             if (sel.has(i)) continue;
             const val = layerPixels[i];
@@ -945,7 +1015,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         if (!isFloatingActive) {
           layerCache.lastPixels = layerPixels;
           layerCache.lastOpacity = alpha;
-          layerCache.lastPalette = state.palette;
+          layerCache.lastPalette = palette;
         } else {
           layerCache.lastPixels = null; // force update when transform ends
         }
@@ -962,34 +1032,34 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
 
     // 3. Draw Floating Pixels (Transformations)
-    if ((isScaling || isRotating || isMoving) && floatingPixels && state.selection) {
+    if ((isScaling || isRotating || isMoving) && floatingPixels && selection) {
         let transformedGrid: PixelGrid;
         if (isScaling && initialBox && currentBox) {
-            const tempGrid: PixelGrid = new Array(state.width * state.height).fill(null);
+            const tempGrid: PixelGrid = new Array(width * height).fill(null);
             floatingPixels.forEach((color, idx) => tempGrid[idx] = color);
-            transformedGrid = scaleSelectionPixels(state.selection, tempGrid, initialBox, currentBox, state.width, state.height);
+            transformedGrid = scaleSelectionPixels(selection, tempGrid, initialBox, currentBox, width, height);
         } else if (isRotating && rotationPivot) {
-            const tempGrid: PixelGrid = new Array(state.width * state.height).fill(null);
+            const tempGrid: PixelGrid = new Array(width * height).fill(null);
             floatingPixels.forEach((color, idx) => tempGrid[idx] = color);
-            transformedGrid = rotateSelectionPixels(state.selection, tempGrid, rotationAngle, rotationPivot, state.width, state.height, state.rotationAlgorithm, rotSpriteCacheRef.current);
+            transformedGrid = rotateSelectionPixels(selection, tempGrid, rotationAngle, rotationPivot, width, height, rotationAlgorithm, rotSpriteCacheRef.current);
         } else if (isMoving) {
-            const tempGrid: PixelGrid = new Array(state.width * state.height).fill(null);
+            const tempGrid: PixelGrid = new Array(width * height).fill(null);
             floatingPixels.forEach((val, idx) => {
-                const { x, y } = getCoords(idx, state.width);
+                const { x, y } = getCoords(idx, width);
                 const nx = x + moveOffset.x;
                 const ny = y + moveOffset.y;
-                if (nx >= 0 && nx < state.width && ny >= 0 && ny < state.height) {
-                    tempGrid[getIndex(nx, ny, state.width)] = val;
+                if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                    tempGrid[getIndex(nx, ny, width)] = val;
                 }
             });
             transformedGrid = tempGrid;
         } else {
-            transformedGrid = new Array(state.width * state.height).fill(null);
+            transformedGrid = new Array(width * height).fill(null);
         }
 
         const floatImgData = getReusedImageData(layerImageDataRef);
         const floatData32 = new Uint32Array(floatImgData.data.buffer);
-        const floatPaletteUint32 = getPaletteForAlpha(state.palette, 255);
+        const floatPaletteUint32 = getPaletteForAlpha(palette, 255);
         const floatPxLen = Math.min(transformedGrid.length, totalPixels);
 
         for (let i = 0; i < floatPxLen; i++) {
@@ -1006,19 +1076,19 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
 
     // Final Transfer to Art Canvas
-    ctx.clearRect(0, 0, state.width, state.height);
+    ctx.clearRect(0, 0, width, height);
     ctx.drawImage(offscreen, 0, 0);
 
     // Synchronize Tiled Overlays if active
-    syncTiledOverlays(canvas, state.width, state.height, state.tiled);
-  }, [state.id, state.frames, state.activeFrameIndex, state.layers, state.activeLayerId, state.palette, state.width, state.height, state.onionSkin, state.selection, state.rotationAlgorithm, isMoving, isRotating, isScaling, floatingPixels, moveOffset, rotationAngle, rotationPivot, initialBox, currentBox, state.tiled, getPaletteForAlpha, syncTiledOverlays]);
+    syncTiledOverlays(canvas, width, height, tiled);
+  }, [projectId, frames, activeFrameIndex, layers, activeLayerId, palette, width, height, onionSkin, selection, rotationAlgorithm, isMoving, isRotating, isScaling, floatingPixels, moveOffset, rotationAngle, rotationPivot, initialBox, currentBox, tiled, getPaletteForAlpha, syncTiledOverlays]);
 
   // Direct Live-Stroke Dirty-Rect Subscriber (zero React re-renders during brush drag)
   useEffect(() => {
     const handleLiveStroke = (live: LiveStrokePayload | null) => {
       if (!live) return;
-      const curState = stateRef.current;
-      if (live.projectId !== curState.id || live.frameIndex !== curState.activeFrameIndex) return;
+      const curState = liveStateRef.current;
+      if (live.projectId !== curState.projectId || live.frameIndex !== curState.activeFrameIndex) return;
 
       const canvas = artCanvasRef.current;
       const offscreen = offscreenCanvasRef.current;
@@ -1179,13 +1249,13 @@ export const Canvas: React.FC<CanvasProps> = ({
     const cursorPos = cursorPosRef.current;
 
     // 1. Draw Grid (Viewport-Clipped & Half-Pixel Snapped for crisp lines & faster rendering)
-    if (state.showGrid && z > 4) {
+    if (showGrid && z > 4) {
       const cWidth = containerSize.width || canvas.width / dpr;
       const cHeight = containerSize.height || canvas.height / dpr;
       const startX = Math.max(0, Math.floor(-px / z));
-      const endX = Math.min(state.width, Math.ceil((cWidth - px) / z));
+      const endX = Math.min(width, Math.ceil((cWidth - px) / z));
       const startY = Math.max(0, Math.floor(-py / z));
-      const endY = Math.min(state.height, Math.ceil((cHeight - py) / z));
+      const endY = Math.min(height, Math.ceil((cHeight - py) / z));
 
       if (startX <= endX && startY <= endY) {
         ctx.save();
@@ -1208,18 +1278,18 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
 
     // 2. Draw Symmetry Lines
-    if (state.symmetry.x || state.symmetry.y) {
+    if (symmetryX || symmetryY) {
         ctx.save();
         ctx.strokeStyle = 'rgba(255, 165, 0, 0.6)';
         ctx.lineWidth = 1;
         ctx.setLineDash([4, 4]);
-        if (state.symmetry.x) {
-            const x = px + (state.width / 2) * z;
-            ctx.beginPath(); ctx.moveTo(x, py); ctx.lineTo(x, py + state.height * z); ctx.stroke();
+        if (symmetryX) {
+            const x = px + (width / 2) * z;
+            ctx.beginPath(); ctx.moveTo(x, py); ctx.lineTo(x, py + height * z); ctx.stroke();
         }
-        if (state.symmetry.y) {
-            const y = py + (state.height / 2) * z;
-            ctx.beginPath(); ctx.moveTo(px, y); ctx.lineTo(px + state.width * z, y); ctx.stroke();
+        if (symmetryY) {
+            const y = py + (height / 2) * z;
+            ctx.beginPath(); ctx.moveTo(px, y); ctx.lineTo(px + width * z, y); ctx.stroke();
         }
         ctx.restore();
     }
@@ -1269,7 +1339,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       }
 
       // Transformation Handles
-      if (state.tool === 'move' && !isMoving) {
+      if (tool === 'move' && !isMoving) {
           const box = isScaling && currentBox ? currentBox : selectionBoundingBox;
           if (box) {
             if (!isScaling) {
@@ -1308,9 +1378,9 @@ export const Canvas: React.FC<CanvasProps> = ({
         const rw = (maxX - minX + 1) * z;
         const rh = (maxY - minY + 1) * z;
         ctx.beginPath();
-        if (state.tool === 'rect-select') {
+        if (tool === 'rect-select') {
             ctx.rect(rx, ry, rw, rh);
-        } else if (state.tool === 'ellipse-select') {
+        } else if (tool === 'ellipse-select') {
             ctx.ellipse(rx + rw/2, ry + rh/2, rw/2, rh/2, 0, 0, 2 * Math.PI);
         }
         ctx.lineWidth = 1;
@@ -1326,7 +1396,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         ctx.beginPath();
         ctx.moveTo(polyPoints[0].x * z + z/2, polyPoints[0].y * z + z/2);
         for(let i=1; i<polyPoints.length; i++) ctx.lineTo(polyPoints[i].x * z + z/2, polyPoints[i].y * z + z/2);
-        if (cursorPos && (state.tool === 'lasso-select' || state.tool === 'poly-lasso-select')) ctx.lineTo(cursorPos.x * z + z/2, cursorPos.y * z + z/2);
+        if (cursorPos && (tool === 'lasso-select' || tool === 'poly-lasso-select')) ctx.lineTo(cursorPos.x * z + z/2, cursorPos.y * z + z/2);
         ctx.lineWidth = 1;
         ctx.setLineDash([]); ctx.strokeStyle = '#000000'; ctx.stroke();
         ctx.setLineDash([4, 4]); ctx.lineDashOffset = -dashOffset; ctx.strokeStyle = '#ffffff'; ctx.stroke();
@@ -1334,22 +1404,22 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
 
     // 6. Draw Brush Preview (Optimized with direct rect & contour caching)
-    const isBrushTool = ['pencil', 'eraser', 'smudge', 'blur', 'sharpen'].includes(state.tool);
-    const isOtherToolWithPreview = ['bucket', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'eyedropper'].includes(state.tool);
+    const isBrushTool = ['pencil', 'eraser', 'smudge', 'blur', 'sharpen'].includes(tool);
+    const isOtherToolWithPreview = ['bucket', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'eyedropper'].includes(tool);
     if (cursorPos && !isMoving && !isRotating && !isScaling && (isBrushTool || (!isDrawing && isOtherToolWithPreview))) {
         const { x, y } = cursorPos;
-        const size = (state.tool === 'bucket' || state.tool === 'eyedropper') ? 1 : state.brushSize;
+        const size = (tool === 'bucket' || tool === 'eyedropper') ? 1 : brushSize;
         const startOffset = Math.floor(size / 2);
         const variants = [{ x, y }];
-        if (state.symmetry.x) variants.push({ x: state.width - 1 - x, y: y });
-        if (state.symmetry.y) variants.push({ x: x, y: state.height - 1 - y });
-        if (state.symmetry.x && state.symmetry.y) variants.push({ x: state.width - 1 - x, y: state.height - 1 - y });
+        if (symmetryX) variants.push({ x: width - 1 - x, y: y });
+        if (symmetryY) variants.push({ x: x, y: height - 1 - y });
+        if (symmetryX && symmetryY) variants.push({ x: width - 1 - x, y: height - 1 - y });
 
         ctx.save();
         ctx.translate(px, py);
         ctx.beginPath();
         
-        const isSquare = state.brushShape === 'square' || size <= 1 || ['bucket', 'eyedropper'].includes(state.tool);
+        const isSquare = brushShape === 'square' || size <= 1 || ['bucket', 'eyedropper'].includes(tool);
 
         if (isSquare) {
           variants.forEach(variant => {
@@ -1377,7 +1447,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
 
     ctx.restore();
-  }, [containerSize, state.showGrid, state.width, state.height, state.symmetry.x, state.symmetry.y, state.tool, state.brushSize, state.brushShape, selectionSet, selectionBorderSegments, selectionBoundingBox, localZoom, pan, startPos, polyPoints, isMoving, isDrawing, moveOffset, isRotating, rotationAngle, rotationPivot, isScaling, currentBox]);
+  }, [containerSize, showGrid, width, height, symmetryX, symmetryY, tool, brushSize, brushShape, selectionSet, selectionBorderSegments, selectionBoundingBox, localZoom, pan, startPos, polyPoints, isMoving, isDrawing, moveOffset, isRotating, rotationAngle, rotationPivot, isScaling, currentBox]);
 
   useLayoutEffect(() => {
     renderUIRef.current = renderUI;
@@ -1390,7 +1460,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   const hasMarchingAnts = Boolean(
     (selectionSet && selectionSet.size > 0) || 
     polyPoints.length > 0 || 
-    (isDrawing && startPos && ['rect-select', 'ellipse-select', 'lasso-select'].includes(state.tool))
+    (isDrawing && startPos && ['rect-select', 'ellipse-select', 'lasso-select'].includes(tool))
   );
 
   useEffect(() => {
@@ -1423,39 +1493,39 @@ export const Canvas: React.FC<CanvasProps> = ({
         onMouseDown={(e) => handlePointerDown(e.clientX, e.clientY, getModifiers(e), e.button)}
         onMouseMove={(e) => handlePointerMove(e.clientX, e.clientY, getModifiers(e))}
         onMouseUp={handlePointerUp}
-        onDoubleClick={() => { if (state.tool === 'poly-lasso-select' && polyPoints.length > 2) { combineSelection(getPolygonSelection(polyPoints, state.width, state.height)); setPolyPoints([]); } }}
+        onDoubleClick={() => { if (tool === 'poly-lasso-select' && polyPoints.length > 2) { combineSelection(getPolygonSelection(polyPoints, width, height)); setPolyPoints([]); } }}
     >
       {/* Reference Image Layer */}
-      {state.referenceImage && state.referenceImage.visible && (
+      {referenceImage && referenceImage.visible && (
         <div 
           className="absolute top-0 left-0 pointer-events-none"
           style={{
-            transform: `translate(${pan.x + state.referenceImage.x * localZoom}px, ${pan.y + state.referenceImage.y * localZoom}px) scale(${state.referenceImage.scale * localZoom})`,
-            opacity: state.referenceImage.opacity / 100,
+            transform: `translate(${pan.x + referenceImage.x * localZoom}px, ${pan.y + referenceImage.y * localZoom}px) scale(${referenceImage.scale * localZoom})`,
+            opacity: referenceImage.opacity / 100,
             transformOrigin: 'top left',
           }}
         >
-          <img src={state.referenceImage.url} className="block" alt="Reference" referrerPolicy="no-referrer" />
+          <img src={referenceImage.url} className="block" alt="Reference" referrerPolicy="no-referrer" />
         </div>
       )}
 
       {/* Tiled Mode Overlays - Rendered below main art */}
-      {state.tiled && [-1, 0, 1].map(ty => [-1, 0, 1].map(tx => {
+      {tiled && [-1, 0, 1].map(ty => [-1, 0, 1].map(tx => {
         if (tx === 0 && ty === 0) return null;
         return (
           <div 
             key={`tile-${tx}-${ty}`}
             className="absolute top-0 left-0 pointer-events-none opacity-40 grayscale-[0.2]"
             style={{ 
-              width: `${state.width * localZoom}px`, 
-              height: `${state.height * localZoom}px`,
-              transform: `translate(${pan.x + tx * state.width * localZoom}px, ${pan.y + ty * state.height * localZoom}px)`, 
+              width: `${width * localZoom}px`, 
+              height: `${height * localZoom}px`,
+              transform: `translate(${pan.x + tx * width * localZoom}px, ${pan.y + ty * height * localZoom}px)`, 
               transformOrigin: 'top left',
             }}
           >
             <canvas
-              width={state.width}
-              height={state.height}
+              width={width}
+              height={height}
               className="w-full h-full block"
               style={{ imageRendering: 'pixelated' }}
               ref={(el) => {
@@ -1466,7 +1536,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                     if (prevEl !== el && artCanvasRef.current) {
                       const ctx = el.getContext('2d');
                       if (ctx) {
-                        ctx.clearRect(0, 0, state.width, state.height);
+                        ctx.clearRect(0, 0, width, height);
                         ctx.drawImage(artCanvasRef.current, 0, 0);
                       }
                     }
@@ -1483,8 +1553,8 @@ export const Canvas: React.FC<CanvasProps> = ({
       <div 
         className="absolute top-0 left-0 shadow-2xl"
         style={{ 
-          width: `${state.width * localZoom}px`, 
-          height: `${state.height * localZoom}px`,
+          width: `${width * localZoom}px`, 
+          height: `${height * localZoom}px`,
           transform: `translate(${pan.x}px, ${pan.y}px)`, 
           transformOrigin: 'top left',
           pointerEvents: 'none',
@@ -1495,8 +1565,8 @@ export const Canvas: React.FC<CanvasProps> = ({
       >
         <canvas
           ref={artCanvasRef}
-          width={state.width}
-          height={state.height}
+          width={width}
+          height={height}
           className="w-full h-full block"
           style={{ imageRendering: 'pixelated' }}
         />

@@ -194,9 +194,7 @@ export const Palette: React.FC<PaletteProps> = ({
       <div
         className="min-h-0 flex-1 overflow-y-auto bg-canvas/40 p-1.5"
         onPointerLeave={() => setHoveredSwatch(null)}
-        onScroll={() => {
-          if (hoveredSwatch) setHoveredSwatch(null);
-        }}
+        onScroll={() => setHoveredSwatch((prev) => (prev ? null : prev))}
       >
         <div className="grid grid-cols-[repeat(auto-fill,minmax(20px,1fr))] content-start gap-0.5">
           {colors.map((color, idx) => {

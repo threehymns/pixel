@@ -1,5 +1,4 @@
-
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef } from 'react';
 import { CommandPalette } from './components/CommandPalette';
 import { NewProjectDialog } from './components/NewProjectDialog';
 import { CanvasResizeDialog } from './components/CanvasResizeDialog';
@@ -9,14 +8,14 @@ import { SpritePropertiesDialog } from './components/SpritePropertiesDialog';
 import { LayerPropertiesDialog } from './components/LayerPropertiesDialog';
 import { SlicesDialog } from './components/SlicesDialog';
 import { OutlineDialog } from './components/OutlineDialog';
-import { Layer, FrameTag, ProjectState } from './types';
+import { Layer, FrameTag, ProjectState, ColorMode } from './types';
 
 // Layouts
 import { DesktopLayout } from './components/DesktopLayout';
 import { MobileLayout } from './components/MobileLayout';
 
 // Hooks
-import { useProject } from './hooks/useProject';
+import { useProject, ProjectStateUpdater } from './hooks/useProject';
 import { useCanvasTools } from './hooks/useCanvasTools';
 import { useAppCommands } from './hooks/useAppCommands';
 import { useKeyboard } from './hooks/useKeyboard';
@@ -24,6 +23,7 @@ import { useFileSystem } from './hooks/useFileSystem';
 import { useMobile } from './hooks/useMobile';
 import { useLayout } from './hooks/useLayout';
 import { setCursorMousePos, setCursorDragStartPos } from './hooks/useCursorStore';
+import { setStatusMessage } from './hooks/useStatusStore';
 import { getCoords } from './utils';
 
 export default function App() {
@@ -49,7 +49,6 @@ export default function App() {
   const openExportDialog = (format: ExportFormat = 'gif') => {
     setExportDialog({ isOpen: true, initialFormat: format });
   };
-  const [statusMessage, setStatusMessage] = useState<{ text: string, type: 'info' | 'error' | 'success' }>({ text: '', type: 'info' });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isMobile = useMobile();
@@ -57,9 +56,9 @@ export default function App() {
   const project = useProject();
   const fileSystem = useFileSystem();
   const layout = useLayout();
-  const { state, updateState } = project;
+  const { state, updateState, getActiveState, getActiveHistoryInfo } = project;
 
-  const updateStateWithStatus = (newState: ProjectState, config?: { action: string; tool?: any }) => {
+  const updateStateWithStatus = (newState: ProjectStateUpdater, config?: { action: string; tool?: any }) => {
     updateState(newState, config);
     if (config?.action) {
       setStatusMessage({ text: config.action, type: 'info' });
@@ -67,7 +66,7 @@ export default function App() {
   };
 
   const canvasTools = useCanvasTools(state, updateStateWithStatus);
-  
+
   const handleOpenFile = () => {
     fileInputRef.current?.click();
   };
@@ -78,7 +77,7 @@ export default function App() {
       project.loadProjectFromFile(file);
       setStatusMessage({ text: `Opened ${file.name}`, type: 'success' });
     }
-    if (e.target) e.target.value = ''; 
+    if (e.target) e.target.value = '';
   };
 
   const handleOutlinePreview = (previewState: ProjectState) => {
@@ -95,84 +94,97 @@ export default function App() {
       updateState(originalState);
       return;
     }
-    const currentProj = project.projects.find(p => p.data.id === project.activeProjectId);
-    if (currentProj) {
-      const entry = currentProj.history[currentProj.historyIndex];
-      if (entry) {
-        updateState(entry.state);
-      }
+    const { history, historyIndex } = getActiveHistoryInfo();
+    const entry = history[historyIndex];
+    if (entry) {
+      updateState(entry.state);
     }
   };
 
+  const openNewProjectDialog = () => setIsNewProjectDialogOpen(true);
+  const openResizeDialog = () => setIsResizeCanvasDialogOpen(true);
+  const openReferenceImageDialog = () => setIsReferenceImageDialogOpen(true);
+  const openSpritePropertiesDialog = () => setIsSpritePropertiesOpen(true);
+  const openSlicesDialog = () => setIsSlicesOpen(true);
+  const openOutlineDialog = () => setIsOutlineDialogOpen(true);
+  const openLayerPropertiesDialog = (layer?: Layer) => {
+    const active = getActiveState();
+    setLayerPropertiesState({
+      isOpen: true,
+      layer: layer || active.layers.find(l => l.id === active.activeLayerId) || null,
+    });
+  };
+  const openTagPropertiesDialog = (tag?: FrameTag) => setTagPropertiesState({
+    isOpen: true,
+    tag: tag || null,
+  });
+  const closeTagPopover = () => setTagPropertiesState({ isOpen: false, tag: null });
+  const closeLayerProperties = () => setLayerPropertiesState({ isOpen: false, layer: null });
+  const downloadImage = () => openExportDialog('png');
+  const downloadSpriteSheet = () => openExportDialog('spritesheet');
+  const downloadGif = () => openExportDialog('gif');
+  const openCmdPalette = () => setIsCmdPaletteOpen(true);
+
+  const handleUndoWithStatus = () => {
+    const { history, historyIndex } = getActiveHistoryInfo();
+    if (historyIndex > 0) {
+      const action = history[historyIndex].action;
+      project.undo();
+      setStatusMessage({ text: `Undid ${action}`, type: 'info' });
+    }
+  };
+
+  const handleRedoWithStatus = () => {
+    const { history, historyIndex } = getActiveHistoryInfo();
+    if (historyIndex < history.length - 1) {
+      const action = history[historyIndex + 1].action;
+      project.redo();
+      setStatusMessage({ text: `Redid ${action}`, type: 'info' });
+    }
+  };
+
+  const handleSetColorModeWithStatus = (mode: ColorMode) => {
+    project.setColorMode(mode);
+    setStatusMessage({ text: `Changed to ${mode.toUpperCase()} mode`, type: 'info' });
+  };
+
   const commands = useAppCommands({
-      state: state,
-      updateState: (newState, config) => {
-          updateState(newState, config);
-          if (config?.action) setStatusMessage({ text: config.action, type: 'info' });
-      },
-      projectActions: {
-        ...project,
-        undo: () => {
-            const histIdx = project.historyIndex;
-            if (histIdx > 0) {
-                const action = project.history[histIdx].action;
-                project.undo();
-                setStatusMessage({ text: `Undid ${action}`, type: 'info' });
-            }
-        },
-        redo: () => {
-            const histIdx = project.historyIndex;
-            if (histIdx < project.history.length - 1) {
-                const action = project.history[histIdx + 1].action;
-                project.redo();
-                setStatusMessage({ text: `Redid ${action}`, type: 'info' });
-            }
-        },
-        setColorMode: (mode) => {
-            project.setColorMode(mode);
-            setStatusMessage({ text: `Changed to ${mode.toUpperCase()} mode`, type: 'info' });
-        },
-        createProject: () => setIsNewProjectDialogOpen(true),
-        openResizeDialog: () => setIsResizeCanvasDialogOpen(true),
-        openReferenceImageDialog: () => setIsReferenceImageDialogOpen(true),
-        openSpritePropertiesDialog: () => setIsSpritePropertiesOpen(true),
-        openSlicesDialog: () => setIsSlicesOpen(true),
-        openOutlineDialog: () => setIsOutlineDialogOpen(true),
-        openLayerPropertiesDialog: (layer?: Layer) => setLayerPropertiesState({
-          isOpen: true,
-          layer: layer || project.state.layers.find(l => l.id === project.state.activeLayerId) || null,
-        }),
-        openTagPropertiesDialog: (tag?: FrameTag) => setTagPropertiesState({
-          isOpen: true,
-          tag: tag || null,
-        }),
-        openExportDialog,
-        downloadImage: () => openExportDialog('png'),
-        downloadSpriteSheet: () => openExportDialog('spritesheet'),
-        downloadGif: () => openExportDialog('gif')
-      },
-      fileSystemActions: fileSystem,
-      uiActions: {
-        toggleFileTree: () => layout.togglePaneVisibility('file-tree'), 
-        togglePalette: () => layout.togglePaneVisibility('palette'), 
-        toggleTimeline: () => layout.togglePaneVisibility('timeline'), 
-        toggleRightPanel: () => {
-          layout.togglePaneVisibility('layers');
-        }, 
-      },
-      openCmdPalette: () => setIsCmdPaletteOpen(true),
-      onOpenProject: handleOpenFile
+    state,
+    updateState: updateStateWithStatus,
+    projectActions: {
+      ...project,
+      undo: handleUndoWithStatus,
+      redo: handleRedoWithStatus,
+      setColorMode: handleSetColorModeWithStatus,
+      createProject: openNewProjectDialog,
+      openResizeDialog,
+      openReferenceImageDialog,
+      openSpritePropertiesDialog,
+      openSlicesDialog,
+      openOutlineDialog,
+      openLayerPropertiesDialog,
+      openTagPropertiesDialog,
+      openExportDialog,
+      downloadImage,
+      downloadSpriteSheet,
+      downloadGif,
+    },
+    fileSystemActions: fileSystem,
+    uiActions: {
+      toggleFileTree: () => layout.togglePaneVisibility('file-tree'),
+      togglePalette: () => layout.togglePaneVisibility('palette'),
+      toggleTimeline: () => layout.togglePaneVisibility('timeline'),
+      toggleRightPanel: () => layout.togglePaneVisibility('layers'),
+    },
+    openCmdPalette,
+    onOpenProject: handleOpenFile,
   });
 
   useKeyboard(commands, state, (newState) => updateState(newState), {
-      deleteSelectedLayers: project.deleteSelectedLayers,
-      deleteSelectedFrames: project.deleteSelectedFrames,
-      handleMovePixels: canvasTools.handleMovePixels
+    deleteSelectedLayers: project.deleteSelectedLayers,
+    deleteSelectedFrames: project.deleteSelectedFrames,
+    handleMovePixels: canvasTools.handleMovePixels,
   });
-
-  useEffect(() => {
-    setStatusMessage({ text: `${state.tool.charAt(0).toUpperCase() + state.tool.slice(1).replace('-select', ' Select')} tool selected`, type: 'info' });
-  }, [state.tool]);
 
   let selectionSize: { w: number; h: number } | null = null;
   if (state.selection) {
@@ -190,54 +202,30 @@ export default function App() {
     }
   }
 
-  const sharedProps = {
-      state,
-      updateState,
-      commands,
-      project: {
-        ...project,
-        createProject: () => setIsNewProjectDialogOpen(true),
-        openSpritePropertiesDialog: () => setIsSpritePropertiesOpen(true),
-        openSlicesDialog: () => setIsSlicesOpen(true),
-        openOutlineDialog: () => setIsOutlineDialogOpen(true),
-        openLayerPropertiesDialog: (layer?: Layer) => setLayerPropertiesState({
-          isOpen: true,
-          layer: layer || project.state.layers.find(l => l.id === project.state.activeLayerId) || null,
-        }),
-        openTagPropertiesDialog: (tag?: FrameTag) => setTagPropertiesState({
-          isOpen: true,
-          tag: tag || null,
-        }),
-        openExportDialog,
-        downloadImage: () => openExportDialog('png'),
-        downloadSpriteSheet: () => openExportDialog('spritesheet'),
-        downloadGif: () => openExportDialog('gif')
-      },
-      activeTagPopover: tagPropertiesState,
-      onCloseTagPopover: () => setTagPropertiesState({ isOpen: false, tag: null }),
-      layerPropertiesState,
-      onCloseLayerProperties: () => setLayerPropertiesState({ isOpen: false, layer: null }),
-      canvasTools,
-      fileSystem,
-      handleFileChange,
-      fileInputRef,
-      statusMessage,
-      setMousePos: setCursorMousePos,
-      setDragStartPos: setCursorDragStartPos,
-      selectionSize,
-      layout
+  const projectForLayout = {
+    ...project,
+    createProject: openNewProjectDialog,
+    openSpritePropertiesDialog,
+    openSlicesDialog,
+    openOutlineDialog,
+    openLayerPropertiesDialog,
+    openTagPropertiesDialog,
+    openExportDialog,
+    downloadImage,
+    downloadSpriteSheet,
+    downloadGif,
   };
 
   return (
     <div className="flex flex-col h-screen bg-background text-foreground select-none overflow-hidden">
       {isCmdPaletteOpen && (
-        <CommandPalette 
-          isOpen={isCmdPaletteOpen} 
-          onClose={() => setIsCmdPaletteOpen(false)} 
-          commands={commands} 
+        <CommandPalette
+          isOpen={isCmdPaletteOpen}
+          onClose={() => setIsCmdPaletteOpen(false)}
+          commands={commands}
         />
       )}
-      
+
       {isNewProjectDialogOpen && (
         <NewProjectDialog
           isOpen={isNewProjectDialogOpen}
@@ -305,13 +293,41 @@ export default function App() {
       )}
 
       {isMobile ? (
-        <MobileLayout 
-          {...sharedProps} 
+        <MobileLayout
+          state={state}
+          updateState={updateState}
+          commands={commands}
+          project={projectForLayout}
+          activeTagPopover={tagPropertiesState}
+          onCloseTagPopover={closeTagPopover}
+          layerPropertiesState={layerPropertiesState}
+          onCloseLayerProperties={closeLayerProperties}
+          canvasTools={canvasTools}
+          handleFileChange={handleFileChange}
+          fileInputRef={fileInputRef}
+          setMousePos={setCursorMousePos}
+          setDragStartPos={setCursorDragStartPos}
+          selectionSize={selectionSize}
           onScalePixels={canvasTools.handleScalePixels}
         />
       ) : (
-        <DesktopLayout 
-          {...sharedProps} 
+        <DesktopLayout
+          state={state}
+          updateState={updateState}
+          commands={commands}
+          project={projectForLayout}
+          activeTagPopover={tagPropertiesState}
+          onCloseTagPopover={closeTagPopover}
+          layerPropertiesState={layerPropertiesState}
+          onCloseLayerProperties={closeLayerProperties}
+          canvasTools={canvasTools}
+          fileSystem={fileSystem}
+          handleFileChange={handleFileChange}
+          fileInputRef={fileInputRef}
+          setMousePos={setCursorMousePos}
+          setDragStartPos={setCursorDragStartPos}
+          selectionSize={selectionSize}
+          layout={layout}
           onScalePixels={canvasTools.handleScalePixels}
         />
       )}

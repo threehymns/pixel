@@ -81,13 +81,12 @@ import {
 
 interface MobileLayoutProps {
   state: ProjectState;
-  updateState: (s: ProjectState, config?: any) => void;
+  updateState: (s: ProjectState | ((prev: ProjectState) => ProjectState), config?: any) => void;
   commands: Command[];
   project: any;
   canvasTools: any;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
   handleFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  statusMessage: { text: string; type: 'info' | 'error' | 'success' };
   mousePos?: Position | null;
   dragStartPos?: Position | null;
   selectionSize: { w: number; h: number } | null;
@@ -865,7 +864,28 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
           {/* Unobstructed Central Canvas Stage */}
           <div className="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden bg-canvas">
             <Canvas
-              state={state}
+              projectId={state.id}
+              frames={state.frames}
+              activeFrameIndex={state.activeFrameIndex}
+              layers={state.layers}
+              activeLayerId={state.activeLayerId}
+              palette={state.palette}
+              width={state.width}
+              height={state.height}
+              zoom={state.zoom}
+              tool={state.tool}
+              brushSize={state.brushSize}
+              brushShape={state.brushShape}
+              showGrid={state.showGrid}
+              onionSkin={state.onionSkin}
+              tiled={state.tiled}
+              symmetryX={state.symmetry.x}
+              symmetryY={state.symmetry.y}
+              selection={state.selection}
+              selectionMode={state.selectionMode}
+              fillContiguous={state.fillContiguous}
+              rotationAlgorithm={state.rotationAlgorithm}
+              referenceImage={state.referenceImage}
               onDrawStart={(pos) => {
                 setDragStartPos(pos);
                 canvasTools.handleDrawStart(pos, {
@@ -881,12 +901,15 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                 canvasTools.handleDrawEnd();
               }}
               onSelectionUpdate={(sel) =>
-                updateState({ ...state, selection: sel }, { action: 'Select Area', tool: state.tool })
+                updateState((prev) => ({ ...prev, selection: sel }), {
+                  action: 'Select Area',
+                  tool: project.getActiveState().tool,
+                })
               }
               onMovePixels={canvasTools.handleMovePixels}
               onRotatePixels={canvasTools.handleRotatePixels}
               onScalePixels={onScalePixels}
-              onZoom={(z) => updateState({ ...state, zoom: z })}
+              onZoom={(z) => updateState((prev) => ({ ...prev, zoom: z }))}
               onMousePosUpdate={setMousePos}
             />
 
@@ -1501,7 +1524,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                       onImportPalette={project.importPalette}
                       onResizeStart={() => {}}
                       onColorsSelected={(selectedColors) => {
-                        updateState({ ...state, shades: selectedColors, inkType: 'shading' });
+                        updateState((prev) => ({ ...prev, shades: selectedColors, inkType: 'shading' }));
                       }}
                     />
                   </div>
@@ -1510,9 +1533,15 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                 {activePanel === 'layers' && (
                   <div className="flex h-[50dvh] min-h-[320px] flex-col">
                     <LayersPanel
-                      state={state}
+                      layers={state.layers}
+                      activeFrame={state.frames[state.activeFrameIndex]}
+                      activeLayerId={state.activeLayerId}
+                      selectedLayerIds={state.selectedLayerIds}
+                      palette={state.palette}
+                      width={state.width}
+                      height={state.height}
                       onSelectLayers={(ids, active) =>
-                        updateState({ ...state, selectedLayerIds: ids, activeLayerId: active })
+                        updateState((prev) => ({ ...prev, selectedLayerIds: ids, activeLayerId: active }))
                       }
                       onUpdateLayer={project.updateLayer}
                       onAddLayer={project.addLayer}
@@ -1537,18 +1566,20 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                 {activePanel === 'timeline' && (
                   <div className="flex h-[52dvh] min-h-[320px] flex-col overflow-hidden">
                     <Timeline
-                      state={state}
+                      layers={state.layers}
+                      frames={state.frames}
+                      activeFrameIndex={state.activeFrameIndex}
+                      activeLayerId={state.activeLayerId}
+                      selectedFrameIndices={state.selectedFrameIndices}
+                      selectedLayerIds={state.selectedLayerIds}
+                      tags={state.tags}
                       onSelectFrames={(indices, active, layerId) => {
-                        const nextState = {
-                          ...state,
+                        updateState((prev) => ({
+                          ...prev,
                           selectedFrameIndices: indices,
                           activeFrameIndex: active,
-                        };
-                        if (layerId) {
-                          nextState.activeLayerId = layerId;
-                          nextState.selectedLayerIds = [layerId];
-                        }
-                        updateState(nextState);
+                          ...(layerId ? { activeLayerId: layerId, selectedLayerIds: [layerId] } : {}),
+                        }));
                       }}
                       onAddFrame={project.addFrame}
                       onDuplicateFrame={project.duplicateFrame}
@@ -1565,26 +1596,26 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                       activeTagPopover={activeTagPopover}
                       onCloseTagPopover={onCloseTagPopover}
                       onSelectLayer={(id) =>
-                        updateState({ ...state, activeLayerId: id, selectedLayerIds: [id] })
+                        updateState((prev) => ({ ...prev, activeLayerId: id, selectedLayerIds: [id] }))
                       }
                       onAddLayer={project.addLayer}
                       onAddGroupLayer={project.addGroupLayer}
                       onUpdateLayer={project.updateLayer}
                       onToggleLayerVisibility={(id) =>
-                        updateState({
-                          ...state,
-                          layers: state.layers.map((l) =>
+                        updateState((prev) => ({
+                          ...prev,
+                          layers: prev.layers.map((l) =>
                             l.id === id ? { ...l, visible: !l.visible } : l
                           ),
-                        })
+                        }))
                       }
                       onToggleLayerLock={(id) =>
-                        updateState({
-                          ...state,
-                          layers: state.layers.map((l) =>
+                        updateState((prev) => ({
+                          ...prev,
+                          layers: prev.layers.map((l) =>
                             l.id === id ? { ...l, locked: !l.locked } : l
                           ),
-                        })
+                        }))
                       }
                       onReorderLayers={project.reorderLayers}
                       onReorderFrames={project.reorderFrames}
@@ -1605,7 +1636,16 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
 
                 {activePanel === 'preview' && (
                   <div className="flex h-[50dvh] min-h-[320px] flex-col bg-card">
-                    <Preview state={state} width={0} isFloating={false} />
+                    <Preview
+                      frames={state.frames}
+                      layers={state.layers}
+                      palette={state.palette}
+                      spriteWidth={state.width}
+                      spriteHeight={state.height}
+                      activeFrameIndex={state.activeFrameIndex}
+                      width={0}
+                      isFloating={false}
+                    />
                   </div>
                 )}
 

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
-import { ProjectState, Layer, LayerBlendMode, Frame } from '../types';
+import { Layer, LayerBlendMode, Frame } from '../types';
 import {
   Eye,
   EyeOff,
@@ -328,7 +328,13 @@ const GroupThumbnail: React.FC<GroupThumbnailProps> = ({ groupId, layers, active
 };
 
 interface LayersPanelProps {
-  state: ProjectState;
+  layers: Layer[];
+  activeFrame: Frame | undefined;
+  activeLayerId: string;
+  selectedLayerIds: string[];
+  palette: string[];
+  width: number;
+  height: number;
   onSelectLayers: (ids: string[], activeId: string) => void;
   onUpdateLayer: (id: string, updates: Partial<Layer>) => void;
   onAddLayer: () => void;
@@ -359,7 +365,13 @@ interface DragState {
 }
 
 export const LayersPanel: React.FC<LayersPanelProps> = ({
-  state,
+  layers,
+  activeFrame,
+  activeLayerId,
+  selectedLayerIds,
+  palette,
+  width,
+  height,
   onSelectLayers,
   onUpdateLayer,
   onAddLayer,
@@ -390,7 +402,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
-  const activeLayer = state.layers.find((l) => l.id === state.activeLayerId);
+  const activeLayer = layers.find((l) => l.id === activeLayerId);
 
   const startEditing = (layer: Layer) => {
     setEditingId(layer.id);
@@ -406,11 +418,11 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   };
 
   const handleLayerClick = (e: React.MouseEvent, id: string) => {
-    let newSelection = [...state.selectedLayerIds];
+    let newSelection = [...selectedLayerIds];
 
     if (e.shiftKey) {
-      const allIds = state.layers.map((l) => l.id).reverse();
-      const startIdx = allIds.indexOf(state.activeLayerId);
+      const allIds = layers.map((l) => l.id).reverse();
+      const startIdx = allIds.indexOf(activeLayerId);
       const endIdx = allIds.indexOf(id);
       const range = allIds.slice(Math.min(startIdx, endIdx), Math.max(startIdx, endIdx) + 1);
       newSelection = Array.from(new Set([...newSelection, ...range]));
@@ -439,7 +451,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
     const draggedId = dragStateRef.current.id;
     const hoveredId = hoveredLayer.id;
 
-    if (hoveredId === draggedId || isDescendant(hoveredId, draggedId, state.layers)) {
+    if (hoveredId === draggedId || isDescendant(hoveredId, draggedId, layers)) {
       return null;
     }
 
@@ -541,9 +553,9 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
     dragStateRef.current = null;
   };
 
-  const isMultiLayer = state.selectedLayerIds.length > 1;
-  const selectedHasGroup = state.selectedLayerIds.some(
-    (id) => state.layers.find((l) => l.id === id)?.type === 'group'
+  const isMultiLayer = selectedLayerIds.length > 1;
+  const selectedHasGroup = selectedLayerIds.some(
+    (id) => layers.find((l) => l.id === id)?.type === 'group'
   );
 
   const propsLayer = layerPropertiesState?.layer ?? null;
@@ -555,13 +567,12 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
       return;
     }
     setPropsAnchorEl(rowRefs.current.get(propsLayer.id) ?? null);
-  }, [layerPropertiesState?.isOpen, propsLayer, state.layers]);
+  }, [layerPropertiesState?.isOpen, propsLayer, layers]);
 
-  const activeFrame = state.frames[state.activeFrameIndex];
-  const parentMap = getLayerParentMap(state.layers);
+  const parentMap = getLayerParentMap(layers);
   const collapsedLayerIds = new Set<string>();
-  const layerById = new Map<string, Layer>(state.layers.map((l) => [l.id, l]));
-  for (const layer of state.layers) {
+  const layerById = new Map<string, Layer>(layers.map((l) => [l.id, l]));
+  for (const layer of layers) {
     let curr: Layer | undefined = layer;
     const visited = new Set<string>();
     while (curr) {
@@ -581,7 +592,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
     }
   }
 
-  const revLayers = state.layers.slice().reverse();
+  const revLayers = layers.slice().reverse();
   const displayLayers = !searchQuery.trim()
     ? revLayers
     : revLayers.filter((l) => l.name.toLowerCase().includes(searchQuery.toLowerCase()));
@@ -591,8 +602,8 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
       <div className="flex h-8 shrink-0 items-center justify-between border-b border-border bg-background/50 px-2.5">
         <span className="font-mono text-[11px] font-medium text-muted-foreground tabular-nums">
           {isMultiLayer
-            ? `${state.selectedLayerIds.length} selected`
-            : `${state.layers.length} ${state.layers.length === 1 ? 'layer' : 'layers'}`}
+            ? `${selectedLayerIds.length} selected`
+            : `${layers.length} ${layers.length === 1 ? 'layer' : 'layers'}`}
         </span>
 
         <div className="flex items-center gap-0.5">
@@ -616,7 +627,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
             <TooltipContent side="top">Filter Layers</TooltipContent>
           </Tooltip>
 
-          {onToggleCollapseAllGroups && state.layers.some((l) => l.type === 'group') && (
+          {onToggleCollapseAllGroups && layers.some((l) => l.type === 'group') && (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -699,7 +710,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                   type="button"
                   aria-label="Duplicate Selected Layer"
                   onClick={() =>
-                    isMultiLayer ? onDuplicateSelectedLayers() : onDuplicateLayer(state.activeLayerId)
+                    isMultiLayer ? onDuplicateSelectedLayers() : onDuplicateLayer(activeLayerId)
                   }
                   className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 >
@@ -717,7 +728,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                   type="button"
                   aria-label="Delete Selected Layer"
                   onClick={() =>
-                    isMultiLayer ? onDeleteSelectedLayers() : onDeleteLayer(state.activeLayerId)
+                    isMultiLayer ? onDeleteSelectedLayers() : onDeleteLayer(activeLayerId)
                   }
                   className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-destructive/15 hover:text-destructive"
                 >
@@ -846,9 +857,9 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
 
                       const isDragging = dragState?.id === layer.id;
                       const isOver = dragState?.overId === layer.id;
-                      const isActive = state.activeLayerId === layer.id;
-                      const isSelected = state.selectedLayerIds.includes(layer.id);
-                      const effectiveVis = isLayerVisible(layer, state.layers, parentMap);
+                      const isActive = activeLayerId === layer.id;
+                      const isSelected = selectedLayerIds.includes(layer.id);
+                      const effectiveVis = isLayerVisible(layer, layers, parentMap);
                       const childLevel = Math.min(layer.childLevel ?? 0, 5);
                       const isGroup = layer.type === 'group';
                       const colorTagObj = COLOR_TAGS.find((t) => t.id === layer.colorTag);
@@ -980,19 +991,19 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                                 {isGroup ? (
                                   <GroupThumbnail
                                     groupId={layer.id}
-                                    layers={state.layers}
+                                    layers={layers}
                                     activeFrame={activeFrame}
-                                    palette={state.palette}
-                                    width={state.width}
-                                    height={state.height}
+                                    palette={palette}
+                                    width={width}
+                                    height={height}
                                     collapsed={!!layer.collapsed}
                                   />
                                 ) : (
                                   <LayerThumbnail
                                     pixels={activeFrame?.layerData[layer.id]}
-                                    palette={state.palette}
-                                    width={state.width}
-                                    height={state.height}
+                                    palette={palette}
+                                    width={width}
+                                    height={height}
                                   />
                                 )}
 

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { Allotment } from 'allotment';
 import { useMobile } from '../hooks/useMobile';
-import { ProjectState, FrameTag, PixelGrid } from '../types';
+import { Frame, Layer, FrameTag, PixelGrid } from '../types';
 import {
   Eye,
   EyeOff,
@@ -36,7 +36,13 @@ import {
 } from './ui/context-menu';
 
 interface TimelineProps {
-  state: ProjectState;
+  layers: Layer[];
+  frames: Frame[];
+  activeFrameIndex: number;
+  activeLayerId: string;
+  selectedFrameIndices: number[];
+  selectedLayerIds: string[];
+  tags?: FrameTag[];
   onSelectFrames: (indices: number[], activeIndex: number, layerId?: string) => void;
   onAddFrame: () => void;
   onDuplicateFrame: () => void;
@@ -232,7 +238,13 @@ const hasCelContent = (pixels: PixelGrid | undefined): boolean => {
 };
 
 export const Timeline: React.FC<TimelineProps> = ({
-  state,
+  layers,
+  frames,
+  activeFrameIndex,
+  activeLayerId,
+  selectedFrameIndices,
+  selectedLayerIds,
+  tags,
   onSelectFrames,
   onAddFrame,
   onDuplicateFrame,
@@ -272,8 +284,8 @@ export const Timeline: React.FC<TimelineProps> = ({
   const tagRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const tagButtonRef = useRef<HTMLButtonElement>(null);
 
-  const selectedFrameSet = new Set(state.selectedFrameIndices);
-  const selectedLayerSet = new Set(state.selectedLayerIds);
+  const selectedFrameSet = new Set(selectedFrameIndices);
+  const selectedLayerSet = new Set(selectedLayerIds);
 
   useEffect(() => {
     setSidebarWidth(isMobile ? 120 : 192);
@@ -356,7 +368,7 @@ export const Timeline: React.FC<TimelineProps> = ({
       targetSelectedIds = Array.from(selectedTagIds);
     }
 
-    const allTags = state.tags || [];
+    const allTags = tags || [];
     const initialStates: Record<string, TagRange> = {};
     targetSelectedIds.forEach((id) => {
       const t = allTags.find((x) => x.id === id);
@@ -382,7 +394,7 @@ export const Timeline: React.FC<TimelineProps> = ({
       const deltaX = e.clientX - resizingTagState.startX;
       const isPastThreshold = Math.abs(deltaX) > 3;
       const deltaFrames = Math.round(deltaX / 40);
-      const totalFrames = state.frames.length;
+      const totalFrames = frames.length;
 
       const nextCurrentStates: Record<string, TagRange> = {};
 
@@ -423,7 +435,7 @@ export const Timeline: React.FC<TimelineProps> = ({
         if (resizingTagState.hasMoved) {
           (Object.entries(resizingTagState.currentStates) as [string, TagRange][]).forEach(
             ([tId, updated]) => {
-              const targetTag = (state.tags || []).find((t) => t.id === tId);
+              const targetTag = (tags || []).find((t) => t.id === tId);
               if (
                 targetTag &&
                 (updated.from !== targetTag.from || updated.to !== targetTag.to)
@@ -463,7 +475,7 @@ export const Timeline: React.FC<TimelineProps> = ({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [resizingTagState, state.frames.length, state.tags, onSaveTag]);
+  }, [resizingTagState, frames.length, tags, onSaveTag]);
 
   const toggleCollapseTag = (tagId: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -478,13 +490,13 @@ export const Timeline: React.FC<TimelineProps> = ({
   useEffect(() => {
     if (activeTagPopover?.isOpen) {
       const from =
-        state.selectedFrameIndices.length > 0
-          ? Math.min(...state.selectedFrameIndices)
-          : state.activeFrameIndex;
+        selectedFrameIndices.length > 0
+          ? Math.min(...selectedFrameIndices)
+          : activeFrameIndex;
       const to =
-        state.selectedFrameIndices.length > 0
-          ? Math.max(...state.selectedFrameIndices)
-          : state.activeFrameIndex;
+        selectedFrameIndices.length > 0
+          ? Math.max(...selectedFrameIndices)
+          : activeFrameIndex;
       const initialTag: FrameTag = activeTagPopover.tag
         ? { ...activeTagPopover.tag }
         : {
@@ -509,13 +521,13 @@ export const Timeline: React.FC<TimelineProps> = ({
       e.stopPropagation();
     }
     const from =
-      state.selectedFrameIndices.length > 0
-        ? Math.min(...state.selectedFrameIndices)
-        : state.activeFrameIndex;
+      selectedFrameIndices.length > 0
+        ? Math.min(...selectedFrameIndices)
+        : activeFrameIndex;
     const to =
-      state.selectedFrameIndices.length > 0
-        ? Math.max(...state.selectedFrameIndices)
-        : state.activeFrameIndex;
+      selectedFrameIndices.length > 0
+        ? Math.max(...selectedFrameIndices)
+        : activeFrameIndex;
 
     let tag: FrameTag;
     if (existingTag) {
@@ -550,10 +562,10 @@ export const Timeline: React.FC<TimelineProps> = ({
   };
 
   const handleFrameClick = (e: React.MouseEvent, index: number, layerId?: string) => {
-    let newSelection = [...state.selectedFrameIndices];
+    let newSelection = [...selectedFrameIndices];
 
     if (e.shiftKey) {
-      const startIdx = state.activeFrameIndex;
+      const startIdx = activeFrameIndex;
       const endIdx = index;
       const range = [];
       for (let i = Math.min(startIdx, endIdx); i <= Math.max(startIdx, endIdx); i++) {
@@ -680,12 +692,12 @@ export const Timeline: React.FC<TimelineProps> = ({
     const scrollLeft = container.scrollLeft;
     const relativeX = e.clientX - rect.left + scrollLeft;
 
-    if (state.frames.length === 0) return;
+    if (frames.length === 0) return;
 
     const preciseIndex = relativeX / 40;
     let targetIndex = Math.floor(preciseIndex);
     if (targetIndex < 0) targetIndex = 0;
-    if (targetIndex >= state.frames.length) targetIndex = state.frames.length - 1;
+    if (targetIndex >= frames.length) targetIndex = frames.length - 1;
 
     const offset = preciseIndex - targetIndex;
     const position = offset < 0.5 ? 'before' : 'after';
@@ -700,7 +712,7 @@ export const Timeline: React.FC<TimelineProps> = ({
     e.preventDefault();
     e.stopPropagation();
     const fromIndex = parseInt(dragState.id, 10);
-    const targetIndex = dragState.overId ? parseInt(dragState.overId, 10) : state.frames.length - 1;
+    const targetIndex = dragState.overId ? parseInt(dragState.overId, 10) : frames.length - 1;
     if (fromIndex !== targetIndex) {
       let insertIndex = targetIndex;
       if (dragState.position === 'after') insertIndex = targetIndex + 1;
@@ -710,32 +722,30 @@ export const Timeline: React.FC<TimelineProps> = ({
     setDragState(null);
   };
 
-  const isMultiFrame = state.selectedFrameIndices.length > 1;
-  const canTween = state.selectedFrameIndices.length >= 3;
+  const isMultiFrame = selectedFrameIndices.length > 1;
+  const canTween = selectedFrameIndices.length >= 3;
 
-  const allTags = state.tags || [];
+  const allTags = tags || [];
   const { trackTags, maxTracks } = calculateTagTracks(allTags, resizingTagState);
   const { columns, frameXMap, totalWidth } = calculateColumns(
-    state.frames.length,
+    frames.length,
     allTags,
     collapsedTagIds
   );
   const tagStripHeight = allTags.length > 0 ? Math.max(28, maxTracks * 26 + 6) : 0;
   const totalHeaderHeight = tagStripHeight + 32;
 
-  const parentMap = getLayerParentMap(state.layers);
-  const reversedLayers = state.layers.slice().reverse();
+  const parentMap = getLayerParentMap(layers);
+  const reversedLayers = layers.slice().reverse();
   const collapsedLayerIds = new Set<string>();
-  const layerById = new Map<string, (typeof state.layers)[number]>(
-    state.layers.map((l) => [l.id, l])
-  );
-  for (const layer of state.layers) {
-    let curr: (typeof state.layers)[number] | undefined = layer;
+  const layerById = new Map<string, Layer>(layers.map((l) => [l.id, l]));
+  for (const layer of layers) {
+    let curr: Layer | undefined = layer;
     const visited = new Set<string>();
     while (curr) {
       if (visited.has(curr.id)) break;
       visited.add(curr.id);
-      const parent: (typeof state.layers)[number] | undefined =
+      const parent: Layer | undefined =
         parentMap.get(curr.id) || (curr.parentId ? layerById.get(curr.parentId) : undefined);
       if (parent) {
         if (parent.collapsed) {
@@ -758,7 +768,7 @@ export const Timeline: React.FC<TimelineProps> = ({
       return;
     }
     setTagPopoverAnchor(tagRefs.current.get(activeEditingTag.id) ?? tagButtonRef.current ?? null);
-  }, [activeEditingTag, state.tags]);
+  }, [activeEditingTag, tags]);
 
   return (
     <div className="flex h-full flex-col bg-card text-sm select-none">
@@ -821,8 +831,8 @@ export const Timeline: React.FC<TimelineProps> = ({
               isOpen={true}
               tag={activeEditingTag}
               isNew={false}
-              totalFrames={state.frames.length}
-              frames={state.frames}
+              totalFrames={frames.length}
+              frames={frames}
               onSave={(savedTag) => {
                 if (onSaveTag) {
                   onSaveTag(savedTag);
@@ -958,7 +968,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                 className="pointer-events-none absolute left-0 z-30 h-8 w-full"
                 style={{ top: `${tagStripHeight}px` }}
               >
-                {Array.from({ length: state.frames.length + 1 }).map((_, i) => {
+                {Array.from({ length: frames.length + 1 }).map((_, i) => {
                   const isOver = dragState?.type === 'frame' && dragState.overId === `insert-${i}`;
                   const framePos = frameXMap[i] || { x: i * 40 };
                   return (
@@ -1255,7 +1265,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                               {onSaveTag && (
                                 <ContextMenuItem
                                   onSelect={() => {
-                                    const allTagsList = state.tags || [];
+                                    const allTagsList = tags || [];
                                     selectedTagIds.forEach((id) => {
                                       const t = allTagsList.find((x) => x.id === id);
                                       if (t) {
@@ -1314,8 +1324,8 @@ export const Timeline: React.FC<TimelineProps> = ({
                   }
 
                   const idx = col.frameIndex;
-                  const frame = state.frames[idx];
-                  const isCurrent = state.activeFrameIndex === idx;
+                  const frame = frames[idx];
+                  const isCurrent = activeFrameIndex === idx;
                   const isSelected = selectedFrameSet.has(idx);
 
                   return (
@@ -1410,9 +1420,9 @@ export const Timeline: React.FC<TimelineProps> = ({
                               dragState?.type === 'layer' && dragState.id === layer.id;
                             const isOver =
                               dragState?.type === 'layer' && dragState.overId === layer.id;
-                            const isActive = state.activeLayerId === layer.id;
+                            const isActive = activeLayerId === layer.id;
                             const isSelected = selectedLayerSet.has(layer.id);
-                            const effectiveVis = isLayerVisible(layer, state.layers, parentMap);
+                            const effectiveVis = isLayerVisible(layer, layers, parentMap);
                             const childLevel = layer.childLevel ?? 0;
                             const isGroup = layer.type === 'group';
 
@@ -1619,11 +1629,11 @@ export const Timeline: React.FC<TimelineProps> = ({
                                     }
 
                                     const frameIdx = col.frameIndex;
-                                    const frame = state.frames[frameIdx];
+                                    const frame = frames[frameIdx];
                                     const hasContent = hasCelContent(frame?.layerData[layer.id]);
                                     const isActive =
-                                      state.activeFrameIndex === frameIdx &&
-                                      state.activeLayerId === layer.id;
+                                      activeFrameIndex === frameIdx &&
+                                      activeLayerId === layer.id;
                                     const isFrameSelected = selectedFrameSet.has(frameIdx);
                                     const isLayerSelected = selectedLayerSet.has(layer.id);
 

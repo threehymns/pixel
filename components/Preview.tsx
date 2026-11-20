@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Frame, Layer, ProjectState } from '../types';
+import { Frame, Layer } from '../types';
 import { renderFrameToCanvas } from '../utils';
 import { Play, Pause, X } from './Icons';
 import { CustomSlider } from './ui/slider';
@@ -13,7 +13,12 @@ import {
 
 interface PreviewProps {
   width: number;
-  state: ProjectState;
+  frames: Frame[];
+  layers: Layer[];
+  palette: string[];
+  spriteWidth: number;
+  spriteHeight: number;
+  activeFrameIndex: number;
   onClose?: () => void;
   isFloating?: boolean;
 }
@@ -26,7 +31,16 @@ interface CachedFrameRender {
   canvas: HTMLCanvasElement;
 }
 
-export const Preview: React.FC<PreviewProps> = ({ state, onClose, isFloating = true }) => {
+export const Preview: React.FC<PreviewProps> = ({
+  frames,
+  layers,
+  palette,
+  spriteWidth,
+  spriteHeight,
+  activeFrameIndex,
+  onClose,
+  isFloating = true,
+}) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const frameCacheRef = useRef<WeakMap<Frame, CachedFrameRender>>(new WeakMap());
@@ -137,18 +151,18 @@ export const Preview: React.FC<PreviewProps> = ({ state, onClose, isFloating = t
 
   useEffect(() => {
     let interval: number | undefined;
-    if (isPlaying && state.frames.length > 1) {
+    if (isPlaying && frames.length > 1) {
       interval = window.setInterval(() => {
-        setPreviewFrame((curr) => (curr + 1) % state.frames.length);
+        setPreviewFrame((curr) => (curr + 1) % frames.length);
       }, 1000 / fps);
     } else {
-      setPreviewFrame(state.activeFrameIndex);
+      setPreviewFrame(activeFrameIndex);
     }
 
     return () => {
       if (interval !== undefined) clearInterval(interval);
     };
-  }, [isPlaying, fps, state.frames.length, state.activeFrameIndex]);
+  }, [isPlaying, fps, frames.length, activeFrameIndex]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -159,40 +173,43 @@ export const Preview: React.FC<PreviewProps> = ({ state, onClose, isFloating = t
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    const frameIndex = isPlaying ? previewFrame : state.activeFrameIndex;
-    const frame = state.frames[frameIndex];
+    const frameIndex = isPlaying ? previewFrame : activeFrameIndex;
+    const frame = frames[frameIndex];
     if (frame) {
       let cached = frameCacheRef.current.get(frame);
       if (
         !cached ||
-        cached.layers !== state.layers ||
-        cached.palette !== state.palette ||
-        cached.width !== state.width ||
-        cached.height !== state.height
+        cached.layers !== layers ||
+        cached.palette !== palette ||
+        cached.width !== spriteWidth ||
+        cached.height !== spriteHeight
       ) {
         cached = {
-          layers: state.layers,
-          palette: state.palette,
-          width: state.width,
-          height: state.height,
-          canvas: renderFrameToCanvas(state, frameIndex),
+          layers,
+          palette,
+          width: spriteWidth,
+          height: spriteHeight,
+          canvas: renderFrameToCanvas(
+            { width: spriteWidth, height: spriteHeight, frames, palette, layers },
+            frameIndex
+          ),
         };
         frameCacheRef.current.set(frame, cached);
       }
       ctx.drawImage(cached.canvas, 0, 0, canvas.width, canvas.height);
     }
   }, [
-    state.frames,
-    state.layers,
-    state.palette,
-    state.width,
-    state.height,
-    state.activeFrameIndex,
+    frames,
+    layers,
+    palette,
+    spriteWidth,
+    spriteHeight,
+    activeFrameIndex,
     previewFrame,
     isPlaying,
   ]);
 
-  const currentFrameNumber = (isPlaying ? previewFrame : state.activeFrameIndex) + 1;
+  const currentFrameNumber = (isPlaying ? previewFrame : activeFrameIndex) + 1;
 
   const innerContent = (
     <div className="flex h-full w-full flex-col bg-card select-none">
@@ -207,7 +224,7 @@ export const Preview: React.FC<PreviewProps> = ({ state, onClose, isFloating = t
             <span className="text-[11px] font-semibold tracking-tight text-foreground">Preview</span>
           )}
           <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
-            F{currentFrameNumber}/{state.frames.length}
+            F{currentFrameNumber}/{frames.length}
           </span>
         </div>
 
@@ -260,8 +277,8 @@ export const Preview: React.FC<PreviewProps> = ({ state, onClose, isFloating = t
       >
         <canvas
           ref={canvasRef}
-          width={Math.max(64, state.width)}
-          height={Math.max(64, state.height)}
+          width={Math.max(64, spriteWidth)}
+          height={Math.max(64, spriteHeight)}
           className="checkerboard-alpha pixelated h-full w-full max-h-full max-w-full rounded-sm border border-border object-contain shadow-sm"
         />
       </div>

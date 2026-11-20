@@ -1,11 +1,11 @@
 import React, { useRef, useEffect } from 'react';
-import { ProjectInstance } from '../types';
+import { ProjectTabItem } from '../hooks/useProject';
 import { Plus, X, Home } from './Icons';
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 import { cn } from '../lib/utils';
 
 interface TabStripProps {
-  projects: ProjectInstance[];
+  tabs: ProjectTabItem[];
   activeProjectId: string;
   onSelectProject: (id: string) => void;
   onCloseProject: (id: string) => void;
@@ -13,7 +13,7 @@ interface TabStripProps {
 }
 
 export const TabStrip: React.FC<TabStripProps> = ({
-  projects,
+  tabs,
   activeProjectId,
   onSelectProject,
   onCloseProject,
@@ -65,15 +65,15 @@ export const TabStrip: React.FC<TabStripProps> = ({
           }
         }}
       >
-        {projects.map((p) => {
-          const isActive = p.data.id === activeProjectId;
-          const isDirty = p.historyIndex !== p.lastSavedHistoryIndex;
+        {tabs.map((tab) => {
+          const isActive = tab.id === activeProjectId;
+          const isDirty = tab.isDirty;
 
           return (
             <div
-              key={p.data.id}
+              key={tab.id}
               data-active={isActive}
-              onClick={() => onSelectProject(p.data.id)}
+              onClick={() => onSelectProject(tab.id)}
               className={cn(
                 'group flex h-7 min-w-[120px] max-w-[200px] cursor-pointer items-center gap-2 rounded-t-md border-x border-t px-2.5 text-xs transition-colors',
                 isActive
@@ -81,7 +81,7 @@ export const TabStrip: React.FC<TabStripProps> = ({
                   : 'border-transparent bg-transparent font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground'
               )}
             >
-              <span className="flex-1 truncate">{p.data.title}</span>
+              <span className="flex-1 truncate">{tab.title}</span>
 
               <div className="relative ml-0.5 flex h-4 w-4 shrink-0 items-center justify-center">
                 {isDirty && (
@@ -95,10 +95,10 @@ export const TabStrip: React.FC<TabStripProps> = ({
                 )}
                 <button
                   type="button"
-                  aria-label={`Close ${p.data.title}`}
+                  aria-label={`Close ${tab.title}`}
                   onClick={(e) => {
                     e.stopPropagation();
-                    onCloseProject(p.data.id);
+                    onCloseProject(tab.id);
                   }}
                   className={cn(
                     'absolute inset-0 flex items-center justify-center rounded-sm text-muted-foreground transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',

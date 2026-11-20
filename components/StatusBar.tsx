@@ -1,7 +1,8 @@
 import React from 'react';
-import { ProjectState, Position } from '../types';
+import { ToolType, InkType, Position } from '../types';
 import { SELECTION_TOOLS } from '../constants';
 import { useCursorMousePos, useCursorDragStartPos, useLiveZoom } from '../hooks/useCursorStore';
+import { useStatusMessage } from '../hooks/useStatusStore';
 import {
   MousePointer2,
   Layers,
@@ -13,25 +14,40 @@ import {
 } from './Icons';
 
 interface StatusBarProps {
-  state: ProjectState;
+  tool: ToolType;
+  inkType: InkType;
+  smudgeMode?: 'blend' | 'push';
+  width: number;
+  height: number;
+  activeFrameIndex: number;
+  frameCount: number;
+  zoom: number;
+  activeLayerName?: string;
   isHome: boolean;
   mousePos?: Position | null;
   dragStartPos?: Position | null;
-  statusMessage: { text: string; type: 'info' | 'error' | 'success' };
   selectionSize: { w: number; h: number } | null;
 }
 
 export const StatusBar: React.FC<StatusBarProps> = ({
-  state,
+  tool,
+  inkType,
+  smudgeMode,
+  width,
+  height,
+  activeFrameIndex,
+  frameCount,
+  zoom,
+  activeLayerName,
   isHome,
   mousePos: mousePosProp,
   dragStartPos: dragStartPosProp,
-  statusMessage,
   selectionSize,
 }) => {
   const storeMousePos = useCursorMousePos();
   const storeDragStartPos = useCursorDragStartPos();
   const liveZoom = useLiveZoom();
+  const statusMessage = useStatusMessage();
   const mousePos = mousePosProp !== undefined ? mousePosProp : storeMousePos;
   const dragStartPos = dragStartPosProp !== undefined ? dragStartPosProp : storeDragStartPos;
 
@@ -65,9 +81,8 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       );
     }
 
-    const tool = state.tool;
     const isSelection = SELECTION_TOOLS.includes(tool);
-    const isShading = state.inkType === 'shading';
+    const isShading = inkType === 'shading';
 
     const toolLabel = `${isShading ? 'Shading ' : ''}${tool
       .replace('-select', ' Select')
@@ -120,7 +135,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
               {tool === 'smudge' && (
                 <span className="shrink-0">
                   <kbd className="font-mono text-foreground">Drag</kbd>{' '}
-                  {state.smudgeMode === 'push' ? 'Push pixels' : 'Smear colors'}
+                  {smudgeMode === 'push' ? 'Push pixels' : 'Smear colors'}
                 </span>
               )}
               {tool === 'line' && !isShading && (
@@ -202,11 +217,11 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   };
 
   const isFreeformTool =
-    state.tool === 'pencil' ||
-    state.tool === 'eraser' ||
-    state.tool === 'smudge' ||
-    state.tool === 'blur' ||
-    state.tool === 'sharpen';
+    tool === 'pencil' ||
+    tool === 'eraser' ||
+    tool === 'smudge' ||
+    tool === 'blur' ||
+    tool === 'sharpen';
 
   return (
     <div className="flex h-7 shrink-0 items-center overflow-hidden border-t border-border bg-card/90 px-3 text-[11px] text-muted-foreground select-none">
@@ -243,7 +258,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         <div className="flex items-center gap-1 font-mono text-foreground">
           <Maximize size={11} className="text-muted-foreground" />
           <span>
-            {state.width}×{state.height}
+            {width}×{height}
           </span>
         </div>
 
@@ -264,7 +279,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         <div className="flex items-center gap-1 font-mono text-foreground">
           <Clock size={11} className="text-muted-foreground" />
           <span>
-            {state.activeFrameIndex + 1}/{state.frames.length}
+            {activeFrameIndex + 1}/{frameCount}
           </span>
         </div>
 
@@ -272,16 +287,14 @@ export const StatusBar: React.FC<StatusBarProps> = ({
 
         <div className="flex w-12 items-center justify-end gap-1 font-mono text-foreground">
           <ZoomIn size={11} className="text-muted-foreground" />
-          <span>{Math.round((liveZoom ?? state.zoom) * 100)}%</span>
+          <span>{Math.round((liveZoom ?? zoom) * 100)}%</span>
         </div>
 
         <div className="h-3 w-px bg-border" />
 
         <div className="flex max-w-[112px] items-center gap-1 truncate text-foreground">
           <Layers size={11} className="shrink-0 text-muted-foreground" />
-          <span className="truncate">
-            {state.layers.find((l) => l.id === state.activeLayerId)?.name}
-          </span>
+          <span className="truncate">{activeLayerName}</span>
         </div>
       </div>
     </div>
