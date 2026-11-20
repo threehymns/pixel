@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   AlertCircle,
+  AlertTriangle,
   ArrowDown,
   ArrowDownLeft,
   ArrowDownRight,
@@ -13,6 +14,7 @@ import {
   ArrowUpRight,
   BoxSelect,
   Check,
+  CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -81,6 +83,7 @@ import {
   Ratio,
   Redo,
   RefreshCcw,
+  Replace,
   RotateCcw,
   Scissors,
   Search,
@@ -128,6 +131,7 @@ export const AngleIcon = ({
 
 export {
   AlertCircle,
+  AlertTriangle,
   ArrowDown,
   ArrowDownLeft,
   ArrowDownRight,
@@ -140,6 +144,7 @@ export {
   ArrowUpRight,
   BoxSelect,
   Check,
+  CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -208,6 +213,7 @@ export {
   Ratio,
   Redo,
   RefreshCcw,
+  Replace,
   RotateCcw,
   Scissors,
   Search,

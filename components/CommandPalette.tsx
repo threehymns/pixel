@@ -21,7 +21,7 @@ interface CommandPaletteProps {
   commands: Command[];
 }
 
-const CATEGORY_ORDER = ['File', 'Edit', 'View', 'Select', 'Layer', 'Sprite'];
+const CATEGORY_ORDER = ['File', 'Edit', 'Tools', 'View', 'Select', 'Layer', 'Sprite'];
 
 export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose, commands }) => {
   const [query, setQuery] = useState('');

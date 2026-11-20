@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react';
 
 export interface StatusMessage {
   text: string;
-  type: 'info' | 'error' | 'success';
+  type: 'info' | 'error' | 'success' | 'warning';
 }
 
 type Listener = () => void;

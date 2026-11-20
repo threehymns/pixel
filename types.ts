@@ -265,7 +265,7 @@ export const CANVAS_SIZE = 32; // Default 32x32
 export interface Command {
   id: string;
   label: string;
-  category: 'File' | 'Edit' | 'View' | 'Select' | 'Sprite' | 'Layer' | 'Help';
+  category: 'File' | 'Edit' | 'Tools' | 'View' | 'Select' | 'Sprite' | 'Layer' | 'Help';
   hotkey?: string; // Display string, e.g. "Ctrl+Z"
   keys?: string[]; // Code matchers, e.g. ["Control+z", "Meta+z"]
   perform: () => void;

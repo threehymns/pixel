@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { FrameTag, Frame } from '../types';
+import { ENTITY_COLOR_TAGS } from '../constants';
 import {
   Trash2,
   ArrowRight,
@@ -7,10 +8,17 @@ import {
   ArrowLeftRight,
   ArrowRightLeft,
   InfinityIcon,
+  Check,
 } from './Icons';
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 import { PopoverArrow } from './ui/popover';
+import { ModalShell } from './ui/dialog';
 import { Input } from './ui/input';
+import { Button } from './ui/button';
+import { Field, FieldLabel } from './ui/field';
+import { StudioNumberInput } from './ui/number-input';
+import { ColorSwatchField } from './ui/color-picker';
+import { studioConfirm } from './ui/alert-dialog';
 import {
   SegmentedControl,
   SegmentedControlIndicator,
@@ -18,16 +26,7 @@ import {
 } from './ui/segmented-control';
 import { cn } from '../lib/utils';
 
-export const TAG_PRESET_COLORS = [
-  '#3b82f6',
-  '#10b981',
-  '#f59e0b',
-  '#f43f5e',
-  '#a855f7',
-  '#ec4899',
-  '#06b6d4',
-  '#84cc16',
-];
+export const TAG_PRESET_COLORS = ENTITY_COLOR_TAGS.map((t) => t.hex);
 
 export interface AnimationTagPopoverProps {
   isOpen: boolean;
@@ -38,9 +37,13 @@ export interface AnimationTagPopoverProps {
   onSave: (updatedTag: FrameTag) => void;
   onClose: () => void;
   onDelete?: (tagId: string) => void;
+  onPreviewTag?: (previewTag: FrameTag) => void;
+  onRevertPreview?: (snapshotTag: FrameTag | null) => void;
+  showArrow?: boolean;
 }
 
 export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
+  isOpen,
   tag: initialTag,
   isNew,
   totalFrames,
@@ -48,44 +51,48 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
   onSave,
   onClose,
   onDelete,
+  onPreviewTag,
+  onRevertPreview,
+  showArrow = true,
 }) => {
   const [tag, setTag] = useState<FrameTag>({ ...initialTag });
-  const [repeatMode, setRepeatMode] = useState<'infinite' | 'custom'>(() => {
-    return (initialTag.repeat ?? 0) === 0 ? 'infinite' : 'custom';
-  });
+  const [repeatMode, setRepeatMode] = useState<'infinite' | 'custom'>(() =>
+    (initialTag.repeat ?? 0) === 0 ? 'infinite' : 'custom'
+  );
 
-  const tagRef = useRef(tag);
-  const onSaveRef = useRef(onSave);
-  const isDeletingRef = useRef(false);
+  const snapshotRef = useRef<FrameTag | null>(isNew ? null : { ...initialTag });
+  const isCommittedRef = useRef(false);
+  const hasPreviewedRef = useRef(false);
+  const onPreviewRef = useRef(onPreviewTag);
+  const onRevertRef = useRef(onRevertPreview);
 
   useLayoutEffect(() => {
-    tagRef.current = tag;
-    onSaveRef.current = onSave;
+    onPreviewRef.current = onPreviewTag;
+    onRevertRef.current = onRevertPreview;
   });
 
   useEffect(() => {
+    if (!isOpen) return;
+    snapshotRef.current = isNew ? null : { ...initialTag };
+    isCommittedRef.current = false;
+    hasPreviewedRef.current = false;
     setTag({ ...initialTag });
     setRepeatMode((initialTag.repeat ?? 0) === 0 ? 'infinite' : 'custom');
-  }, [initialTag]);
+  }, [isOpen, initialTag.id, isNew]);
 
   useEffect(() => {
     return () => {
-      if (isDeletingRef.current) return;
-      const currentTag = tagRef.current;
-      if (!currentTag.name.trim()) {
-        onSaveRef.current({
-          ...currentTag,
-          name: 'Tag',
-        });
+      if (!isCommittedRef.current && hasPreviewedRef.current) {
+        onRevertRef.current?.(snapshotRef.current);
       }
     };
   }, []);
 
   const safeTotal = Math.max(1, totalFrames);
-  const safeFrom = Math.max(0, Math.min(safeTotal - 1, isNaN(tag.from) ? 0 : tag.from));
+  const safeFrom = Math.max(0, Math.min(safeTotal - 1, Number.isFinite(tag.from) ? tag.from : 0));
   const safeTo = Math.max(
     safeFrom,
-    Math.min(safeTotal - 1, isNaN(tag.to) ? safeTotal - 1 : tag.to)
+    Math.min(safeTotal - 1, Number.isFinite(tag.to) ? tag.to : safeTotal - 1)
   );
 
   let durationMs = 0;
@@ -93,27 +100,67 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
     durationMs += frames[i]?.duration || 100;
   }
 
-  const updateAndSave = (partialTag: Partial<FrameTag>, newRepeatMode?: 'infinite' | 'custom') => {
-    const nextTag = { ...tag, ...partialTag };
-    const nextRepeatMode = newRepeatMode !== undefined ? newRepeatMode : repeatMode;
-
-    const rFrom = Math.max(0, Math.min(safeTotal - 1, isNaN(nextTag.from) ? 0 : nextTag.from));
+  const normalizeTag = (next: FrameTag, mode: 'infinite' | 'custom'): FrameTag => {
+    const rFrom = Math.max(0, Math.min(safeTotal - 1, Number.isFinite(next.from) ? next.from : 0));
     const rTo = Math.max(
       rFrom,
-      Math.min(safeTotal - 1, isNaN(nextTag.to) ? safeTotal - 1 : nextTag.to)
+      Math.min(safeTotal - 1, Number.isFinite(next.to) ? next.to : safeTotal - 1)
     );
-
-    const finalTag: FrameTag = {
-      ...nextTag,
+    return {
+      ...next,
       from: rFrom,
       to: rTo,
-      name: nextTag.name,
-      color: nextTag.color || '#3b82f6',
-      direction: nextTag.direction || 'forward',
-      repeat: nextRepeatMode === 'infinite' ? 0 : (nextTag.repeat ?? 1),
+      name: next.name,
+      color: next.color || '#3b82f6',
+      direction: next.direction || 'forward',
+      repeat: mode === 'infinite' ? 0 : Math.max(1, next.repeat || 1),
     };
-    setTag(finalTag);
+  };
+
+  const updateDraft = (patch: Partial<FrameTag>, nextMode?: 'infinite' | 'custom') => {
+    const resolvedMode = nextMode ?? repeatMode;
+    const normalized = normalizeTag({ ...tag, ...patch }, resolvedMode);
+    setTag(normalized);
+    if (onPreviewRef.current && !isNew) {
+      hasPreviewedRef.current = true;
+      onPreviewRef.current(normalized);
+    }
+  };
+
+  const handleCancel = () => {
+    if (!isCommittedRef.current && hasPreviewedRef.current) {
+      onRevertRef.current?.(snapshotRef.current);
+      hasPreviewedRef.current = false;
+    }
+    onClose();
+  };
+
+  const handleSubmit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    isCommittedRef.current = true;
+    hasPreviewedRef.current = false;
+    const finalTag = normalizeTag(
+      { ...tag, name: tag.name.trim() || 'Animation' },
+      repeatMode
+    );
     onSave(finalTag);
+    onClose();
+  };
+
+  const handleDelete = async () => {
+    if (!onDelete) return;
+    const confirmed = await studioConfirm({
+      title: `Delete "${tag.name.trim() || 'Animation'}" tag?`,
+      description: 'The animation tag range will be removed. Your frames will remain untouched.',
+      confirmLabel: 'Delete Tag',
+      destructive: true,
+    });
+    if (confirmed) {
+      isCommittedRef.current = true;
+      hasPreviewedRef.current = false;
+      onDelete(tag.id);
+      onClose();
+    }
   };
 
   const directions = [
@@ -124,108 +171,102 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
   ] as const;
 
   return (
-    <div
-      className="relative flex w-64 flex-col gap-3 text-xs text-popover-foreground outline-none select-none"
+    <form
+      onSubmit={handleSubmit}
+      className={cn(
+        'relative flex flex-col gap-3 text-xs text-popover-foreground outline-none select-none',
+        showArrow ? 'w-72 max-w-[calc(100vw-2rem)]' : 'w-full'
+      )}
       onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === 'Escape') {
+        if (e.key === 'Escape' && showArrow) {
           e.preventDefault();
-          onClose();
+          handleCancel();
         }
       }}
     >
-      <PopoverArrow />
+      {showArrow && <PopoverArrow />}
 
       <div className="flex flex-col gap-3">
-        <div className="flex flex-col gap-1">
-          <label className="text-[11px] font-medium text-muted-foreground">Name</label>
+        <Field>
+          <FieldLabel htmlFor="anim-tag-name">Name</FieldLabel>
           <Input
+            id="anim-tag-name"
             type="text"
             value={tag.name}
-            onChange={(e) => updateAndSave({ name: e.target.value })}
-            placeholder="e.g. Idle, Walk"
+            onChange={(e) => updateDraft({ name: e.target.value })}
+            placeholder="e.g. Idle, Walk, Jump"
             autoFocus
-            className="h-7"
+            className="h-8"
           />
-        </div>
+        </Field>
 
-        <div className="flex flex-col gap-1.5">
-          <span className="text-[11px] font-medium text-muted-foreground">Color</span>
-          <div className="flex flex-wrap items-center gap-1.5">
-            {TAG_PRESET_COLORS.map((c) => (
-              <button
-                key={c}
-                type="button"
-                aria-label={`Tag color ${c}`}
-                onClick={() => updateAndSave({ color: c })}
-                className={cn(
-                  'h-4 w-4 rounded-full border transition-transform',
-                  tag.color === c
-                    ? 'scale-110 border-foreground ring-2 ring-primary ring-offset-1 ring-offset-popover'
-                    : 'border-border-strong hover:scale-105'
-                )}
-                style={{ backgroundColor: c }}
-              />
-            ))}
-            <label
-              className="relative flex h-4 w-4 cursor-pointer items-center justify-center overflow-hidden rounded-full border border-dashed border-border-strong text-[11px] text-muted-foreground hover:border-foreground"
-              title="Custom color"
-            >
-              <input
-                type="color"
-                value={tag.color || '#3b82f6'}
-                onChange={(e) => updateAndSave({ color: e.target.value })}
-                aria-label="Custom tag color"
-                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-              />
-              +
-            </label>
+        <Field>
+          <FieldLabel>Color</FieldLabel>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {TAG_PRESET_COLORS.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  aria-label={`Tag color ${c}`}
+                  aria-pressed={tag.color.toLowerCase() === c.toLowerCase()}
+                  onClick={() => updateDraft({ color: c })}
+                  className={cn(
+                    'h-4 w-4 rounded-full border transition-transform cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                    tag.color.toLowerCase() === c.toLowerCase()
+                      ? 'scale-110 border-foreground ring-2 ring-primary ring-offset-1 ring-offset-popover'
+                      : 'border-border-strong hover:scale-105'
+                  )}
+                  style={{ backgroundColor: c }}
+                />
+              ))}
+            </div>
+            <ColorSwatchField
+              value={tag.color || '#3b82f6'}
+              onChange={(hex) => updateDraft({ color: hex })}
+              presets={TAG_PRESET_COLORS}
+              label="Custom tag color"
+              className="h-7 shrink-0 px-1.5 text-[11px]"
+            />
           </div>
-        </div>
+        </Field>
 
-        <div className="flex flex-col gap-1">
-          <span className="text-[11px] font-medium text-muted-foreground">Frames</span>
-          <div className="flex w-full items-center gap-1.5">
-            <Input
-              type="number"
-              min={1}
-              max={safeTotal}
-              aria-label="Start frame"
-              value={isNaN(tag.from) ? '' : tag.from + 1}
-              onChange={(e) => {
-                const val = parseInt(e.target.value, 10);
-                if (!isNaN(val)) {
-                  updateAndSave({ from: val - 1 });
-                }
-              }}
-              className="h-7 w-14 px-1.5 text-center font-mono tabular-nums"
-            />
-            <span className="text-[11px] text-muted-foreground">to</span>
-            <Input
-              type="number"
-              min={1}
-              max={safeTotal}
-              aria-label="End frame"
-              value={isNaN(tag.to) ? '' : tag.to + 1}
-              onChange={(e) => {
-                const val = parseInt(e.target.value, 10);
-                if (!isNaN(val)) {
-                  updateAndSave({ to: val - 1 });
-                }
-              }}
-              className="h-7 w-14 px-1.5 text-center font-mono tabular-nums"
-            />
-            <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums">
-              {durationMs}ms
+        <Field>
+          <div className="flex items-center justify-between">
+            <FieldLabel>Frames</FieldLabel>
+            <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+              {safeTo - safeFrom + 1}f · {durationMs}ms
             </span>
           </div>
-        </div>
+          <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-1.5">
+            <StudioNumberInput
+              value={safeFrom + 1}
+              onValueChange={(val) => updateDraft({ from: val - 1 })}
+              min={1}
+              max={safeTotal}
+              prefix="From"
+              aria-label="Start frame"
+              inputClassName="px-1.5 text-right"
+            />
+            <span className="shrink-0 text-[11px] text-muted-foreground">–</span>
+            <StudioNumberInput
+              value={safeTo + 1}
+              onValueChange={(val) => updateDraft({ to: val - 1 })}
+              min={1}
+              max={safeTotal}
+              prefix="To"
+              aria-label="End frame"
+              inputClassName="px-1.5 text-right"
+            />
+          </div>
+        </Field>
 
-        <div className="flex flex-col gap-1">
-          <span className="text-[11px] font-medium text-muted-foreground">Direction</span>
+        <Field>
+          <FieldLabel>Direction</FieldLabel>
           <SegmentedControl<NonNullable<FrameTag['direction']>>
             value={tag.direction || 'forward'}
             onValueChange={(next) =>
-              next && updateAndSave({ direction: next as NonNullable<FrameTag['direction']> })
+              next && updateDraft({ direction: next as NonNullable<FrameTag['direction']> })
             }
             aria-label="Tag playback direction"
           >
@@ -246,10 +287,10 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
               );
             })}
           </SegmentedControl>
-        </div>
+        </Field>
 
-        <div className="flex flex-col gap-1">
-          <span className="text-[11px] font-medium text-muted-foreground">Repeat</span>
+        <Field>
+          <FieldLabel>Repeat</FieldLabel>
           <div className="flex w-full items-center gap-1.5">
             <SegmentedControl<'infinite' | 'custom'>
               value={repeatMode}
@@ -258,13 +299,13 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
                 const mode = next as 'infinite' | 'custom';
                 setRepeatMode(mode);
                 if (mode === 'infinite') {
-                  updateAndSave({ repeat: 0 }, 'infinite');
+                  updateDraft({ repeat: 0 }, 'infinite');
                 } else {
                   const newRepeat = (tag.repeat ?? 0) === 0 ? 1 : tag.repeat;
-                  updateAndSave({ repeat: newRepeat }, 'custom');
+                  updateDraft({ repeat: newRepeat }, 'custom');
                 }
               }}
-              className="flex-1"
+              className="min-w-0 flex-1"
               aria-label="Tag repeat mode"
             >
               <SegmentedControlIndicator />
@@ -276,37 +317,60 @@ export const AnimationTagPopover: React.FC<AnimationTagPopoverProps> = ({
             </SegmentedControl>
 
             {repeatMode === 'custom' && (
-              <Input
-                type="number"
+              <StudioNumberInput
+                value={Math.max(1, tag.repeat ?? 1)}
+                onValueChange={(val) => updateDraft({ repeat: Math.max(1, val) }, 'custom')}
                 min={1}
+                max={999}
                 aria-label="Repeat count"
-                value={isNaN(tag.repeat ?? 1) ? '' : tag.repeat}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value, 10);
-                  updateAndSave({ repeat: isNaN(val) ? 1 : Math.max(1, val) }, 'custom');
-                }}
-                className="h-7 w-12 px-1 text-center font-mono tabular-nums"
+                className="w-16 shrink-0"
+                inputClassName="text-center px-1"
               />
             )}
           </div>
-        </div>
+        </Field>
       </div>
 
-      {!isNew && onDelete && (
-        <div className="mt-1 flex items-center justify-between border-t border-border pt-2">
-          <button
+      <div className="mt-1 flex items-center justify-between gap-2 border-t border-border pt-2.5">
+        {!isNew && onDelete ? (
+          <Button
             type="button"
-            onClick={() => {
-              isDeletingRef.current = true;
-              onDelete(tag.id);
-            }}
-            className="flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-destructive transition-colors hover:bg-destructive/15"
+            variant="ghost"
+            size="xs"
+            onClick={handleDelete}
+            className="text-destructive hover:bg-destructive/15 hover:text-destructive"
           >
-            <Trash2 size={13} />
-            <span>Delete Tag</span>
-          </button>
+            <Trash2 size={12} />
+            <span>Delete</span>
+          </Button>
+        ) : (
+          <span />
+        )}
+
+        <div className="flex items-center gap-1.5">
+          <Button type="button" variant="ghost" size="sm" onClick={handleCancel}>
+            Cancel
+          </Button>
+          <Button type="submit" variant="primary" size="sm">
+            <Check size={12} />
+            <span>{isNew ? 'Create Tag' : 'Save Tag'}</span>
+          </Button>
         </div>
-      )}
-    </div>
+      </div>
+    </form>
   );
 };
+
+export interface AnimationTagDialogProps extends Omit<AnimationTagPopoverProps, 'showArrow'> {}
+
+export const AnimationTagDialog: React.FC<AnimationTagDialogProps> = (props) => (
+  <ModalShell
+    open={props.isOpen}
+    onClose={props.onClose}
+    title={props.isNew ? 'New Animation Tag' : 'Edit Animation Tag'}
+    subtitle="Define a named frame range and playback loop"
+    maxWidthClassName="max-w-sm"
+  >
+    <AnimationTagPopover {...props} showArrow={false} />
+  </ModalShell>
+);

@@ -11,6 +11,11 @@ import { ModalShell } from './ui/dialog';
 import { Input } from './ui/input';
 import { CustomSlider } from './ui/slider';
 import { StudioSelect } from './ui/select';
+import { Button, IconButton } from './ui/button';
+import { Field, FieldLabel } from './ui/field';
+import { Tabs, TabsList, TabsTab, TabsIndicator } from './ui/tabs';
+import { ColorSwatchField } from './ui/color-picker';
+import { toast } from './ui/toast';
 import {
   SegmentedControl,
   SegmentedControlIndicator,
@@ -43,9 +48,12 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
   isOpen,
   onClose,
   state,
-  initialFormat = 'gif',
+  initialFormat,
 }) => {
-  const [format, setFormat] = useState<ExportFormat>(initialFormat);
+  const resolvedDefaultFormat: ExportFormat =
+    initialFormat ?? (state.frames.length > 1 ? 'gif' : 'png');
+
+  const [format, setFormat] = useState<ExportFormat>(resolvedDefaultFormat);
   const [scale, setScale] = useState<number>(8);
   const [filename, setFilename] = useState<string>(state.title || 'pixel-art');
 
@@ -67,16 +75,22 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
   const [exportProgress, setExportProgress] = useState<number>(0);
 
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const wasOpenRef = useRef(false);
 
   useEffect(() => {
-    if (!isOpen) return;
-    setFormat(initialFormat);
+    const justOpened = isOpen && !wasOpenRef.current;
+    wasOpenRef.current = isOpen;
+    if (!justOpened) return;
+
+    const smartDefault: ExportFormat =
+      initialFormat ?? (state.frames.length > 1 ? 'gif' : 'png');
+    setFormat(smartDefault);
     setFilename(state.title || 'pixel-art');
     setPngFrameIndex(state.activeFrameIndex);
     setPreviewFrame(0);
     setIsExporting(false);
     setExportProgress(0);
-  }, [isOpen, initialFormat, state.title, state.activeFrameIndex]);
+  }, [isOpen, initialFormat, state.title, state.activeFrameIndex, state.frames.length]);
 
   const targetFrames = useMemo(() => {
     if (frameRange === 'current') {
@@ -117,7 +131,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const currentBg = bgType === 'transparent' ? null : bgColor;
+    const currentBg = format === 'aseprite' || bgType === 'transparent' ? null : bgColor;
 
     if (format === 'png') {
       const rendered = renderScaledFrameCanvas(state, pngFrameIndex, 1, currentBg);
@@ -149,8 +163,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(sheetCanvas, 0, 0);
     } else if (format === 'aseprite') {
-      const activeIdx = state.activeFrameIndex;
-      const rendered = renderScaledFrameCanvas(state, activeIdx, 1, currentBg);
+      const rendered = renderScaledFrameCanvas(state, state.activeFrameIndex, 1, null);
       canvas.width = rendered.width;
       canvas.height = rendered.height;
       ctx.imageSmoothingEnabled = false;
@@ -180,6 +193,9 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
   );
 
   const getDimensionsText = (): string => {
+    if (format === 'aseprite') {
+      return `${state.width} × ${state.height} px · 1× native`;
+    }
     const w = state.width * scale;
     const h = state.height * scale;
     if (format === 'spritesheet') {
@@ -204,7 +220,9 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
         const rendered = renderScaledFrameCanvas(state, pngFrameIndex, scale, currentBg);
         rendered.toBlob((blob) => {
           if (blob) {
-            downloadBlob(blob, `${cleanFilename}_frame${pngFrameIndex + 1}.png`);
+            const outName = `${cleanFilename}_frame${pngFrameIndex + 1}.png`;
+            downloadBlob(blob, outName);
+            toast.success('Exported PNG', { description: outName });
           }
           setIsExporting(false);
           onClose();
@@ -219,7 +237,9 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
         });
         sheetCanvas.toBlob((blob) => {
           if (blob) {
-            downloadBlob(blob, `${cleanFilename}_spritesheet.png`);
+            const outName = `${cleanFilename}_spritesheet.png`;
+            downloadBlob(blob, outName);
+            toast.success('Exported Sprite Sheet', { description: outName });
           }
           setIsExporting(false);
           onClose();
@@ -235,18 +255,25 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
           transparent: isTransparent,
           onProgress: (pct) => setExportProgress(pct),
         });
-        downloadBlob(blob, `${cleanFilename}.gif`);
+        const outName = `${cleanFilename}.gif`;
+        downloadBlob(blob, outName);
+        toast.success('Exported Animated GIF', { description: outName });
         setIsExporting(false);
         onClose();
       } else if (format === 'aseprite') {
         const aseBytes = encodeAseprite(state);
         const blob = new Blob([aseBytes.buffer], { type: 'image/x-aseprite' });
-        downloadBlob(blob, `${cleanFilename}.aseprite`);
+        const outName = `${cleanFilename}.aseprite`;
+        downloadBlob(blob, outName);
+        toast.success('Exported Aseprite File', { description: outName });
         setIsExporting(false);
         onClose();
       }
     } catch (err) {
       console.error('Export error:', err);
+      toast.error('Export failed', {
+        description: err instanceof Error ? err.message : 'Unable to encode file.',
+      });
       setIsExporting(false);
     }
   };
@@ -260,14 +287,15 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
   const formatOptions: {
     id: ExportFormat;
     label: string;
-    desc: string;
     icon: React.ReactNode;
   }[] = [
-    { id: 'gif', label: 'Animated GIF', desc: 'Looping animation', icon: <Film size={14} /> },
-    { id: 'png', label: 'Single Frame', desc: 'Crisp PNG image', icon: <ImageIcon size={14} /> },
-    { id: 'spritesheet', label: 'Sprite Sheet', desc: 'Frame grid strip', icon: <GridIcon size={14} /> },
-    { id: 'aseprite', label: 'Aseprite (.ase)', desc: 'Layers & slices', icon: <Layers size={14} /> },
+    { id: 'png', label: 'PNG Frame', icon: <ImageIcon size={13} /> },
+    { id: 'gif', label: 'Animated GIF', icon: <Film size={13} /> },
+    { id: 'spritesheet', label: 'Sprite Sheet', icon: <GridIcon size={13} /> },
+    { id: 'aseprite', label: 'Aseprite (.ase)', icon: <Layers size={13} /> },
   ];
+
+  const isRasterExport = format !== 'aseprite';
 
   return (
     <ModalShell
@@ -281,158 +309,144 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
       bodyClassName="flex flex-col gap-4"
       footer={
         <>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isExporting}
-            className="h-7 rounded-md px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
-          >
+          <Button type="button" variant="ghost" size="sm" onClick={onClose} disabled={isExporting}>
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="primary"
+            size="sm"
             onClick={handleExport}
-            disabled={isExporting}
-            className="flex h-7 items-center gap-1.5 rounded-md bg-primary px-3.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+            loading={isExporting}
           >
-            {isExporting ? (
-              <>
-                <Loader2 size={13} className="animate-spin" />
-                <span>Exporting...</span>
-              </>
-            ) : (
-              <>
-                <Download size={13} />
-                <span>Download {format.toUpperCase()}</span>
-              </>
-            )}
-          </button>
+            {!isExporting && <Download size={13} />}
+            <span>{isExporting ? 'Exporting...' : `Download ${format.toUpperCase()}`}</span>
+          </Button>
         </>
       }
     >
-      {/* Format Selector */}
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        {formatOptions.map((opt) => {
-          const active = format === opt.id;
-          return (
-            <button
-              key={opt.id}
-              type="button"
-              onClick={() => setFormat(opt.id)}
-              className={cn(
-                'flex flex-col items-start rounded-lg border p-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                active
-                  ? 'border-primary/70 bg-primary/10 text-foreground'
-                  : 'border-border bg-background/50 text-muted-foreground hover:border-border-strong hover:text-foreground'
-              )}
-            >
-              <div className="mb-1 flex items-center gap-1.5">
-                <span className={active ? 'text-primary' : 'text-muted-foreground'}>
-                  {opt.icon}
-                </span>
-                <span className="text-xs font-medium text-foreground">{opt.label}</span>
-              </div>
-              <span className="text-[11px] leading-tight text-muted-foreground">{opt.desc}</span>
-            </button>
-          );
-        })}
-      </div>
+      <Tabs
+        value={format}
+        onValueChange={(next) => next && setFormat(next as ExportFormat)}
+      >
+        <TabsList aria-label="Export format" className="grid w-full grid-cols-2 sm:grid-cols-4">
+          {formatOptions.map((opt) => (
+            <TabsTab key={opt.id} value={opt.id} className="h-9 gap-1.5">
+              {opt.icon}
+              <span>{opt.label}</span>
+            </TabsTab>
+          ))}
+          <TabsIndicator className="h-0.5" />
+        </TabsList>
+      </Tabs>
 
-      {/* Settings & Live Preview */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-12">
         {/* Settings Column */}
         <div className="flex flex-col gap-3 md:col-span-7">
-          {/* Scale */}
-          <div className="flex flex-col gap-2 rounded-lg border border-border bg-background/50 p-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-foreground">Export Scale</span>
-              <span className="font-mono text-[11px] font-medium text-primary tabular-nums">
-                {scale}× ({state.width * scale}×{state.height * scale} px)
-              </span>
-            </div>
-            <div className="grid grid-cols-6 gap-1">
-              {[1, 2, 4, 8, 16, 32].map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => setScale(s)}
-                  className={cn(
-                    'h-7 rounded-md border font-mono text-[11px] font-medium transition-colors tabular-nums',
-                    scale === s
-                      ? 'border-primary bg-primary text-primary-foreground'
-                      : 'border-border bg-card text-muted-foreground hover:border-border-strong hover:text-foreground'
-                  )}
-                >
-                  {s}×
-                </button>
-              ))}
-            </div>
-            <CustomSlider
-              min={1}
-              max={32}
-              step={1}
-              value={scale}
-              onValueChange={setScale}
-              aria-label="Export scale"
-            />
-          </div>
-
-          {/* Background */}
-          <div className="flex flex-col gap-2 rounded-lg border border-border bg-background/50 p-3">
-            <span className="text-xs font-medium text-foreground">Background</span>
-            <SegmentedControl<'transparent' | 'color'>
-              value={bgType}
-              onValueChange={(next) => next && setBgType(next as 'transparent' | 'color')}
-              aria-label="Export background"
-            >
-              <SegmentedControlIndicator />
-              <SegmentedControlItem value="transparent">
-                <span className="checkerboard-alpha h-3 w-3 rounded-xs border border-border-strong" />
-                <span>Transparent</span>
-              </SegmentedControlItem>
-              <SegmentedControlItem value="color">
-                <span
-                  className="h-3 w-3 rounded-xs border border-border-strong"
-                  style={{ backgroundColor: bgColor }}
-                />
-                <span>Solid Color</span>
-              </SegmentedControlItem>
-            </SegmentedControl>
-
-            {bgType === 'color' && (
-              <div className="flex items-center gap-1.5 pt-1">
-                {['#ffffff', '#000000', '#1e293b', '#10b981', '#3b82f6'].map((color) => (
-                  <button
-                    key={color}
-                    type="button"
-                    aria-label={`Background color ${color}`}
-                    onClick={() => setBgColor(color)}
-                    className={cn(
-                      'h-5 w-5 rounded-md border transition-transform active:scale-95',
-                      bgColor === color
-                        ? 'scale-105 border-foreground ring-2 ring-primary ring-offset-1 ring-offset-background'
-                        : 'border-border-strong'
-                    )}
-                    style={{ backgroundColor: color }}
-                  />
-                ))}
-                <label className="ml-auto flex cursor-pointer items-center gap-1.5 rounded-md border border-border bg-card px-2 py-0.5">
-                  <input
-                    type="color"
-                    value={bgColor}
-                    onChange={(e) => setBgColor(e.target.value)}
-                    aria-label="Custom background color"
-                    className="h-4 w-4 cursor-pointer border-0 bg-transparent p-0"
-                  />
-                  <span className="font-mono text-[11px] uppercase text-muted-foreground">
-                    {bgColor}
+          {isRasterExport ? (
+            <>
+              <div className="flex flex-col gap-2 rounded-lg border border-border bg-background/50 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-foreground">Export Scale</span>
+                  <span className="font-mono text-[11px] font-medium text-primary tabular-nums">
+                    {scale}× ({state.width * scale}×{state.height * scale} px)
                   </span>
-                </label>
+                </div>
+                <div className="grid grid-cols-6 gap-1">
+                  {[1, 2, 4, 8, 16, 32].map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setScale(s)}
+                      className={cn(
+                        'h-7 rounded-md border font-mono text-[11px] font-medium transition-colors tabular-nums cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                        scale === s
+                          ? 'border-primary bg-primary text-primary-foreground'
+                          : 'border-border bg-card text-muted-foreground hover:border-border-strong hover:text-foreground'
+                      )}
+                    >
+                      {s}×
+                    </button>
+                  ))}
+                </div>
+                <CustomSlider
+                  min={1}
+                  max={32}
+                  step={1}
+                  value={scale}
+                  onValueChange={setScale}
+                  aria-label="Export scale"
+                />
               </div>
-            )}
-          </div>
 
-          {/* GIF Options */}
+              <div className="flex flex-col gap-2 rounded-lg border border-border bg-background/50 p-3">
+                <span className="text-xs font-medium text-foreground">Background</span>
+                <SegmentedControl<'transparent' | 'color'>
+                  value={bgType}
+                  onValueChange={(next) => next && setBgType(next as 'transparent' | 'color')}
+                  aria-label="Export background"
+                >
+                  <SegmentedControlIndicator />
+                  <SegmentedControlItem value="transparent">
+                    <span className="checkerboard-alpha h-3 w-3 rounded-xs border border-border-strong" />
+                    <span>Transparent</span>
+                  </SegmentedControlItem>
+                  <SegmentedControlItem value="color">
+                    <span
+                      className="h-3 w-3 rounded-xs border border-border-strong"
+                      style={{ backgroundColor: bgColor }}
+                    />
+                    <span>Solid Color</span>
+                  </SegmentedControlItem>
+                </SegmentedControl>
+
+                {bgType === 'color' && (
+                  <div className="flex items-center justify-between gap-2 pt-1">
+                    <div className="flex items-center gap-1.5">
+                      {['#ffffff', '#000000', '#1e293b', '#10b981', '#3b82f6'].map((color) => (
+                        <button
+                          key={color}
+                          type="button"
+                          aria-label={`Background color ${color}`}
+                          onClick={() => setBgColor(color)}
+                          className={cn(
+                            'h-5 w-5 rounded-md border transition-transform active:scale-95 cursor-pointer',
+                            bgColor.toLowerCase() === color.toLowerCase()
+                              ? 'scale-105 border-foreground ring-2 ring-primary ring-offset-1 ring-offset-background'
+                              : 'border-border-strong'
+                          )}
+                          style={{ backgroundColor: color }}
+                        />
+                      ))}
+                    </div>
+                    <ColorSwatchField
+                      value={bgColor}
+                      onChange={setBgColor}
+                      label="Custom background color"
+                      className="h-7 px-2 text-[11px]"
+                    />
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-col gap-2 rounded-lg border border-border bg-background/50 p-3.5">
+              <div className="flex items-center gap-2 text-xs font-medium text-foreground">
+                <Layers size={14} className="text-primary" />
+                <span>Native Aseprite Source Archive</span>
+              </div>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                Exports lossless 1:1 pixel data preserving all layers, blend modes, opacity,
+                frames, animation tags, slices, and palette metadata.
+              </p>
+              <div className="mt-1 grid grid-cols-3 gap-2 border-t border-border pt-2.5 text-[11px] font-mono tabular-nums text-muted-foreground">
+                <div>{state.layers.length} layers</div>
+                <div>{state.frames.length} frames</div>
+                <div>{state.tags?.length ?? 0} tags</div>
+              </div>
+            </div>
+          )}
+
           {format === 'gif' && (
             <div className="flex flex-col gap-2 rounded-lg border border-border bg-background/50 p-3">
               <div className="flex items-center justify-between">
@@ -448,7 +462,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
                     type="button"
                     onClick={() => setFps(f)}
                     className={cn(
-                      'h-7 rounded-md border font-mono text-[11px] font-medium transition-colors tabular-nums',
+                      'h-7 rounded-md border font-mono text-[11px] font-medium transition-colors tabular-nums cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                       fps === f
                         ? 'border-primary bg-primary text-primary-foreground'
                         : 'border-border bg-card text-muted-foreground hover:border-border-strong hover:text-foreground'
@@ -468,7 +482,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
               />
 
               <div className="flex flex-col gap-1.5 border-t border-border pt-2">
-                <span className="text-[11px] font-medium text-muted-foreground">Frame Range</span>
+                <FieldLabel>Frame Range</FieldLabel>
                 <SegmentedControl<'all' | 'current'>
                   value={frameRange === 'current' ? 'current' : 'all'}
                   onValueChange={(next) => next && setFrameRange(next as 'all' | 'current')}
@@ -486,10 +500,9 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
             </div>
           )}
 
-          {/* PNG Options */}
           {format === 'png' && (
             <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-background/50 p-3">
-              <span className="text-xs font-medium text-foreground">Frame Selection</span>
+              <FieldLabel>Frame Selection</FieldLabel>
               <StudioSelect
                 value={String(pngFrameIndex)}
                 options={frameSelectOptions}
@@ -499,7 +512,6 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
             </div>
           )}
 
-          {/* Sprite Sheet Options */}
           {format === 'spritesheet' && (
             <div className="flex flex-col gap-2 rounded-lg border border-border bg-background/50 p-3">
               <div className="flex items-center justify-between">
@@ -515,7 +527,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
                     type="button"
                     onClick={() => setColumns(c)}
                     className={cn(
-                      'h-7 rounded-md border font-mono text-[11px] font-medium transition-colors tabular-nums',
+                      'h-7 rounded-md border font-mono text-[11px] font-medium transition-colors tabular-nums cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                       columns === c
                         ? 'border-primary bg-primary text-primary-foreground'
                         : 'border-border bg-card text-muted-foreground hover:border-border-strong hover:text-foreground'
@@ -528,15 +540,9 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
             </div>
           )}
 
-          {/* File Name */}
-          <div className="flex flex-col gap-1">
-            <label
-              htmlFor="export-filename-input"
-              className="text-[11px] font-medium text-muted-foreground"
-            >
-              File Name
-            </label>
-            <div className="flex h-8 items-center rounded-md border border-border bg-background px-2.5 focus-within:border-primary focus-within:ring-2 focus-within:ring-ring/40">
+          <Field>
+            <FieldLabel htmlFor="export-filename-input">File Name</FieldLabel>
+            <div className="flex h-8 items-center rounded-md border border-input bg-background px-2.5 focus-within:border-primary focus-within:ring-2 focus-within:ring-ring/40">
               <Input
                 id="export-filename-input"
                 type="text"
@@ -549,14 +555,14 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
                 {getExtension()}
               </span>
             </div>
-          </div>
+          </Field>
         </div>
 
         {/* Live Preview Column */}
         <div className="relative flex min-h-[220px] flex-col rounded-lg border border-border bg-background/50 p-3 md:col-span-5">
-          <div className="mb-2 flex items-center justify-between">
+          <div className="mb-2 flex items-center justify-between gap-2">
             <span className="text-[11px] font-medium text-muted-foreground">Live Preview</span>
-            <span className="font-mono text-[11px] text-primary tabular-nums">
+            <span className="truncate font-mono text-[11px] text-primary tabular-nums">
               {getDimensionsText()}
             </span>
           </div>
@@ -591,34 +597,37 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
           {format === 'gif' && targetFrames.length > 1 && (
             <div className="mt-2 flex items-center justify-between border-t border-border pt-2">
               <div className="flex items-center gap-1">
-                <button
+                <IconButton
                   type="button"
+                  variant="ghost"
+                  size="xs"
                   onClick={() =>
                     setPreviewFrame(
                       (prev) => (prev - 1 + targetFrames.length) % targetFrames.length
                     )
                   }
                   aria-label="Previous frame"
-                  className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 >
                   <SkipBack size={13} />
-                </button>
-                <button
+                </IconButton>
+                <IconButton
                   type="button"
+                  variant="primary"
+                  size="xs"
                   onClick={() => setIsPlaying(!isPlaying)}
                   aria-label={isPlaying ? 'Pause preview' : 'Play preview'}
-                  className="flex h-6 w-6 items-center justify-center rounded-sm bg-primary text-primary-foreground transition-colors hover:bg-primary/90"
                 >
                   {isPlaying ? <Pause size={13} /> : <Play size={13} />}
-                </button>
-                <button
+                </IconButton>
+                <IconButton
                   type="button"
+                  variant="ghost"
+                  size="xs"
                   onClick={() => setPreviewFrame((prev) => (prev + 1) % targetFrames.length)}
                   aria-label="Next frame"
-                  className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 >
                   <SkipForward size={13} />
-                </button>
+                </IconButton>
               </div>
               <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
                 {previewFrame + 1} / {targetFrames.length}

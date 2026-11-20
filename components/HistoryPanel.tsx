@@ -22,16 +22,21 @@ import {
   Undo,
   Redo,
   Search,
-  X,
 } from './Icons';
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
-import { Input } from './ui/input';
+import { Input, InputGroup, InputClear } from './ui/input';
+import { IconButton } from './ui/button';
+import { Toggle } from './ui/toggle';
+import { Toolbar } from './ui/toolbar';
+import { ScrollArea } from './ui/scroll-area';
 import { HistoryEntry, ToolType } from '../types';
+import { cn } from '../lib/utils';
 
 interface HistoryPanelProps {
   history: HistoryEntry[];
   historyIndex: number;
   onJumpToHistory: (index: number) => void;
+  density?: 'compact' | 'touch';
   className?: string;
 }
 
@@ -87,6 +92,7 @@ interface HistoryRowProps {
   index: number;
   isActive: boolean;
   isFuture: boolean;
+  isTouch: boolean;
   activeItemRef: React.RefObject<HTMLButtonElement | null> | null;
   onJumpToHistory: (index: number) => void;
 }
@@ -97,6 +103,7 @@ const HistoryRow: React.FC<HistoryRowProps> = ({
   index,
   isActive,
   isFuture,
+  isTouch,
   activeItemRef,
   onJumpToHistory,
 }) => {
@@ -105,13 +112,15 @@ const HistoryRow: React.FC<HistoryRowProps> = ({
       ref={activeItemRef}
       type="button"
       onClick={() => onJumpToHistory(index)}
-      className={`group relative flex h-7 w-full items-center gap-2 rounded-sm px-2 text-left transition-colors ${
+      className={cn(
+        'group relative flex w-full items-center gap-2 rounded-md px-2 text-left transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        isTouch ? 'min-h-11 px-3' : 'h-7',
         isActive
           ? 'border border-primary/40 bg-primary/15 text-foreground'
           : isFuture
             ? 'border border-transparent text-muted-foreground opacity-55 hover:bg-accent/50 hover:opacity-90'
             : 'border border-transparent text-foreground/85 hover:bg-accent/60'
-      }`}
+      )}
       aria-current={isActive ? 'step' : undefined}
     >
       <div className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
@@ -119,9 +128,11 @@ const HistoryRow: React.FC<HistoryRowProps> = ({
       </div>
 
       <span
-        className={`min-w-0 flex-1 truncate text-[11px] ${
+        className={cn(
+          'min-w-0 flex-1 truncate',
+          isTouch ? 'text-xs' : 'text-[11px]',
           isActive ? 'font-semibold text-foreground' : 'font-normal'
-        }`}
+        )}
       >
         {action}
       </span>
@@ -137,8 +148,10 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
   history,
   historyIndex,
   onJumpToHistory,
+  density = 'compact',
   className,
 }) => {
+  const isTouch = density === 'touch';
   const activeItemRef = useRef<HTMLButtonElement>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
@@ -161,122 +174,123 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
     });
 
   return (
-    <div className={`flex flex-col bg-card select-none ${className ?? ''}`}>
-      <div className="flex h-8 shrink-0 items-center justify-between border-b border-border bg-background/50 px-2.5">
+    <div className={cn('flex flex-col bg-card select-none', className)}>
+      <div
+        className={cn(
+          'flex shrink-0 items-center justify-between border-b border-border bg-background/50 px-2.5',
+          isTouch ? 'h-12' : 'h-8'
+        )}
+      >
         <span className="font-mono text-[11px] font-medium text-muted-foreground tabular-nums">
           {history.length > 0 ? `Step ${historyIndex + 1}/${history.length}` : '0 steps'}
         </span>
 
-        <div className="flex items-center gap-0.5">
+        <Toolbar aria-label="History controls" className="gap-0.5">
           <Tooltip>
             <TooltipTrigger
               render={
-                <button
-                  type="button"
-                  aria-label="Filter History"
-                  onClick={() => {
-                    setShowSearch((prev) => {
-                      if (prev) setSearchQuery('');
-                      return !prev;
-                    });
+                <Toggle
+                  pressed={showSearch}
+                  onPressedChange={(next) => {
+                    if (!next) setSearchQuery('');
+                    setShowSearch(next);
                   }}
-                  className={`flex h-6 w-6 items-center justify-center rounded-sm transition-colors ${
-                    showSearch
-                      ? 'bg-primary/15 text-primary'
-                      : 'text-muted-foreground hover:bg-accent hover:text-foreground'
-                  }`}
-                >
-                  <Search size={12} />
-                </button>
+                  variant="tint"
+                  size={isTouch ? 'touch' : 'icon-sm'}
+                  aria-label="Filter History"
+                  className={cn(!isTouch && 'h-6 w-6')}
+                />
               }
-            />
+            >
+              <Search size={isTouch ? 15 : 12} />
+            </TooltipTrigger>
             <TooltipContent side="top">Filter History</TooltipContent>
           </Tooltip>
 
           <Tooltip>
             <TooltipTrigger
               render={
-                <button
+                <IconButton
                   type="button"
+                  variant="ghost"
+                  size={isTouch ? 'touch' : 'xs'}
                   aria-label="Undo"
                   onClick={() => historyIndex > 0 && onJumpToHistory(historyIndex - 1)}
                   disabled={historyIndex <= 0}
-                  className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
-                >
-                  <Undo size={12} />
-                </button>
+                />
               }
-            />
+            >
+              <Undo size={isTouch ? 15 : 12} />
+            </TooltipTrigger>
             <TooltipContent side="top">Undo</TooltipContent>
           </Tooltip>
 
           <Tooltip>
             <TooltipTrigger
               render={
-                <button
+                <IconButton
                   type="button"
+                  variant="ghost"
+                  size={isTouch ? 'touch' : 'xs'}
                   aria-label="Redo"
                   onClick={() => historyIndex < history.length - 1 && onJumpToHistory(historyIndex + 1)}
                   disabled={historyIndex >= history.length - 1}
-                  className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
-                >
-                  <Redo size={12} />
-                </button>
+                />
               }
-            />
+            >
+              <Redo size={isTouch ? 15 : 12} />
+            </TooltipTrigger>
             <TooltipContent side="top">Redo</TooltipContent>
           </Tooltip>
-        </div>
+        </Toolbar>
       </div>
 
       {showSearch && (
-        <div className="flex items-center gap-1.5 border-b border-border bg-background/40 px-2 py-1.5">
-          <Search size={12} className="shrink-0 text-muted-foreground" />
-          <Input
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Filter history..."
-            autoFocus
-            className="h-6 flex-1 px-2 text-[11px]"
-          />
-          {searchQuery && (
-            <button
-              type="button"
-              onClick={() => setSearchQuery('')}
-              aria-label="Clear filter"
-              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
-            >
-              <X size={12} />
-            </button>
-          )}
+        <div className="border-b border-border bg-background/40 px-2 py-1.5">
+          <InputGroup className={cn(isTouch ? 'h-9' : 'h-7')}>
+            <Search size={12} className="shrink-0 text-muted-foreground" />
+            <Input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Filter history..."
+              autoFocus
+              className="h-full border-0 bg-transparent px-0 text-[11px] focus-visible:ring-0"
+            />
+            {searchQuery && <InputClear onClick={() => setSearchQuery('')} />}
+          </InputGroup>
         </div>
       )}
 
-      <div className="flex-1 space-y-0.5 overflow-y-auto p-1.5">
-        {history.length === 0 ? (
-          <div className="p-4 text-center text-[11px] text-muted-foreground">No history yet.</div>
-        ) : filteredHistory.length === 0 ? (
-          <div className="p-4 text-center text-[11px] text-muted-foreground">No matching actions.</div>
-        ) : (
-          filteredHistory.map(({ entry, index }) => {
-            const isActive = index === historyIndex;
-            const isFuture = index > historyIndex;
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="space-y-0.5 p-1.5">
+          {history.length === 0 ? (
+            <div className="p-4 text-center text-[11px] text-muted-foreground">No history yet.</div>
+          ) : filteredHistory.length === 0 ? (
+            <div className="p-4 text-center text-[11px] text-muted-foreground">
+              No matching actions.
+            </div>
+          ) : (
+            filteredHistory.map(({ entry, index }) => {
+              const isActive = index === historyIndex;
+              const isFuture = index > historyIndex;
 
-            return (
-              <HistoryRow
-                key={`history-step-${index}`}
-                action={entry.action}
-                tool={entry.tool}
-                index={index}
-                isActive={isActive}
-                isFuture={isFuture}
-                activeItemRef={isActive ? activeItemRef : null}
-                onJumpToHistory={onJumpToHistory}
-              />
-            );
-          })
-        )}
-      </div>
+              return (
+                <HistoryRow
+                  key={`history-step-${index}`}
+                  action={entry.action}
+                  tool={entry.tool}
+                  index={index}
+                  isActive={isActive}
+                  isFuture={isFuture}
+                  isTouch={isTouch}
+                  activeItemRef={isActive ? activeItemRef : null}
+                  onJumpToHistory={onJumpToHistory}
+                />
+              );
+            })
+          )}
+        </div>
+      </ScrollArea>
     </div>
   );
 };

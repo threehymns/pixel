@@ -95,3 +95,36 @@ export const SELECTION_TOOLS: ToolType[] = [
   'poly-lasso-select', 
   'magic-wand'
 ];
+
+export const MIN_BRUSH_SIZE = 1;
+export const MAX_BRUSH_SIZE = 64;
+export const MIN_CANVAS_DIM = 1;
+export const MAX_CANVAS_DIM = 2048;
+export const MIN_ZOOM = 0.1;
+export const MAX_ZOOM = 64;
+
+export interface EntityColorTag {
+  id: string;
+  label: string;
+  hex: string;
+  dotClass: string;
+  borderClass: string;
+}
+
+export const ENTITY_COLOR_TAGS: EntityColorTag[] = [
+  { id: 'red', label: 'Red', hex: '#ef4444', dotClass: 'bg-red-500', borderClass: 'border-red-500' },
+  { id: 'orange', label: 'Orange', hex: '#f97316', dotClass: 'bg-orange-500', borderClass: 'border-orange-500' },
+  { id: 'yellow', label: 'Yellow', hex: '#eab308', dotClass: 'bg-yellow-500', borderClass: 'border-yellow-500' },
+  { id: 'green', label: 'Green', hex: '#22c55e', dotClass: 'bg-green-500', borderClass: 'border-green-500' },
+  { id: 'blue', label: 'Blue', hex: '#3b82f6', dotClass: 'bg-blue-500', borderClass: 'border-blue-500' },
+  { id: 'purple', label: 'Purple', hex: '#a855f7', dotClass: 'bg-purple-500', borderClass: 'border-purple-500' },
+  { id: 'pink', label: 'Pink', hex: '#ec4899', dotClass: 'bg-pink-500', borderClass: 'border-pink-500' },
+  { id: 'gray', label: 'Gray', hex: '#71717a', dotClass: 'bg-zinc-500', borderClass: 'border-zinc-500' },
+];
+
+export function resolveEntityColorHex(colorTag?: string): string | undefined {
+  if (!colorTag) return undefined;
+  const preset = ENTITY_COLOR_TAGS.find((c) => c.id === colorTag || c.hex.toLowerCase() === colorTag.toLowerCase());
+  return preset ? preset.hex : colorTag;
+}
+

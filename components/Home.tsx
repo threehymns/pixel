@@ -1,10 +1,15 @@
 import React from 'react';
-import { Plus, FolderOpen, ImageIcon, Trash2 } from './Icons';
+import { Plus, FolderOpen, ImageIcon, Trash2, Upload } from './Icons';
 import { RecentProject } from '../types';
+import { Button } from './ui/button';
+import { FileInput, FileInputDropzone } from './ui/file-input';
+import { ScrollArea } from './ui/scroll-area';
+import { studioConfirm } from './ui/alert-dialog';
 
 interface HomeProps {
   onCreateProject: () => void;
   onImportProject: () => void;
+  onImportFile?: (file: File) => void;
   onQuickCreate?: (width: number, height: number) => void;
   recentProjects?: RecentProject[];
   onOpenRecent?: (recent: RecentProject) => void;
@@ -20,19 +25,30 @@ const QUICK_PRESETS = [
 export const Home: React.FC<HomeProps> = ({
   onCreateProject,
   onImportProject,
+  onImportFile,
   onQuickCreate,
   recentProjects = [],
   onOpenRecent,
   onClearRecent,
 }) => {
+  const handleClearRecent = async () => {
+    if (!onClearRecent) return;
+    const confirmed = await studioConfirm({
+      title: 'Clear recent files?',
+      description: 'This removes your saved recent project shortcuts from this browser.',
+      confirmLabel: 'Clear Recent',
+      destructive: true,
+    });
+    if (confirmed) onClearRecent();
+  };
+
   return (
     <div className="flex h-full flex-1 items-center justify-center overflow-y-auto bg-canvas p-4 text-foreground select-none md:p-8">
       <div className="flex w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-border-strong bg-card shadow-2xl md:h-[540px] md:flex-row">
-        {/* Left Column: Actions & Quick Start */}
         <div className="flex w-full shrink-0 flex-col justify-between border-b border-border bg-muted/25 p-6 md:w-72 md:border-b-0 md:border-r">
           <div>
             <div className="mb-6 flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-xs">
                 <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5" aria-hidden="true">
                   <path d="M4 4h4v4H4zm4 4h4v4H8zm4 4h4v4h-4zm4 4h4v4h-4z" />
                 </svg>
@@ -46,42 +62,46 @@ export const Home: React.FC<HomeProps> = ({
             </div>
 
             <div className="flex flex-col gap-2">
-              <button
-                type="button"
+              <Button
+                variant="primary"
+                size="lg"
                 onClick={onCreateProject}
-                className="flex h-9 items-center gap-2.5 rounded-md bg-primary px-3.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="w-full justify-start"
               >
                 <Plus size={15} />
                 <span>New Canvas...</span>
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                variant="outline"
+                size="lg"
                 onClick={onImportProject}
-                className="flex h-9 items-center gap-2.5 rounded-md border border-border bg-background/60 px-3.5 text-xs font-medium text-foreground transition-colors hover:border-border-strong hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="w-full justify-start"
               >
                 <FolderOpen size={15} className="text-muted-foreground" />
                 <span>Open File...</span>
-              </button>
+              </Button>
             </div>
 
             {onQuickCreate && (
               <div className="mt-6">
-                <div className="mb-2 text-[11px] font-medium text-muted-foreground">
+                <div className="mb-2 text-xs font-medium text-muted-foreground">
                   Quick start
                 </div>
                 <div className="grid grid-cols-3 gap-1.5">
                   {QUICK_PRESETS.map((preset) => (
-                    <button
+                    <Button
                       key={preset.label}
-                      type="button"
+                      variant="outline"
                       onClick={() => onQuickCreate(preset.w, preset.h)}
-                      className="flex flex-col items-center rounded-md border border-border bg-background/50 px-2 py-2 text-center transition-colors hover:border-primary/50 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      className="h-auto flex-col gap-0.5 px-2 py-2.5"
                     >
                       <span className="font-mono text-xs font-medium text-foreground tabular-nums">
                         {preset.label}
                       </span>
-                      <span className="text-[11px] text-muted-foreground">{preset.hint}</span>
-                    </button>
+                      <span className="text-[11px] font-normal text-muted-foreground">
+                        {preset.hint}
+                      </span>
+                    </Button>
                   ))}
                 </div>
               </div>
@@ -91,71 +111,84 @@ export const Home: React.FC<HomeProps> = ({
           <div className="hidden pt-4 text-[11px] text-muted-foreground md:block">
             Supports <span className="font-mono text-foreground/80">.aseprite</span>,{' '}
             <span className="font-mono text-foreground/80">.png</span>,{' '}
-            <span className="font-mono text-foreground/80">.gif</span>
+            <span className="font-mono text-foreground/80">.json</span>
           </div>
         </div>
 
-        {/* Right Column: Recent Files */}
         <div className="flex min-h-0 flex-1 flex-col bg-card p-6">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-xs font-semibold text-foreground">Recent Files</h2>
             {recentProjects.length > 0 && onClearRecent && (
-              <button
-                type="button"
-                onClick={onClearRecent}
-                className="flex items-center gap-1 rounded-sm px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-destructive/15 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={handleClearRecent}
+                className="text-muted-foreground hover:bg-destructive/15 hover:text-destructive"
               >
                 <Trash2 size={12} />
                 <span>Clear</span>
-              </button>
+              </Button>
             )}
           </div>
 
           {recentProjects.length === 0 ? (
-            <div className="flex flex-1 flex-col items-center justify-center rounded-lg border border-dashed border-border bg-background/40 p-6 text-center">
-              <ImageIcon size={28} className="mb-2.5 text-muted-foreground/50" />
-              <p className="text-sm font-medium text-foreground">No recent projects</p>
-              <p className="mt-1 max-w-xs text-xs text-muted-foreground">
-                Create a new canvas or open an existing Aseprite or image file to begin.
-              </p>
-            </div>
+            <FileInput
+              accept=".ase,.aseprite,.json,.pxl,image/png,image/gif,image/webp,image/jpeg"
+              onValueChange={(files) => {
+                if (files[0]) {
+                  if (onImportFile) onImportFile(files[0]);
+                  else onImportProject();
+                }
+              }}
+              className="flex flex-1 flex-col"
+            >
+              <FileInputDropzone className="flex-1">
+                <Upload size={24} className="text-muted-foreground/60" />
+                <p className="text-sm font-medium text-foreground">No recent projects</p>
+                <p className="max-w-xs text-xs text-muted-foreground">
+                  Drop an Aseprite, JSON, or image file here, or click to browse.
+                </p>
+              </FileInputDropzone>
+            </FileInput>
           ) : (
-            <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
-              {recentProjects.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => onOpenRecent?.(p)}
-                  className="group flex w-full items-center justify-between gap-3 rounded-lg border border-border bg-background/40 px-3 py-2.5 text-left transition-colors hover:border-border-strong hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <div className="flex min-w-0 items-center gap-3">
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-muted text-muted-foreground transition-colors group-hover:text-foreground">
-                      <ImageIcon size={15} />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="truncate text-xs font-medium text-foreground">
-                        {p.title}
+            <ScrollArea className="min-h-0 flex-1 pr-1">
+              <div className="space-y-1.5">
+                {recentProjects.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => onOpenRecent?.(p)}
+                    className="group flex w-full items-center justify-between gap-3 rounded-lg border border-border bg-background/40 px-3 py-2.5 text-left transition-colors hover:border-border-strong hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
+                  >
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-muted text-muted-foreground transition-colors group-hover:text-foreground">
+                        <ImageIcon size={15} />
                       </div>
-                      <div className="mt-0.5 flex items-center gap-2 font-mono text-[11px] text-muted-foreground tabular-nums">
-                        <span>
-                          {p.width}×{p.height}
-                        </span>
-                        <span>·</span>
-                        <span>
-                          {new Date(p.timestamp).toLocaleDateString(undefined, {
-                            month: 'short',
-                            day: 'numeric',
-                          })}
-                        </span>
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-medium text-foreground">
+                          {p.title}
+                        </div>
+                        <div className="mt-0.5 flex items-center gap-2 font-mono text-[11px] text-muted-foreground tabular-nums">
+                          <span>
+                            {p.width}×{p.height}
+                          </span>
+                          <span>·</span>
+                          <span>
+                            {new Date(p.timestamp).toLocaleDateString(undefined, {
+                              month: 'short',
+                              day: 'numeric',
+                            })}
+                          </span>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  <span className="shrink-0 text-[11px] font-medium text-muted-foreground transition-colors group-hover:text-primary">
-                    Open
-                  </span>
-                </button>
-              ))}
-            </div>
+                    <span className="shrink-0 text-[11px] font-medium text-muted-foreground transition-colors group-hover:text-primary">
+                      Open
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </ScrollArea>
           )}
         </div>
       </div>

@@ -1,6 +1,7 @@
 
 import { useLayoutEffect, useRef } from 'react';
 import { Command, ProjectState, ToolType, ColorMode, FrameTag, Layer } from '../types';
+import { MIN_BRUSH_SIZE, MAX_BRUSH_SIZE, MIN_ZOOM, MAX_ZOOM } from '../constants';
 
 interface UseAppCommandsProps {
     state: ProjectState;
@@ -52,7 +53,7 @@ interface UseAppCommandsProps {
         toggleRightPanel: () => void;
     };
     openCmdPalette: () => void;
-    onOpenProject: () => void; // Trigger for the hidden file input
+    onOpenProject: () => void;
 }
 
 export function useAppCommands({ 
@@ -122,7 +123,7 @@ export function useAppCommands({
             perform: () => latestRef.current.projectActions.closeProject(latestRef.current.state.id)
         },
         { 
-            id: 'file.export', label: 'Export Frame (PNG)', category: 'File', hotkey: 'Shift+E', 
+            id: 'file.export', label: 'Export Frame (PNG)...', category: 'File', hotkey: 'Shift+E', 
             perform: () => latestRef.current.projectActions.downloadImage()
         },
         { 
@@ -154,7 +155,7 @@ export function useAppCommands({
             perform: () => latestRef.current.uiActions.togglePalette()
         },
         {
-            id: 'view.layersHistory', label: 'Toggle Layers/History', category: 'View',
+            id: 'view.layersHistory', label: 'Toggle Layers & History', category: 'View',
             perform: () => latestRef.current.uiActions.toggleRightPanel()
         },
         {
@@ -271,13 +272,9 @@ export function useAppCommands({
             id: 'layer.centerContent', label: 'Center Content', category: 'Layer',
             perform: () => latestRef.current.projectActions.centerContent()
         },
-        { 
-            id: 'layer.generateOutline', label: 'Outline...', category: 'Layer', hotkey: 'Shift+O',
-            perform: () => {
-                const pa = latestRef.current.projectActions;
-                if (pa.openOutlineDialog) pa.openOutlineDialog();
-                else pa.generateOutline();
-            }
+        {
+            id: 'layer.properties', label: 'Layer Properties...', category: 'Layer',
+            perform: () => latestRef.current.projectActions.openLayerPropertiesDialog?.()
         },
         { 
             id: 'frame.new', label: 'New Frame', category: 'Sprite', hotkey: 'Alt+N', keys: ['Alt+n'],
@@ -302,12 +299,12 @@ export function useAppCommands({
         { 
             id: 'sprite.modeIndexed', label: 'Color Mode: Indexed', category: 'Sprite', 
             perform: () => latestRef.current.projectActions.setColorMode('indexed'),
-            disabled: colorMode === 'indexed'
+            checked: colorMode === 'indexed'
         },
         { 
             id: 'sprite.modeRGBA', label: 'Color Mode: RGBA', category: 'Sprite', 
             perform: () => latestRef.current.projectActions.setColorMode('rgba'),
-            disabled: colorMode === 'rgba'
+            checked: colorMode === 'rgba'
         },
         {
             id: 'sprite.resize', label: 'Canvas Size...', category: 'Sprite', hotkey: 'Alt+C', keys: ['Alt+c'],
@@ -326,24 +323,20 @@ export function useAppCommands({
             perform: () => latestRef.current.projectActions.openTagPropertiesDialog?.()
         },
         {
-            id: 'layer.properties', label: 'Layer Properties...', category: 'Layer',
-            perform: () => latestRef.current.projectActions.openLayerPropertiesDialog?.()
-        },
-        {
             id: 'sprite.crop', label: 'Crop to Selection', category: 'Sprite',
             perform: () => latestRef.current.projectActions.cropCanvas(),
             disabled: !hasSelection
         },
         { 
-          id: 'tool.pencil', label: 'Pencil Tool', category: 'Edit', hotkey: 'B', keys: ['b'],
+          id: 'tool.pencil', label: 'Pencil Tool', category: 'Tools', hotkey: 'B', keys: ['b'],
           perform: () => latestRef.current.updateState({ ...latestRef.current.state, tool: 'pencil' })
         },
         { 
-          id: 'tool.line', label: 'Line Tool', category: 'Edit', hotkey: 'L', keys: ['l'],
+          id: 'tool.line', label: 'Line Tool', category: 'Tools', hotkey: 'L', keys: ['l'],
           perform: () => latestRef.current.updateState({ ...latestRef.current.state, tool: 'line' })
         },
         { 
-          id: 'tool.rect_toggle', label: 'Rectangle Tool', category: 'Edit', hotkey: 'U', keys: ['u'],
+          id: 'tool.rect_toggle', label: 'Rectangle Tool', category: 'Tools', hotkey: 'U', keys: ['u'],
           perform: () => {
             const s = latestRef.current.state;
             if (s.tool === 'rect') {
@@ -358,7 +351,7 @@ export function useAppCommands({
           }
         },
         { 
-          id: 'tool.ellipse_toggle', label: 'Ellipse Tool', category: 'Edit', hotkey: 'Shift+U', keys: ['Shift+U'],
+          id: 'tool.ellipse_toggle', label: 'Ellipse Tool', category: 'Tools', hotkey: 'Shift+U', keys: ['Shift+U'],
           perform: () => {
             const s = latestRef.current.state;
             if (s.tool === 'ellipse') {
@@ -373,35 +366,35 @@ export function useAppCommands({
           }
         },
         { 
-          id: 'tool.smudge', label: 'Smudge/Push Tool', category: 'Edit', hotkey: 'S', keys: ['s'],
+          id: 'tool.smudge', label: 'Smudge / Push Tool', category: 'Tools', hotkey: 'S', keys: ['s'],
           perform: () => latestRef.current.updateState({ ...latestRef.current.state, tool: 'smudge' })
         },
         { 
-          id: 'tool.blur', label: 'Blur Tool', category: 'Edit', hotkey: 'R', keys: ['r'],
+          id: 'tool.blur', label: 'Blur Tool', category: 'Tools', hotkey: 'R', keys: ['r'],
           perform: () => latestRef.current.updateState({ ...latestRef.current.state, tool: 'blur' })
         },
         { 
-          id: 'tool.sharpen', label: 'Sharpen Tool', category: 'Edit', hotkey: 'Shift+R', keys: ['Shift+R'],
+          id: 'tool.sharpen', label: 'Sharpen Tool', category: 'Tools', hotkey: 'Shift+R', keys: ['Shift+R'],
           perform: () => latestRef.current.updateState({ ...latestRef.current.state, tool: 'sharpen' })
         },
         { 
-          id: 'tool.eraser', label: 'Eraser Tool', category: 'Edit', hotkey: 'E', keys: ['e'],
+          id: 'tool.eraser', label: 'Eraser Tool', category: 'Tools', hotkey: 'E', keys: ['e'],
           perform: () => latestRef.current.updateState({ ...latestRef.current.state, tool: 'eraser' })
         },
         { 
-          id: 'tool.fill', label: 'Fill Bucket', category: 'Edit', hotkey: 'G', keys: ['g'],
+          id: 'tool.fill', label: 'Fill Bucket', category: 'Tools', hotkey: 'G', keys: ['g'],
           perform: () => latestRef.current.updateState({ ...latestRef.current.state, tool: 'bucket' })
         },
         {
-          id: 'tool.color_replace', label: 'Color Replace Tool', category: 'Edit',
+          id: 'tool.color_replace', label: 'Color Replace Tool', category: 'Tools',
           perform: () => latestRef.current.updateState({ ...latestRef.current.state, tool: 'color-replace' })
         },
         { 
-          id: 'tool.picker', label: 'Color Picker', category: 'Edit', hotkey: 'I', keys: ['i'],
+          id: 'tool.picker', label: 'Color Picker', category: 'Tools', hotkey: 'I', keys: ['i'],
           perform: () => latestRef.current.updateState({ ...latestRef.current.state, tool: 'eyedropper' })
         },
         { 
-          id: 'tool.move', label: 'Move Tool', category: 'Edit', hotkey: 'V', keys: ['v'],
+          id: 'tool.move', label: 'Move Tool', category: 'Tools', hotkey: 'V', keys: ['v'],
           perform: () => latestRef.current.updateState({ ...latestRef.current.state, tool: 'move' })
         },
         { 
@@ -417,31 +410,31 @@ export function useAppCommands({
           perform: () => latestRef.current.updateState({ ...latestRef.current.state, tool: 'magic-wand' })
         },
         {
-          id: 'tool.brushSize.increase', label: 'Increase Brush Size', category: 'Edit', hotkey: ']', keys: [']'],
+          id: 'tool.brushSize.increase', label: 'Increase Brush Size', category: 'Tools', hotkey: ']', keys: [']'],
           perform: () => {
             const s = latestRef.current.state;
-            latestRef.current.updateState({ ...s, brushSize: Math.min(64, s.brushSize + 1) });
+            latestRef.current.updateState({ ...s, brushSize: Math.min(MAX_BRUSH_SIZE, s.brushSize + 1) });
           }
         },
         {
-          id: 'tool.brushSize.decrease', label: 'Decrease Brush Size', category: 'Edit', hotkey: '[', keys: ['['],
+          id: 'tool.brushSize.decrease', label: 'Decrease Brush Size', category: 'Tools', hotkey: '[', keys: ['['],
           perform: () => {
             const s = latestRef.current.state;
-            latestRef.current.updateState({ ...s, brushSize: Math.max(1, s.brushSize - 1) });
+            latestRef.current.updateState({ ...s, brushSize: Math.max(MIN_BRUSH_SIZE, s.brushSize - 1) });
           }
         },
         {
           id: 'view.zoomIn', label: 'Zoom In', category: 'View', hotkey: 'Ctrl++', keys: ['Control+=', 'Meta+='],
           perform: () => {
             const s = latestRef.current.state;
-            latestRef.current.updateState({ ...s, zoom: Math.min(128, s.zoom * 2) });
+            latestRef.current.updateState({ ...s, zoom: Math.min(MAX_ZOOM, s.zoom * 2) });
           }
         },
         {
           id: 'view.zoomOut', label: 'Zoom Out', category: 'View', hotkey: 'Ctrl+-', keys: ['Control+-', 'Meta+-'],
           perform: () => {
             const s = latestRef.current.state;
-            latestRef.current.updateState({ ...s, zoom: Math.max(1, s.zoom / 2) });
+            latestRef.current.updateState({ ...s, zoom: Math.max(MIN_ZOOM, s.zoom / 2) });
           }
         },
         {
@@ -452,3 +445,4 @@ export function useAppCommands({
 
     return commands;
 }
+

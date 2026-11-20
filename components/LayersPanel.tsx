@@ -29,9 +29,13 @@ import {
   getGroupChildren,
   isDescendant,
 } from '../utils';
+import { ENTITY_COLOR_TAGS } from '../constants';
 import { CustomSlider } from './ui/slider';
 import { StudioSelect } from './ui/select';
-import { Input } from './ui/input';
+import { Input, InputGroup, InputClear } from './ui/input';
+import { IconButton } from './ui/button';
+import { Toggle } from './ui/toggle';
+import { Toolbar } from './ui/toolbar';
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 import {
   ContextMenu,
@@ -45,6 +49,7 @@ import {
 } from './ui/context-menu';
 import { Popover, PopoverArrow, PopoverContent } from './ui/popover';
 import { LayerPropertiesDialog } from './LayerPropertiesDialog';
+import { cn } from '../lib/utils';
 
 const BLEND_MODE_OPTIONS: { value: LayerBlendMode; label: string }[] = [
   { value: 'normal', label: 'Normal' },
@@ -66,17 +71,6 @@ const BLEND_MODE_OPTIONS: { value: LayerBlendMode; label: string }[] = [
   { value: 'addition', label: 'Addition' },
   { value: 'subtract', label: 'Subtract' },
   { value: 'divide', label: 'Divide' },
-];
-
-const COLOR_TAGS = [
-  { id: 'red', label: 'Red', class: 'bg-red-500' },
-  { id: 'orange', label: 'Orange', class: 'bg-orange-500' },
-  { id: 'yellow', label: 'Yellow', class: 'bg-yellow-500' },
-  { id: 'green', label: 'Green', class: 'bg-green-500' },
-  { id: 'blue', label: 'Blue', class: 'bg-blue-500' },
-  { id: 'purple', label: 'Purple', class: 'bg-purple-500' },
-  { id: 'pink', label: 'Pink', class: 'bg-pink-500' },
-  { id: 'gray', label: 'Gray', class: 'bg-zinc-500' },
 ];
 
 const PACKED_PALETTE_255_CACHE = new WeakMap<string[], Uint32Array>();
@@ -355,6 +349,9 @@ interface LayersPanelProps {
   onOpenLayerProperties?: (layer: Layer) => void;
   layerPropertiesState?: { isOpen: boolean; layer: Layer | null };
   onCloseLayerProperties?: () => void;
+  onPreviewLayer?: (id: string, updates: Partial<Layer>) => void;
+  onRevertLayerPreview?: (id: string, snapshot: Partial<Layer>) => void;
+  density?: 'compact' | 'touch';
   className?: string;
 }
 
@@ -398,6 +395,7 @@ interface LayerRowProps {
   onOpenLayerProperties?: (layer: Layer) => void;
   onDuplicateLayer: (id: string) => void;
   onDeleteLayer: (id: string) => void;
+  isTouch: boolean;
 }
 
 const LayerRow: React.FC<LayerRowProps> = ({
@@ -434,11 +432,12 @@ const LayerRow: React.FC<LayerRowProps> = ({
   onOpenLayerProperties,
   onDuplicateLayer,
   onDeleteLayer,
+  isTouch,
 }) => {
   const childLevel = Math.min(layer.childLevel ?? 0, 5);
   const isGroup = layer.type === 'group';
-  const colorTagObj = COLOR_TAGS.find((t) => t.id === layer.colorTag);
-  const showUtilityActions = isActive || isSelected || layer.locked;
+  const colorTagObj = ENTITY_COLOR_TAGS.find((t) => t.id === layer.colorTag);
+  const showUtilityActions = isTouch || isActive || isSelected || layer.locked;
 
   return (
     <ContextMenu>
@@ -446,7 +445,11 @@ const LayerRow: React.FC<LayerRowProps> = ({
         render={
           <div
             ref={(el) => onRegisterRowRef(layer.id, el)}
-            draggable={!isAnyEditing}
+            role="treeitem"
+            aria-level={childLevel + 1}
+            aria-expanded={isGroup ? !layer.collapsed : undefined}
+            aria-selected={isSelected}
+            draggable={!isAnyEditing && !isTouch}
             onDragStart={(e) => onDragStart(e, layer.id)}
             onDragOver={(e) => {
               e.stopPropagation();
@@ -459,20 +462,23 @@ const LayerRow: React.FC<LayerRowProps> = ({
             onDragEnd={onDragEnd}
             onClick={(e) => onLayerClick(e, layer.id)}
             onDoubleClick={() => onStartEditing(layer)}
-            className={`group/item relative flex h-9 cursor-default items-center gap-1.5 rounded-md border px-2 transition-colors ${
-              isGroup ? 'font-medium text-foreground' : 'text-foreground/85'
-            } ${
+            className={cn(
+              'group/item relative flex cursor-default items-center gap-1.5 rounded-md border px-2 transition-colors',
+              isTouch ? 'min-h-11 py-1' : 'h-9',
+              isGroup ? 'font-medium text-foreground' : 'text-foreground/85',
               isActive
                 ? 'border-primary/45 bg-primary/15 text-foreground'
                 : isSelected
                   ? 'border-border bg-secondary/70 text-foreground'
-                  : 'border-transparent hover:bg-accent/50'
-            } ${isDragging ? 'opacity-35' : ''}`}
+                  : 'border-transparent hover:bg-accent/50',
+              isDragging && 'opacity-35'
+            )}
             style={{ marginLeft: `${childLevel * 14}px` }}
           >
             {colorTagObj && (
               <div
-                className={`absolute top-1.5 bottom-1.5 left-0 w-1 rounded-r ${colorTagObj.class}`}
+                className="absolute top-1.5 bottom-1.5 left-0 w-1 rounded-r"
+                style={{ backgroundColor: colorTagObj.hex }}
               />
             )}
 
@@ -668,12 +674,15 @@ const LayerRow: React.FC<LayerRowProps> = ({
               <span className="h-2.5 w-2.5 rounded-full border border-border bg-transparent" />
               None
             </ContextMenuItem>
-            {COLOR_TAGS.map((tag) => (
+            {ENTITY_COLOR_TAGS.map((tag) => (
               <ContextMenuItem
                 key={tag.id}
                 onSelect={() => onUpdateLayer(layer.id, { colorTag: tag.id })}
               >
-                <span className={`h-2.5 w-2.5 rounded-full ${tag.class}`} />
+                <span
+                  className="h-2.5 w-2.5 rounded-full"
+                  style={{ backgroundColor: tag.hex }}
+                />
                 {tag.label}
               </ContextMenuItem>
             ))}
@@ -724,8 +733,12 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   onOpenLayerProperties,
   layerPropertiesState,
   onCloseLayerProperties,
+  onPreviewLayer,
+  onRevertLayerPreview,
+  density = 'compact',
   className,
 }) => {
+  const isTouch = density === 'touch';
   const [dragState, setDragState] = useState<DragState | null>(null);
   const dragStateRef = useRef<DragState | null>(null);
   const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -982,32 +995,38 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   const isAnyEditing = editingId !== null;
 
   return (
-    <div className={`flex flex-col bg-card select-none ${className ?? ''}`}>
-      <div className="flex h-8 shrink-0 items-center justify-between border-b border-border bg-background/50 px-2.5">
+    <div className={cn('flex flex-col bg-card select-none', className)}>
+      <div
+        className={cn(
+          'flex shrink-0 items-center justify-between border-b border-border bg-background/50 px-2.5',
+          isTouch ? 'h-12' : 'h-8'
+        )}
+      >
         <span className="font-mono text-[11px] font-medium text-muted-foreground tabular-nums">
           {isMultiLayer
             ? `${selectedLayerIds.length} selected`
             : `${layers.length} ${layers.length === 1 ? 'layer' : 'layers'}`}
         </span>
 
-        <div className="flex items-center gap-0.5">
+        <Toolbar aria-label="Layer actions" className="gap-0.5">
           <Tooltip>
             <TooltipTrigger
               render={
-                <button
-                  type="button"
+                <Toggle
+                  pressed={showSearch}
+                  onPressedChange={(next) => {
+                    if (!next) setSearchQuery('');
+                    setShowSearch(next);
+                  }}
+                  variant="tint"
+                  size={isTouch ? 'touch' : 'icon-sm'}
                   aria-label="Filter Layers"
-                  onClick={() => setShowSearch(!showSearch)}
-                  className={`flex h-6 w-6 items-center justify-center rounded-sm transition-colors ${
-                    showSearch
-                      ? 'bg-primary/15 text-primary'
-                      : 'text-muted-foreground hover:bg-accent hover:text-foreground'
-                  }`}
-                >
-                  <Search size={12} />
-                </button>
+                  className={cn(!isTouch && 'h-6 w-6')}
+                />
               }
-            />
+            >
+              <Search size={isTouch ? 15 : 12} />
+            </TooltipTrigger>
             <TooltipContent side="top">Filter Layers</TooltipContent>
           </Tooltip>
 
@@ -1015,16 +1034,17 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
             <Tooltip>
               <TooltipTrigger
                 render={
-                  <button
+                  <IconButton
                     type="button"
+                    variant="ghost"
+                    size={isTouch ? 'touch' : 'xs'}
                     aria-label="Expand or Collapse All Groups"
                     onClick={() => onToggleCollapseAllGroups()}
-                    className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                  >
-                    <ChevronsUpDown size={12} />
-                  </button>
+                  />
                 }
-              />
+              >
+                <ChevronsUpDown size={isTouch ? 15 : 12} />
+              </TooltipTrigger>
               <TooltipContent side="top">Expand / Collapse Groups</TooltipContent>
             </Tooltip>
           )}
@@ -1033,16 +1053,17 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
             <Tooltip>
               <TooltipTrigger
                 render={
-                  <button
+                  <IconButton
                     type="button"
+                    variant="ghost"
+                    size={isTouch ? 'touch' : 'xs'}
                     aria-label={isMultiLayer ? 'Group Selected' : 'New Group'}
                     onClick={onGroupSelectedLayers}
-                    className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                  >
-                    <FolderPlus size={12} />
-                  </button>
+                  />
                 }
-              />
+              >
+                <FolderPlus size={isTouch ? 15 : 12} />
+              </TooltipTrigger>
               <TooltipContent side="top">
                 {isMultiLayer ? 'Group Selected (Ctrl+G)' : 'New Group'}
               </TooltipContent>
@@ -1053,16 +1074,17 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
             <Tooltip>
               <TooltipTrigger
                 render={
-                  <button
+                  <IconButton
                     type="button"
+                    variant="ghost"
+                    size={isTouch ? 'touch' : 'xs'}
                     aria-label="Ungroup Selected"
                     onClick={onUngroupSelectedLayers}
-                    className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                  >
-                    <FolderOutput size={12} />
-                  </button>
+                  />
                 }
-              />
+              >
+                <FolderOutput size={isTouch ? 15 : 12} />
+              </TooltipTrigger>
               <TooltipContent side="top">Ungroup Selected (Ctrl+Shift+G)</TooltipContent>
             </Tooltip>
           )}
@@ -1070,98 +1092,94 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
           <Tooltip>
             <TooltipTrigger
               render={
-                <button
-                  type="button"
+                <Toggle
+                  pressed={showOpacity}
+                  onPressedChange={setShowOpacity}
+                  variant="tint"
+                  size={isTouch ? 'touch' : 'icon-sm'}
                   aria-label="Blend Mode and Opacity"
-                  onClick={() => setShowOpacity(!showOpacity)}
-                  className={`flex h-6 w-6 items-center justify-center rounded-sm transition-colors ${
-                    showOpacity
-                      ? 'bg-primary/15 text-primary'
-                      : 'text-muted-foreground hover:bg-accent hover:text-foreground'
-                  }`}
-                >
-                  <Sliders size={12} />
-                </button>
+                  className={cn(!isTouch && 'h-6 w-6')}
+                />
               }
-            />
+            >
+              <Sliders size={isTouch ? 15 : 12} />
+            </TooltipTrigger>
             <TooltipContent side="top">Blend Mode &amp; Opacity</TooltipContent>
           </Tooltip>
 
           <Tooltip>
             <TooltipTrigger
               render={
-                <button
+                <IconButton
                   type="button"
+                  variant="ghost"
+                  size={isTouch ? 'touch' : 'xs'}
                   aria-label="Duplicate Selected Layer"
                   onClick={() =>
                     isMultiLayer ? onDuplicateSelectedLayers() : onDuplicateLayer(activeLayerId)
                   }
-                  className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                >
-                  <Copy size={12} />
-                </button>
+                />
               }
-            />
+            >
+              <Copy size={isTouch ? 15 : 12} />
+            </TooltipTrigger>
             <TooltipContent side="top">Duplicate Layer</TooltipContent>
           </Tooltip>
 
           <Tooltip>
             <TooltipTrigger
               render={
-                <button
+                <IconButton
                   type="button"
+                  variant="ghost"
+                  size={isTouch ? 'touch' : 'xs'}
                   aria-label="Delete Selected Layer"
                   onClick={() =>
                     isMultiLayer ? onDeleteSelectedLayers() : onDeleteLayer(activeLayerId)
                   }
-                  className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-destructive/15 hover:text-destructive"
-                >
-                  <Trash2 size={12} />
-                </button>
+                  className="hover:bg-destructive/15 hover:text-destructive"
+                />
               }
-            />
+            >
+              <Trash2 size={isTouch ? 15 : 12} />
+            </TooltipTrigger>
             <TooltipContent side="top">Delete Layer</TooltipContent>
           </Tooltip>
 
           <Tooltip>
             <TooltipTrigger
               render={
-                <button
+                <IconButton
                   type="button"
+                  variant="ghost"
+                  size={isTouch ? 'touch' : 'xs'}
                   aria-label="Add New Layer"
                   onClick={onAddLayer}
-                  className="flex h-6 w-6 items-center justify-center rounded-sm text-primary transition-colors hover:bg-primary/15"
-                >
-                  <Plus size={14} />
-                </button>
+                  className="text-primary hover:bg-primary/15 hover:text-primary"
+                />
               }
-            />
+            >
+              <Plus size={isTouch ? 16 : 14} />
+            </TooltipTrigger>
             <TooltipContent side="top">New Layer</TooltipContent>
           </Tooltip>
-        </div>
+        </Toolbar>
       </div>
 
       {showSearch && (
-        <div className="flex items-center gap-1.5 border-b border-border bg-background/40 px-2 py-1.5">
-          <Search size={12} className="shrink-0 text-muted-foreground" />
-          <Input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Filter layers..."
-            autoFocus
-            className="h-6 flex-1 px-2 text-[11px]"
-          />
-          {searchQuery && (
-            <button
-              type="button"
-              onClick={() => setSearchQuery('')}
-              aria-label="Clear filter"
-              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
-            >
-              <X size={12} />
-            </button>
-          )}
+        <div className="border-b border-border bg-background/40 px-2 py-1.5">
+          <InputGroup className={cn(isTouch ? 'h-9' : 'h-7')}>
+            <Search size={12} className="shrink-0 text-muted-foreground" />
+            <Input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Filter layers..."
+              autoFocus
+              className="h-full border-0 bg-transparent px-0 text-[11px] focus-visible:ring-0"
+            />
+            {searchQuery && <InputClear onClick={() => setSearchQuery('')} />}
+          </InputGroup>
         </div>
       )}
 
@@ -1173,7 +1191,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
               value={activeLayer.blendMode || 'normal'}
               options={BLEND_MODE_OPTIONS}
               onValueChange={(mode) => onUpdateLayer(activeLayer.id, { blendMode: mode })}
-              className="h-6 w-36 text-[11px]"
+              className={cn(isTouch ? 'h-8 w-40 text-xs' : 'h-6 w-36 text-[11px]')}
               aria-label="Active layer blend mode"
             />
           </div>
@@ -1199,7 +1217,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
 
       {/* Single Shared Popover for Layer Properties */}
       <Popover
-        open={!!(layerPropertiesState?.isOpen && propsLayer && propsAnchorEl)}
+        open={!!(layerPropertiesState?.isOpen && propsLayer && propsAnchorEl && !isTouch)}
         onOpenChange={(open) => {
           if (!open && onCloseLayerProperties) onCloseLayerProperties();
         }}
@@ -1220,6 +1238,8 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
               onClose={() => onCloseLayerProperties?.()}
               layer={propsLayer}
               onUpdateLayer={onUpdateLayer}
+              onPreviewLayer={onPreviewLayer}
+              onRevertPreview={onRevertLayerPreview}
               isEmbedded
             />
           )}
@@ -1230,63 +1250,66 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
         <ContextMenuTrigger
           render={
             <div
+              role="tree"
+              aria-label="Layer stack"
               onDragOver={handleContainerDragOver}
               onDrop={handleContainerDrop}
               tabIndex={0}
               className="flex-1 space-y-0.5 overflow-y-auto p-1.5 outline-none"
             >
               <>
-                    {displayLayers.map((layer) => {
-                      if (!searchQuery && collapsedLayerIds.has(layer.id)) return null;
+                {displayLayers.map((layer) => {
+                  if (!searchQuery && collapsedLayerIds.has(layer.id)) return null;
 
-                      const isDragging = dragState?.id === layer.id;
-                      const dropPosition =
-                        dragState?.overId === layer.id ? dragState.position : null;
-                      const isActive = activeLayerId === layer.id;
-                      const isSelected = selectedLayerSet.has(layer.id);
-                      const effectiveVis = isLayerVisible(layer, layers, parentMap);
-                      const isGroup = layer.type === 'group';
-                      const isEditing = editingId === layer.id;
+                  const isDragging = dragState?.id === layer.id;
+                  const dropPosition =
+                    dragState?.overId === layer.id ? dragState.position : null;
+                  const isActive = activeLayerId === layer.id;
+                  const isSelected = selectedLayerSet.has(layer.id);
+                  const effectiveVis = isLayerVisible(layer, layers, parentMap);
+                  const isGroup = layer.type === 'group';
+                  const isEditing = editingId === layer.id;
 
-                      return (
-                        <LayerRow
-                          key={layer.id}
-                          layer={layer}
-                          pixels={isGroup ? undefined : activeFrame?.layerData[layer.id]}
-                          groupLayers={isGroup ? layers : undefined}
-                          groupActiveFrame={isGroup ? activeFrame : undefined}
-                          palette={palette}
-                          width={width}
-                          height={height}
-                          isActive={isActive}
-                          isSelected={isSelected}
-                          isDragging={isDragging}
-                          dropPosition={dropPosition}
-                          effectiveVis={effectiveVis}
-                          isEditing={isEditing}
-                          isAnyEditing={isAnyEditing}
-                          editName={isEditing ? editName : ''}
-                          editInputRef={editInputRef}
-                          onRegisterRowRef={registerRowRef}
-                          onEditNameChange={setEditName}
-                          onSaveEditing={saveEditing}
-                          onCancelEditing={cancelEditing}
-                          onDragStart={handleDragStart}
-                          onDragOver={handleDragOver}
-                          onDrop={handleDrop}
-                          onDragEnd={handleDragEnd}
-                          onLayerClick={handleLayerClick}
-                          onStartEditing={startEditing}
-                          onUpdateLayer={onUpdateLayer}
-                          onAddLayerToGroup={onAddLayerToGroup}
-                          onGroupSelectedLayers={onGroupSelectedLayers}
-                          onUngroupSelectedLayers={onUngroupSelectedLayers}
-                          onOpenLayerProperties={onOpenLayerProperties}
-                          onDuplicateLayer={onDuplicateLayer}
-                          onDeleteLayer={onDeleteLayer}
-                        />
-                      );
-                    })}
+                  return (
+                    <LayerRow
+                      key={layer.id}
+                      layer={layer}
+                      pixels={isGroup ? undefined : activeFrame?.layerData[layer.id]}
+                      groupLayers={isGroup ? layers : undefined}
+                      groupActiveFrame={isGroup ? activeFrame : undefined}
+                      palette={palette}
+                      width={width}
+                      height={height}
+                      isActive={isActive}
+                      isSelected={isSelected}
+                      isDragging={isDragging}
+                      dropPosition={dropPosition}
+                      effectiveVis={effectiveVis}
+                      isEditing={isEditing}
+                      isAnyEditing={isAnyEditing}
+                      editName={isEditing ? editName : ''}
+                      editInputRef={editInputRef}
+                      onRegisterRowRef={registerRowRef}
+                      onEditNameChange={setEditName}
+                      onSaveEditing={saveEditing}
+                      onCancelEditing={cancelEditing}
+                      onDragStart={handleDragStart}
+                      onDragOver={handleDragOver}
+                      onDrop={handleDrop}
+                      onDragEnd={handleDragEnd}
+                      onLayerClick={handleLayerClick}
+                      onStartEditing={startEditing}
+                      onUpdateLayer={onUpdateLayer}
+                      onAddLayerToGroup={onAddLayerToGroup}
+                      onGroupSelectedLayers={onGroupSelectedLayers}
+                      onUngroupSelectedLayers={onUngroupSelectedLayers}
+                      onOpenLayerProperties={onOpenLayerProperties}
+                      onDuplicateLayer={onDuplicateLayer}
+                      onDeleteLayer={onDeleteLayer}
+                      isTouch={isTouch}
+                    />
+                  );
+                })}
 
                     {dragState?.overId === 'root-bottom' && (
                       <div className="relative my-1.5 flex h-0.5 w-full items-center rounded-full bg-primary">

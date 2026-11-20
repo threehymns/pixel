@@ -6,6 +6,8 @@ import {
   MenuContent,
   MenuItem,
   MenuItemIcon,
+  MenuRadioGroup,
+  MenuRadioItem,
   MenuSeparator,
   MenuShortcut,
   MenuSub,
@@ -13,8 +15,9 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from './ui/menu';
+import { studioConfirm } from './ui/alert-dialog';
 import { Command, RecentProject } from '../types';
-import { Check, Trash2 } from './Icons';
+import { Trash2 } from './Icons';
 
 interface MenubarProps {
   commands: Command[];
@@ -23,13 +26,14 @@ interface MenubarProps {
   onClearRecent?: () => void;
 }
 
-const CATEGORIES = ['File', 'Edit', 'View', 'Select', 'Layer', 'Sprite'] as const;
+const CATEGORIES = ['File', 'Edit', 'Tools', 'View', 'Select', 'Layer', 'Sprite'] as const;
 
 const SEPARATOR_AFTER = new Set([
   'file.close',
   'edit.redo',
   'edit.clearEdit',
   'fx.outline',
+  'tool.move',
   'view.prevTab',
   'view.timeline',
   'view.referenceImage',
@@ -51,6 +55,17 @@ const RecentProjectsSubmenu: React.FC<RecentProjectsSubmenuProps> = ({
   onOpenRecent,
   onClearRecent,
 }) => {
+  const handleClearRecent = async () => {
+    if (!onClearRecent) return;
+    const confirmed = await studioConfirm({
+      title: 'Clear recent files?',
+      description: 'This removes your saved recent project shortcuts from this browser.',
+      confirmLabel: 'Clear Recent',
+      destructive: true,
+    });
+    if (confirmed) onClearRecent();
+  };
+
   return (
     <MenuSub>
       <MenuSubTrigger>Open Recent</MenuSubTrigger>
@@ -75,7 +90,7 @@ const RecentProjectsSubmenu: React.FC<RecentProjectsSubmenuProps> = ({
             {onClearRecent && (
               <>
                 <MenuSeparator />
-                <MenuItem value="clear-recent" destructive onSelect={onClearRecent}>
+                <MenuItem value="clear-recent" destructive onSelect={handleClearRecent}>
                   <MenuItemIcon>
                     <Trash2 className="h-3.5 w-3.5" />
                   </MenuItemIcon>
@@ -105,7 +120,7 @@ const MenubarCategoryMenu: React.FC<MenubarCategoryMenuProps> = ({
 
   return (
     <Menu>
-      <MenuTrigger className="rounded-sm px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[open]:bg-accent data-[open]:text-foreground">
+      <MenuTrigger className="rounded-sm px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[open]:bg-accent data-[open]:text-foreground cursor-pointer">
         {category}
       </MenuTrigger>
       <MenuContent align="start" sideOffset={4} className="w-56">
@@ -119,12 +134,11 @@ const MenubarCategoryMenu: React.FC<MenubarCategoryMenuProps> = ({
                   <MenuSubTrigger>FX</MenuSubTrigger>
                   <MenuSubContent className="w-44">
                     <MenuItem value={cmd.id} disabled={cmd.disabled} onSelect={cmd.perform}>
-                      <span>{cmd.label}</span>
+                      <span className="flex-1 truncate">{cmd.label}</span>
                       {cmd.hotkey && <MenuShortcut>{cmd.hotkey}</MenuShortcut>}
                     </MenuItem>
                   </MenuSubContent>
                 </MenuSub>
-                <MenuSeparator />
               </React.Fragment>
             );
           }
@@ -132,31 +146,22 @@ const MenubarCategoryMenu: React.FC<MenubarCategoryMenuProps> = ({
           if (cmd.id === 'sprite.modeIndexed') {
             const indexedCmd = cmd;
             const rgbaCmd = categoryCommands.find((c) => c.id === 'sprite.modeRGBA');
+            const activeMode = indexedCmd.checked ? 'indexed' : 'rgba';
 
             return (
               <MenuSub key="color-mode-submenu">
                 <MenuSubTrigger>Color Mode</MenuSubTrigger>
                 <MenuSubContent className="w-40">
-                  <MenuItem
-                    value="mode-indexed"
-                    disabled={indexedCmd.disabled}
-                    onSelect={indexedCmd.perform}
-                    className="justify-between"
+                  <MenuRadioGroup
+                    value={activeMode}
+                    onValueChange={(next) => {
+                      if (next === 'indexed') indexedCmd.perform();
+                      else if (next === 'rgba') rgbaCmd?.perform();
+                    }}
                   >
-                    <span>Indexed</span>
-                    {indexedCmd.disabled && <Check className="h-3.5 w-3.5 text-primary" />}
-                  </MenuItem>
-                  {rgbaCmd && (
-                    <MenuItem
-                      value="mode-rgba"
-                      disabled={rgbaCmd.disabled}
-                      onSelect={rgbaCmd.perform}
-                      className="justify-between"
-                    >
-                      <span>RGBA</span>
-                      {rgbaCmd.disabled && <Check className="h-3.5 w-3.5 text-primary" />}
-                    </MenuItem>
-                  )}
+                    <MenuRadioItem value="indexed">Indexed</MenuRadioItem>
+                    {rgbaCmd && <MenuRadioItem value="rgba">RGBA</MenuRadioItem>}
+                  </MenuRadioGroup>
                 </MenuSubContent>
               </MenuSub>
             );

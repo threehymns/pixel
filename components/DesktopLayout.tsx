@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Allotment } from 'allotment';
 import { ProjectState, ToolType } from '../types';
-import { SELECTION_TOOLS } from '../constants';
+import { MAX_BRUSH_SIZE, SELECTION_TOOLS } from '../constants';
 import { DragZonePosition } from '../hooks/useLayout';
 import { ProjectStateUpdater } from '../hooks/useProject';
 import { Canvas } from './Canvas';
@@ -36,6 +36,8 @@ import {
 import { Tooltip, TooltipContent, TooltipShortcut, TooltipTrigger } from './ui/tooltip';
 import { CustomSlider } from './ui/slider';
 import { CustomCheckbox } from './ui/checkbox';
+import { Button } from './ui/button';
+import { Toolbar } from './ui/toolbar';
 import {
   ArrowRightLeft,
   BoxSelect,
@@ -65,8 +67,8 @@ import {
   PlaySquare,
   Plus,
   Redo,
+  Replace,
   Scissors,
-  Sparkles,
   Square,
   Undo,
   Wand2,
@@ -89,6 +91,7 @@ const BRUSH_OPTION_TOOLS: ToolType[] = [
   'filled-ellipse',
   'blur',
   'sharpen',
+  'color-replace',
 ];
 const DOCK_SLOTS = ['left', 'right', 'bottom'] as const;
 
@@ -166,6 +169,17 @@ interface DesktopLayoutProps {
   onCloseTagPopover?: () => void;
   layerPropertiesState?: { isOpen: boolean; layer: any };
   onCloseLayerProperties?: () => void;
+  fitTrigger?: number;
+  onZoomIn?: () => void;
+  onZoomOut?: () => void;
+  onZoomReset?: () => void;
+  onZoomFit?: () => void;
+  onQuickCreate?: (width: number, height: number) => void;
+  onImportFile?: (file: File) => void;
+  onPreviewLayer?: (id: string, updates: any) => void;
+  onRevertLayerPreview?: (id: string, snapshot: any) => void;
+  onPreviewTag?: (tag: any) => void;
+  onRevertTagPreview?: (snapshotTag: any) => void;
 }
 
 interface TabMenuPayload {
@@ -184,6 +198,8 @@ interface ToolRailProps {
   onSwapColors: () => void;
 }
 
+type ToolFlyoutGroup = 'shapes' | 'effects' | 'selections';
+
 const ToolRail: React.FC<ToolRailProps> = ({
   tool,
   primaryColor,
@@ -197,6 +213,9 @@ const ToolRail: React.FC<ToolRailProps> = ({
   const [lastSelectionTool, setLastSelectionTool] = useState<ToolType>('rect-select');
   const [lastShapeTool, setLastShapeTool] = useState<ToolType>('rect');
   const [lastEffectTool, setLastEffectTool] = useState<ToolType>('blur');
+  const [openFlyout, setOpenFlyout] = useState<ToolFlyoutGroup | null>(null);
+  const longPressTimerRef = useRef<number | null>(null);
+  const suppressNextToggleRef = useRef(false);
 
   if (tool !== prevTool) {
     setPrevTool(tool);
@@ -211,8 +230,76 @@ const ToolRail: React.FC<ToolRailProps> = ({
     }
   }
 
+  const clearLongPress = () => {
+    if (longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  useEffect(() => clearLongPress, []);
+
+  // First click on an inactive grouped tool activates it without opening the flyout;
+  // clicking when active, right-clicking, or holding ~300ms opens the flyout.
+  const makeFlyoutBindings = (
+    group: ToolFlyoutGroup,
+    isActive: boolean,
+    defaultTool: ToolType
+  ) => ({
+    open: openFlyout === group,
+    onOpenChange: (nextOpen: boolean, details?: { cancel?: () => void }) => {
+      if (suppressNextToggleRef.current) {
+        suppressNextToggleRef.current = false;
+        details?.cancel?.();
+        return;
+      }
+      if (nextOpen) {
+        if (!isActive) {
+          details?.cancel?.();
+          onSelectTool(defaultTool);
+          setOpenFlyout(null);
+          return;
+        }
+        setOpenFlyout(group);
+      } else {
+        setOpenFlyout((curr) => (curr === group ? null : curr));
+      }
+    },
+    triggerProps: {
+      onPointerDown: (e: React.PointerEvent) => {
+        if (e.button !== 0) return;
+        clearLongPress();
+        longPressTimerRef.current = window.setTimeout(() => {
+          longPressTimerRef.current = null;
+          suppressNextToggleRef.current = true;
+          setOpenFlyout(group);
+        }, 300);
+      },
+      onPointerUp: clearLongPress,
+      onPointerLeave: clearLongPress,
+      onPointerCancel: clearLongPress,
+      onContextMenu: (e: React.MouseEvent) => {
+        e.preventDefault();
+        clearLongPress();
+        setOpenFlyout(group);
+      },
+    },
+  });
+
+  const isShapeActive = SHAPE_TOOLS.includes(tool);
+  const isEffectActive = EFFECT_TOOLS.includes(tool);
+  const isSelectionActive = SELECTION_TOOLS.includes(tool);
+
+  const shapesFlyout = makeFlyoutBindings('shapes', isShapeActive, lastShapeTool);
+  const effectsFlyout = makeFlyoutBindings('effects', isEffectActive, lastEffectTool);
+  const selectionsFlyout = makeFlyoutBindings('selections', isSelectionActive, lastSelectionTool);
+
   return (
-    <div className="flex h-full w-full flex-col items-center overflow-x-hidden overflow-y-auto border-r border-border bg-card py-2 no-scrollbar">
+    <Toolbar
+      orientation="vertical"
+      aria-label="Drawing tools"
+      className="flex h-full w-full flex-col items-center overflow-x-hidden overflow-y-auto border-r border-border bg-card py-2 no-scrollbar"
+    >
       <div className="flex flex-col gap-1 p-1">
         <ToolButton
           active={tool === 'pencil'}
@@ -236,7 +323,7 @@ const ToolRail: React.FC<ToolRailProps> = ({
           shortcut="L"
         />
 
-        <Popover>
+        <Popover open={shapesFlyout.open} onOpenChange={shapesFlyout.onOpenChange}>
           <Tooltip>
             <TooltipTrigger
               render={
@@ -245,13 +332,10 @@ const ToolRail: React.FC<ToolRailProps> = ({
                     <button
                       type="button"
                       aria-label="Shape Tools"
-                      onClick={() => {
-                        if (!SHAPE_TOOLS.includes(tool)) {
-                          onSelectTool(lastShapeTool);
-                        }
-                      }}
-                      className={`relative flex items-center justify-center rounded-md p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                        SHAPE_TOOLS.includes(tool)
+                      aria-pressed={isShapeActive}
+                      {...shapesFlyout.triggerProps}
+                      className={`relative flex cursor-pointer items-center justify-center rounded-md p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                        isShapeActive
                           ? 'bg-primary text-primary-foreground shadow-xs'
                           : 'text-muted-foreground hover:bg-accent hover:text-foreground'
                       }`}
@@ -264,7 +348,7 @@ const ToolRail: React.FC<ToolRailProps> = ({
               <span className="clip-path-triangle absolute right-0.5 bottom-0.5 h-1.5 w-1.5 rounded-tl-xs bg-current opacity-60" />
             </TooltipTrigger>
             <TooltipContent side="right" sideOffset={8}>
-              <span>Shape Tools</span>
+              <span>Shape Tools (hold or right-click for more)</span>
               <TooltipShortcut>U</TooltipShortcut>
             </TooltipContent>
           </Tooltip>
@@ -274,7 +358,7 @@ const ToolRail: React.FC<ToolRailProps> = ({
                 <button
                   type="button"
                   onClick={() => onSelectTool('rect')}
-                  className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
+                  className={`flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
                     tool === 'rect'
                       ? 'bg-primary font-medium text-primary-foreground'
                       : 'text-foreground hover:bg-accent'
@@ -291,7 +375,7 @@ const ToolRail: React.FC<ToolRailProps> = ({
                 <button
                   type="button"
                   onClick={() => onSelectTool('filled-rect')}
-                  className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
+                  className={`flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
                     tool === 'filled-rect'
                       ? 'bg-primary font-medium text-primary-foreground'
                       : 'text-foreground hover:bg-accent'
@@ -308,7 +392,7 @@ const ToolRail: React.FC<ToolRailProps> = ({
                 <button
                   type="button"
                   onClick={() => onSelectTool('ellipse')}
-                  className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
+                  className={`flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
                     tool === 'ellipse'
                       ? 'bg-primary font-medium text-primary-foreground'
                       : 'text-foreground hover:bg-accent'
@@ -325,7 +409,7 @@ const ToolRail: React.FC<ToolRailProps> = ({
                 <button
                   type="button"
                   onClick={() => onSelectTool('filled-ellipse')}
-                  className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
+                  className={`flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
                     tool === 'filled-ellipse'
                       ? 'bg-primary font-medium text-primary-foreground'
                       : 'text-foreground hover:bg-accent'
@@ -348,6 +432,13 @@ const ToolRail: React.FC<ToolRailProps> = ({
           shortcut="G"
         />
         <ToolButton
+          active={tool === 'color-replace'}
+          onClick={() => onSelectTool('color-replace')}
+          icon={<Replace size={17} />}
+          label="Color Replace"
+          shortcut="C"
+        />
+        <ToolButton
           active={tool === 'eyedropper'}
           onClick={() => onSelectTool('eyedropper')}
           icon={<Pipette size={17} />}
@@ -362,7 +453,7 @@ const ToolRail: React.FC<ToolRailProps> = ({
           shortcut="S"
         />
 
-        <Popover>
+        <Popover open={effectsFlyout.open} onOpenChange={effectsFlyout.onOpenChange}>
           <Tooltip>
             <TooltipTrigger
               render={
@@ -371,13 +462,10 @@ const ToolRail: React.FC<ToolRailProps> = ({
                     <button
                       type="button"
                       aria-label="Effect Brushes"
-                      onClick={() => {
-                        if (!EFFECT_TOOLS.includes(tool)) {
-                          onSelectTool(lastEffectTool);
-                        }
-                      }}
-                      className={`relative flex items-center justify-center rounded-md p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                        EFFECT_TOOLS.includes(tool)
+                      aria-pressed={isEffectActive}
+                      {...effectsFlyout.triggerProps}
+                      className={`relative flex cursor-pointer items-center justify-center rounded-md p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                        isEffectActive
                           ? 'bg-primary text-primary-foreground shadow-xs'
                           : 'text-muted-foreground hover:bg-accent hover:text-foreground'
                       }`}
@@ -390,7 +478,7 @@ const ToolRail: React.FC<ToolRailProps> = ({
               <span className="clip-path-triangle absolute right-0.5 bottom-0.5 h-1.5 w-1.5 rounded-tl-xs bg-current opacity-60" />
             </TooltipTrigger>
             <TooltipContent side="right" sideOffset={8}>
-              <span>Effect Brushes</span>
+              <span>Effect Brushes (hold or right-click for more)</span>
               <TooltipShortcut>R</TooltipShortcut>
             </TooltipContent>
           </Tooltip>
@@ -400,7 +488,7 @@ const ToolRail: React.FC<ToolRailProps> = ({
                 <button
                   type="button"
                   onClick={() => onSelectTool('blur')}
-                  className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
+                  className={`flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
                     tool === 'blur'
                       ? 'bg-primary font-medium text-primary-foreground'
                       : 'text-foreground hover:bg-accent'
@@ -417,7 +505,7 @@ const ToolRail: React.FC<ToolRailProps> = ({
                 <button
                   type="button"
                   onClick={() => onSelectTool('sharpen')}
-                  className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
+                  className={`flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
                     tool === 'sharpen'
                       ? 'bg-primary font-medium text-primary-foreground'
                       : 'text-foreground hover:bg-accent'
@@ -442,7 +530,7 @@ const ToolRail: React.FC<ToolRailProps> = ({
           shortcut="V"
         />
 
-        <Popover>
+        <Popover open={selectionsFlyout.open} onOpenChange={selectionsFlyout.onOpenChange}>
           <Tooltip>
             <TooltipTrigger
               render={
@@ -451,13 +539,10 @@ const ToolRail: React.FC<ToolRailProps> = ({
                     <button
                       type="button"
                       aria-label="Selection Tools"
-                      onClick={() => {
-                        if (!SELECTION_TOOLS.includes(tool)) {
-                          onSelectTool(lastSelectionTool);
-                        }
-                      }}
-                      className={`relative flex items-center justify-center rounded-md p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                        SELECTION_TOOLS.includes(tool)
+                      aria-pressed={isSelectionActive}
+                      {...selectionsFlyout.triggerProps}
+                      className={`relative flex cursor-pointer items-center justify-center rounded-md p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                        isSelectionActive
                           ? 'bg-primary text-primary-foreground shadow-xs'
                           : 'text-muted-foreground hover:bg-accent hover:text-foreground'
                       }`}
@@ -470,7 +555,7 @@ const ToolRail: React.FC<ToolRailProps> = ({
               <span className="clip-path-triangle absolute right-0.5 bottom-0.5 h-1.5 w-1.5 rounded-tl-xs bg-current opacity-60" />
             </TooltipTrigger>
             <TooltipContent side="right" sideOffset={8}>
-              <span>Selection Tools</span>
+              <span>Selection Tools (hold or right-click for more)</span>
               <TooltipShortcut>M</TooltipShortcut>
             </TooltipContent>
           </Tooltip>
@@ -482,7 +567,7 @@ const ToolRail: React.FC<ToolRailProps> = ({
                   <button
                     type="button"
                     onClick={() => onSelectTool(t)}
-                    className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
+                    className={`flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors ${
                       tool === t
                         ? 'bg-primary font-medium text-primary-foreground'
                         : 'text-foreground hover:bg-accent'
@@ -513,7 +598,7 @@ const ToolRail: React.FC<ToolRailProps> = ({
                     <button
                       type="button"
                       aria-label="Secondary Color"
-                      className="absolute right-0 bottom-0 h-6 w-6 rounded-sm border border-border-strong shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      className="absolute right-0 bottom-0 h-6 w-6 cursor-pointer rounded-sm border border-border-strong shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       style={{ backgroundColor: secondaryColor }}
                     />
                   }
@@ -522,12 +607,7 @@ const ToolRail: React.FC<ToolRailProps> = ({
             />
             <TooltipContent side="right">Secondary Color</TooltipContent>
           </Tooltip>
-          <PopoverContent
-            side="right"
-            align="end"
-            sideOffset={10}
-            className="w-auto border-none bg-transparent p-0 shadow-none"
-          >
+          <PopoverContent side="right" align="end" sideOffset={10} className="w-auto p-3">
             <ColorPicker color={secondaryColor} onChange={onSetSecondaryColor} />
           </PopoverContent>
         </Popover>
@@ -541,7 +621,7 @@ const ToolRail: React.FC<ToolRailProps> = ({
                     <button
                       type="button"
                       aria-label="Primary Color"
-                      className="absolute top-0 left-0 z-10 h-6 w-6 rounded-sm border border-border-strong shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      className="absolute top-0 left-0 z-10 h-6 w-6 cursor-pointer rounded-sm border border-border-strong shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       style={{ backgroundColor: primaryColor }}
                     />
                   }
@@ -550,12 +630,7 @@ const ToolRail: React.FC<ToolRailProps> = ({
             />
             <TooltipContent side="right">Primary Color</TooltipContent>
           </Tooltip>
-          <PopoverContent
-            side="right"
-            align="end"
-            sideOffset={10}
-            className="w-auto border-none bg-transparent p-0 shadow-none"
-          >
+          <PopoverContent side="right" align="end" sideOffset={10} className="w-auto p-3">
             <ColorPicker color={primaryColor} onChange={onSetPrimaryColor} />
           </PopoverContent>
         </Popover>
@@ -567,7 +642,7 @@ const ToolRail: React.FC<ToolRailProps> = ({
                 type="button"
                 aria-label="Swap Primary and Secondary Colors"
                 onClick={onSwapColors}
-                className="absolute top-0 right-0 z-20 flex h-4 w-4 items-center justify-center rounded-bl-sm border-b border-l border-border bg-card text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="absolute top-0 right-0 z-20 flex h-4 w-4 cursor-pointer items-center justify-center rounded-bl-sm border-b border-l border-border bg-card text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               />
             }
           >
@@ -579,7 +654,7 @@ const ToolRail: React.FC<ToolRailProps> = ({
           </TooltipContent>
         </Tooltip>
       </div>
-    </div>
+    </Toolbar>
   );
 };
 
@@ -600,6 +675,8 @@ interface ToolOptionsBarProps {
   showGrid: boolean;
   onionSkin: boolean;
   isPreviewVisible: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
   onUndo: () => void;
   onRedo: () => void;
   updateState: (s: ProjectStateUpdater, config?: any) => void;
@@ -623,6 +700,8 @@ const ToolOptionsBar: React.FC<ToolOptionsBarProps> = ({
   showGrid,
   onionSkin,
   isPreviewVisible,
+  canUndo,
+  canRedo,
   onUndo,
   onRedo,
   updateState,
@@ -643,10 +722,14 @@ const ToolOptionsBar: React.FC<ToolOptionsBarProps> = ({
   };
 
   return (
-    <div className="flex h-10 shrink-0 items-center gap-2 overflow-x-auto border-b border-border bg-background/80 px-2 text-xs no-scrollbar">
+    <Toolbar
+      aria-label="Tool options"
+      className="flex h-10 shrink-0 items-center gap-2 overflow-x-auto border-b border-border bg-background/80 px-2 text-xs no-scrollbar"
+    >
       <div className="flex shrink-0 items-center gap-1 border-r border-border pr-2">
         <ToolButton
           active={false}
+          disabled={!canUndo}
           onClick={onUndo}
           icon={<Undo size={15} />}
           label="Undo"
@@ -655,6 +738,7 @@ const ToolOptionsBar: React.FC<ToolOptionsBarProps> = ({
         />
         <ToolButton
           active={false}
+          disabled={!canRedo}
           onClick={onRedo}
           icon={<Redo size={15} />}
           label="Redo"
@@ -831,13 +915,13 @@ const ToolOptionsBar: React.FC<ToolOptionsBarProps> = ({
               <span className="text-[11px] font-medium text-muted-foreground">Size</span>
               <CustomSlider
                 min={1}
-                max={10}
+                max={MAX_BRUSH_SIZE}
                 value={brushSize}
                 onValueChange={(val) => updateState((prev) => ({ ...prev, brushSize: val }))}
                 aria-label="Brush size"
                 className="w-24"
               />
-              <span className="w-5 text-right font-mono text-[11px] text-foreground tabular-nums">
+              <span className="w-8 text-right font-mono text-[11px] text-foreground tabular-nums">
                 {brushSize}px
               </span>
             </div>
@@ -991,7 +1075,7 @@ const ToolOptionsBar: React.FC<ToolOptionsBarProps> = ({
           tooltipSide="bottom"
         />
       </div>
-    </div>
+    </Toolbar>
   );
 };
 
@@ -1368,37 +1452,96 @@ const FloatingWindow: React.FC<{
   children,
   onContextMenu,
 }) => {
+  const storageKey = `floating_pane_size_${pane.id}`;
+  const [size, setSize] = useState<{ width: number; height: number }>(() => {
+    try {
+      const saved = localStorage.getItem(storageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.width >= 180 && parsed.height >= 180) return parsed;
+      }
+    } catch {
+      // Ignore invalid stored dimensions
+    }
+    return { width: pane.width || 280, height: pane.height || 320 };
+  });
   const [isDragging, setIsDragging] = useState(false);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [isResizing, setIsResizing] = useState(false);
+  const dragOffsetRef = useRef({ x: 0, y: 0 });
+  const resizeStartRef = useRef({ x: 0, y: 0, width: 280, height: 320 });
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest('button, input, select, textarea')) return;
+  const handleTitlePointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest('button, input, select, textarea, [draggable="true"]')) {
+      return;
+    }
     setIsDragging(true);
-    setDragOffset({
-      x: e.clientX - pane.x,
-      y: e.clientY - pane.y,
-    });
+    dragOffsetRef.current = { x: e.clientX - pane.x, y: e.clientY - pane.y };
     e.preventDefault();
+  };
+
+  const handleResizePointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.preventDefault();
+    setIsResizing(true);
+    resizeStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      width: size.width,
+      height: size.height,
+    };
   };
 
   useEffect(() => {
     if (!isDragging) return;
-
-    const handleMouseMove = (e: MouseEvent) => {
-      updateFloatingPanePosition(pane.id, e.clientX - dragOffset.x, e.clientY - dragOffset.y);
+    const handlePointerMove = (e: PointerEvent) => {
+      updateFloatingPanePosition(
+        pane.id,
+        Math.max(0, e.clientX - dragOffsetRef.current.x),
+        Math.max(0, e.clientY - dragOffsetRef.current.y)
+      );
     };
-
-    const handleMouseUp = () => {
-      setIsDragging(false);
-    };
-
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
+    const handlePointerUp = () => setIsDragging(false);
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
     return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
     };
-  }, [isDragging, dragOffset, pane.id, updateFloatingPanePosition]);
+  }, [isDragging, pane.id, updateFloatingPanePosition]);
+
+  useEffect(() => {
+    if (!isResizing) return;
+    const handlePointerMove = (e: PointerEvent) => {
+      const nextWidth = Math.max(180, Math.min(720, resizeStartRef.current.width + (e.clientX - resizeStartRef.current.x)));
+      const nextHeight = Math.max(180, Math.min(720, resizeStartRef.current.height + (e.clientY - resizeStartRef.current.y)));
+      setSize({ width: nextWidth, height: nextHeight });
+    };
+    const handlePointerUp = () => {
+      setIsResizing(false);
+    };
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+    };
+  }, [isResizing]);
+
+  useEffect(() => {
+    if (!isResizing) {
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(size));
+      } catch {
+        // Ignore quota errors
+      }
+    }
+  }, [isResizing, size, storageKey]);
 
   return (
     <div
@@ -1406,13 +1549,13 @@ const FloatingWindow: React.FC<{
       style={{
         left: pane.x,
         top: pane.y,
-        width: pane.width || 280,
-        height: pane.height || 320,
+        width: size.width,
+        height: size.height,
       }}
       onClick={(e) => e.stopPropagation()}
     >
       <div
-        onMouseDown={handleMouseDown}
+        onPointerDown={handleTitlePointerDown}
         onContextMenu={onContextMenu}
         className="flex h-7 shrink-0 cursor-move items-center justify-between border-b border-border bg-muted px-2 active:cursor-grabbing"
       >
@@ -1431,13 +1574,22 @@ const FloatingWindow: React.FC<{
           type="button"
           onClick={() => handleClosePane(pane.id)}
           aria-label={`Close ${metadata.title}`}
-          className="flex h-5 w-5 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="flex h-5 w-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           <X size={12} />
         </button>
       </div>
 
       <div className="relative min-h-0 flex-1 overflow-hidden bg-card">{children}</div>
+
+      <div
+        role="separator"
+        aria-label={`Resize ${metadata.title}`}
+        onPointerDown={handleResizePointerDown}
+        className="absolute right-0 bottom-0 z-10 h-3.5 w-3.5 cursor-nwse-resize"
+      >
+        <span className="pointer-events-none absolute right-1 bottom-1 h-1.5 w-1.5 border-r-2 border-b-2 border-muted-foreground/50" />
+      </div>
     </div>
   );
 };
@@ -1448,6 +1600,8 @@ interface DesktopWorkspaceProps {
   projectActions: any;
   history: any[];
   historyIndex: number;
+  canUndo: boolean;
+  canRedo: boolean;
   canvasTools: any;
   fileSystem: any;
   setMousePos: (pos: any) => void;
@@ -1464,6 +1618,11 @@ interface DesktopWorkspaceProps {
   onCloseTagPopover?: () => void;
   layerPropertiesState?: { isOpen: boolean; layer: any };
   onCloseLayerProperties?: () => void;
+  fitTrigger?: number;
+  onPreviewLayer?: (id: string, updates: any) => void;
+  onRevertLayerPreview?: (id: string, snapshot: any) => void;
+  onPreviewTag?: (tag: any) => void;
+  onRevertTagPreview?: (snapshotTag: any) => void;
   tabMenu: ReturnType<typeof createMenuController<TabMenuPayload>>;
 }
 
@@ -1500,6 +1659,8 @@ const DesktopWorkspace: React.FC<DesktopWorkspaceProps> = ({
   projectActions,
   history,
   historyIndex,
+  canUndo,
+  canRedo,
   canvasTools,
   fileSystem,
   setMousePos,
@@ -1516,6 +1677,11 @@ const DesktopWorkspace: React.FC<DesktopWorkspaceProps> = ({
   onCloseTagPopover,
   layerPropertiesState,
   onCloseLayerProperties,
+  fitTrigger,
+  onPreviewLayer,
+  onRevertLayerPreview,
+  onPreviewTag,
+  onRevertTagPreview,
   tabMenu,
 }) => {
   const isPreviewDocked = Object.values(slots).some(
@@ -1687,6 +1853,7 @@ const DesktopWorkspace: React.FC<DesktopWorkspaceProps> = ({
       activePaletteId={state.activePaletteId}
       primaryColor={state.primaryColor}
       secondaryColor={state.secondaryColor}
+      shadingRamp={state.shades}
       onColorSelect={handlePaletteColorSelect}
       onAddColor={handlePaletteAddColor}
       onSelectPalette={projectActions.selectPalette}
@@ -1707,6 +1874,8 @@ const DesktopWorkspace: React.FC<DesktopWorkspaceProps> = ({
       height={state.height}
       onSelectLayers={handleSelectLayers}
       onUpdateLayer={projectActions.updateLayer}
+      onPreviewLayer={onPreviewLayer}
+      onRevertLayerPreview={onRevertLayerPreview}
       onAddLayer={projectActions.addLayer}
       onAddGroupLayer={projectActions.addGroupLayer}
       onGroupSelectedLayers={projectActions.groupSelectedLayers}
@@ -1758,6 +1927,8 @@ const DesktopWorkspace: React.FC<DesktopWorkspaceProps> = ({
       onOpenTagProperties={projectActions.openTagPropertiesDialog}
       activeTagPopover={activeTagPopover}
       onCloseTagPopover={onCloseTagPopover}
+      onPreviewTag={onPreviewTag}
+      onRevertTagPreview={onRevertTagPreview}
       onSelectLayer={handleTimelineSelectLayer}
       onAddLayer={projectActions.addLayer}
       onAddGroupLayer={projectActions.addGroupLayer}
@@ -1779,21 +1950,6 @@ const DesktopWorkspace: React.FC<DesktopWorkspaceProps> = ({
       spriteHeight={state.height}
       activeFrameIndex={state.activeFrameIndex}
       onClose={handleClosePreview}
-      isFloating={false}
-    />
-  );
-
-  const floatingPreviewElement = (
-    <Preview
-      width={0}
-      frames={state.frames}
-      layers={state.layers}
-      palette={state.palette}
-      spriteWidth={state.width}
-      spriteHeight={state.height}
-      activeFrameIndex={state.activeFrameIndex}
-      onClose={handleClosePreview}
-      isFloating={true}
     />
   );
 
@@ -1963,6 +2119,7 @@ const DesktopWorkspace: React.FC<DesktopWorkspaceProps> = ({
       onScalePixels={onScalePixels}
       onZoom={handleCanvasZoom}
       onMousePosUpdate={setMousePos}
+      fitTrigger={fitTrigger}
     />
   );
 
@@ -1985,6 +2142,8 @@ const DesktopWorkspace: React.FC<DesktopWorkspaceProps> = ({
         showGrid={state.showGrid}
         onionSkin={state.onionSkin}
         isPreviewVisible={isPreviewVisible}
+        canUndo={canUndo}
+        canRedo={canRedo}
         onUndo={projectActions.undo}
         onRedo={projectActions.redo}
         updateState={updateState}
@@ -2035,7 +2194,7 @@ const DesktopWorkspace: React.FC<DesktopWorkspaceProps> = ({
               layersElement,
               historyElement,
               timelineElement,
-              floatingPreviewElement
+              previewElement
             )}
           </FloatingWindow>
         ))}
@@ -2148,6 +2307,8 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
   recentProjects,
   history,
   historyIndex,
+  canUndo = false,
+  canRedo = false,
   onOpenCommandPalette,
   canvasTools,
   fileSystem,
@@ -2168,12 +2329,23 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
   onCloseTagPopover,
   layerPropertiesState,
   onCloseLayerProperties,
+  fitTrigger,
+  onZoomIn,
+  onZoomOut,
+  onZoomReset,
+  onZoomFit,
+  onQuickCreate,
+  onImportFile,
+  onPreviewLayer,
+  onRevertLayerPreview,
+  onPreviewTag,
+  onRevertTagPreview,
 }) => {
   const [tabMenu] = useState(() => createMenuController<TabMenuPayload>());
 
   const handleExportClick = () => {
     if (projectActions.openExportDialog) {
-      projectActions.openExportDialog('gif');
+      projectActions.openExportDialog();
     } else {
       projectActions.downloadImage();
     }
@@ -2214,25 +2386,22 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
         />
 
         <div className="flex items-center gap-2">
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="xs"
             onClick={handleOpenCommandPalette}
-            className="flex h-6 items-center gap-1.5 rounded-sm border border-border bg-background px-2 text-[11px] text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="text-muted-foreground hover:text-foreground"
           >
             <CommandIcon size={11} />
             <span>Commands</span>
             <kbd className="font-mono text-[11px] text-muted-foreground/80">Ctrl+K</kbd>
-          </button>
+          </Button>
 
           {!isHome && (
-            <button
-              type="button"
-              onClick={handleExportClick}
-              className="flex h-6 items-center gap-1.5 rounded-sm bg-primary px-2.5 text-[11px] font-medium text-primary-foreground transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
+            <Button variant="primary" size="xs" onClick={handleExportClick}>
               <Download size={12} />
               <span>Export</span>
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -2249,6 +2418,8 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
         <Home
           onCreateProject={projectActions.createProject}
           onImportProject={handleImportProject}
+          onImportFile={onImportFile}
+          onQuickCreate={onQuickCreate}
           recentProjects={recentProjects}
           onOpenRecent={projectActions.loadRecentProject}
           onClearRecent={projectActions.clearRecents}
@@ -2260,6 +2431,8 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
           projectActions={projectActions}
           history={history}
           historyIndex={historyIndex}
+          canUndo={canUndo}
+          canRedo={canRedo}
           canvasTools={canvasTools}
           fileSystem={fileSystem}
           setMousePos={setMousePos}
@@ -2276,6 +2449,11 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
           onCloseTagPopover={onCloseTagPopover}
           layerPropertiesState={layerPropertiesState}
           onCloseLayerProperties={onCloseLayerProperties}
+          fitTrigger={fitTrigger}
+          onPreviewLayer={onPreviewLayer}
+          onRevertLayerPreview={onRevertLayerPreview}
+          onPreviewTag={onPreviewTag}
+          onRevertTagPreview={onRevertTagPreview}
           tabMenu={tabMenu}
         />
       )}
@@ -2458,6 +2636,10 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
         activeLayerName={activeLayerName}
         isHome={isHome}
         selectionSize={selectionSize}
+        onZoomIn={onZoomIn}
+        onZoomOut={onZoomOut}
+        onZoomReset={onZoomReset}
+        onZoomFit={onZoomFit}
       />
     </div>
   );

@@ -13,6 +13,7 @@ interface ToolButtonProps {
   icon: React.ReactNode;
   label: string;
   shortcut?: string;
+  disabled?: boolean;
   tooltipSide?: "top" | "right" | "bottom" | "left";
   className?: string;
 }
@@ -23,6 +24,7 @@ export const ToolButton: React.FC<ToolButtonProps> = ({
   icon,
   label,
   shortcut,
+  disabled = false,
   tooltipSide = "right",
   className = "",
 }) => (
@@ -32,10 +34,11 @@ export const ToolButton: React.FC<ToolButtonProps> = ({
         <button
           type="button"
           onClick={onClick}
+          disabled={disabled}
           aria-label={label}
           aria-pressed={active}
           className={cn(
-            "flex items-center justify-center rounded-md p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            "flex cursor-pointer items-center justify-center rounded-md p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-35",
             active
               ? "bg-primary text-primary-foreground shadow-xs"
               : "text-muted-foreground hover:bg-accent hover:text-foreground",

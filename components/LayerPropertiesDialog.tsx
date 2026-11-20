@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { Layer, LayerBlendMode } from '../types';
+import { ENTITY_COLOR_TAGS } from '../constants';
 import {
   X,
   Layers,
@@ -16,6 +17,11 @@ import { CustomCheckbox } from './ui/checkbox';
 import { CustomSlider } from './ui/slider';
 import { StudioSelect } from './ui/select';
 import { Input } from './ui/input';
+import { Textarea } from './ui/textarea';
+import { Button, IconButton } from './ui/button';
+import { Field, FieldLabel } from './ui/field';
+import { StudioNumberInput } from './ui/number-input';
+import { ColorSwatchField } from './ui/color-picker';
 import { cn } from '../lib/utils';
 
 export interface LayerPropertiesDialogProps {
@@ -23,6 +29,8 @@ export interface LayerPropertiesDialogProps {
   onClose: () => void;
   layer: Layer | null;
   onUpdateLayer: (id: string, updates: Partial<Layer>) => void;
+  onPreviewLayer?: (id: string, updates: Partial<Layer>) => void;
+  onRevertPreview?: (id: string, snapshot: Partial<Layer>) => void;
   isEmbedded?: boolean;
 }
 
@@ -48,22 +56,26 @@ const BLEND_MODES: { value: LayerBlendMode; label: string }[] = [
   { value: 'divide', label: 'Divide' },
 ];
 
-const COLOR_TAGS = [
-  { id: 'red', label: 'Red', color: '#ef4444' },
-  { id: 'orange', label: 'Orange', color: '#f97316' },
-  { id: 'yellow', label: 'Yellow', color: '#eab308' },
-  { id: 'green', label: 'Green', color: '#22c55e' },
-  { id: 'blue', label: 'Blue', color: '#3b82f6' },
-  { id: 'purple', label: 'Purple', color: '#a855f7' },
-  { id: 'pink', label: 'Pink', color: '#ec4899' },
-];
+const rgbToHex = (c?: { r: number; g: number; b: number }) =>
+  c
+    ? `#${c.r.toString(16).padStart(2, '0')}${c.g.toString(16).padStart(2, '0')}${c.b.toString(16).padStart(2, '0')}`
+    : '#3b82f6';
 
 export const LayerPropertiesDialogContent: React.FC<{
   layer: Layer;
   onClose: () => void;
   onUpdateLayer: (id: string, updates: Partial<Layer>) => void;
+  onPreviewLayer?: (id: string, updates: Partial<Layer>) => void;
+  onRevertPreview?: (id: string, snapshot: Partial<Layer>) => void;
   hideHeader?: boolean;
-}> = ({ layer, onClose, onUpdateLayer, hideHeader = false }) => {
+}> = ({
+  layer,
+  onClose,
+  onUpdateLayer,
+  onPreviewLayer,
+  onRevertPreview,
+  hideHeader = false,
+}) => {
   const initialOpacity = layer.opacity != null && !isNaN(layer.opacity) ? layer.opacity : 100;
   const [name, setName] = useState(layer.name);
   const [opacity, setOpacity] = useState(initialOpacity);
@@ -76,16 +88,45 @@ export const LayerPropertiesDialogContent: React.FC<{
   const [isReference, setIsReference] = useState(layer.isReference ?? false);
   const [colorTag, setColorTag] = useState<string | undefined>(layer.colorTag);
   const [userText, setUserText] = useState(layer.userData?.text || '');
-  const [userColor, setUserColor] = useState<string>(
-    layer.userData?.color
-      ? `#${layer.userData.color.r.toString(16).padStart(2, '0')}${layer.userData.color.g.toString(16).padStart(2, '0')}${layer.userData.color.b.toString(16).padStart(2, '0')}`
-      : '#000000'
-  );
+  const [userColor, setUserColor] = useState<string>(rgbToHex(layer.userData?.color));
   const [hasUserColor, setHasUserColor] = useState(!!layer.userData?.color);
 
+  const snapshotRef = useRef<{ id: string; data: Partial<Layer> }>({
+    id: layer.id,
+    data: {
+      opacity: initialOpacity,
+      blendMode: layer.blendMode || 'normal',
+      visible: layer.visible ?? true,
+      colorTag: layer.colorTag,
+    },
+  });
+  const isCommittedRef = useRef(false);
+  const hasPreviewedRef = useRef(false);
+  const onPreviewRef = useRef(onPreviewLayer);
+  const onRevertRef = useRef(onRevertPreview);
+
+  useLayoutEffect(() => {
+    onPreviewRef.current = onPreviewLayer;
+    onRevertRef.current = onRevertPreview;
+  });
+
+  // Reset form and capture a fresh snapshot only when switching to a different layer ID
   useEffect(() => {
+    const nextOpacity = layer.opacity != null && !isNaN(layer.opacity) ? layer.opacity : 100;
+    snapshotRef.current = {
+      id: layer.id,
+      data: {
+        opacity: nextOpacity,
+        blendMode: layer.blendMode || 'normal',
+        visible: layer.visible ?? true,
+        colorTag: layer.colorTag,
+      },
+    };
+    isCommittedRef.current = false;
+    hasPreviewedRef.current = false;
+
     setName(layer.name);
-    setOpacity(layer.opacity != null && !isNaN(layer.opacity) ? layer.opacity : 100);
+    setOpacity(nextOpacity);
     setBlendMode(layer.blendMode || 'normal');
     setVisible(layer.visible ?? true);
     setLocked(layer.locked ?? false);
@@ -95,16 +136,38 @@ export const LayerPropertiesDialogContent: React.FC<{
     setIsReference(layer.isReference ?? false);
     setColorTag(layer.colorTag);
     setUserText(layer.userData?.text || '');
-    setUserColor(
-      layer.userData?.color
-        ? `#${layer.userData.color.r.toString(16).padStart(2, '0')}${layer.userData.color.g.toString(16).padStart(2, '0')}${layer.userData.color.b.toString(16).padStart(2, '0')}`
-        : '#000000'
-    );
+    setUserColor(rgbToHex(layer.userData?.color));
     setHasUserColor(!!layer.userData?.color);
-  }, [layer]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layer.id]);
+
+  // Revert uncommitted live preview if unmounted via backdrop/Escape/click-away
+  useEffect(() => {
+    return () => {
+      if (!isCommittedRef.current && hasPreviewedRef.current) {
+        onRevertRef.current?.(snapshotRef.current.id, snapshotRef.current.data);
+      }
+    };
+  }, []);
+
+  const emitPreview = (patch: Partial<Layer>) => {
+    if (!onPreviewRef.current) return;
+    hasPreviewedRef.current = true;
+    onPreviewRef.current(layer.id, patch);
+  };
+
+  const handleCancel = () => {
+    if (!isCommittedRef.current && hasPreviewedRef.current) {
+      onRevertRef.current?.(snapshotRef.current.id, snapshotRef.current.data);
+      hasPreviewedRef.current = false;
+    }
+    onClose();
+  };
 
   const handleSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    isCommittedRef.current = true;
+    hasPreviewedRef.current = false;
 
     let hexColorObj = layer.userData?.color;
     if (hasUserColor && userColor) {
@@ -119,7 +182,7 @@ export const LayerPropertiesDialogContent: React.FC<{
 
     onUpdateLayer(layer.id, {
       name: name.trim() || layer.name,
-      opacity,
+      opacity: Math.max(0, Math.min(100, Math.round(opacity))),
       blendMode,
       visible,
       locked,
@@ -130,7 +193,7 @@ export const LayerPropertiesDialogContent: React.FC<{
       colorTag,
       userData: {
         ...layer.userData,
-        text: userText || undefined,
+        text: userText.trim() || undefined,
         color: hexColorObj,
       },
     });
@@ -154,7 +217,7 @@ export const LayerPropertiesDialogContent: React.FC<{
           handleSubmit();
         } else if (e.key === 'Escape' && !hideHeader) {
           e.preventDefault();
-          onClose();
+          handleCancel();
         }
       }}
     >
@@ -164,21 +227,23 @@ export const LayerPropertiesDialogContent: React.FC<{
             <Layers size={14} className="shrink-0 text-muted-foreground" />
             <span>Layer Properties</span>
           </div>
-          <button
+          <IconButton
             type="button"
-            onClick={onClose}
+            variant="ghost"
+            size="xs"
+            onClick={handleCancel}
             aria-label="Close layer properties"
-            className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             <X size={13} />
-          </button>
+          </IconButton>
         </div>
       )}
 
-      <div className="flex flex-col gap-2.5 text-xs">
+      <div className="flex flex-col gap-3 text-xs">
         <div className="grid grid-cols-3 items-center gap-2">
-          <label className="text-[11px] font-medium text-muted-foreground">Name</label>
+          <FieldLabel htmlFor="layer-name-input">Name</FieldLabel>
           <Input
+            id="layer-name-input"
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -189,12 +254,15 @@ export const LayerPropertiesDialogContent: React.FC<{
         </div>
 
         <div className="grid grid-cols-3 items-center gap-2">
-          <span className="text-[11px] font-medium text-muted-foreground">Blend Mode</span>
+          <FieldLabel>Blend Mode</FieldLabel>
           <div className="col-span-2">
             <StudioSelect<LayerBlendMode>
               value={blendMode}
               options={BLEND_MODES}
-              onValueChange={setBlendMode}
+              onValueChange={(next) => {
+                setBlendMode(next);
+                emitPreview({ blendMode: next });
+              }}
               className="h-7"
               aria-label="Layer blend mode"
             />
@@ -202,41 +270,48 @@ export const LayerPropertiesDialogContent: React.FC<{
         </div>
 
         <div className="grid grid-cols-3 items-center gap-2">
-          <span className="text-[11px] font-medium text-muted-foreground">Opacity</span>
+          <FieldLabel>Opacity</FieldLabel>
           <div className="col-span-2 flex items-center gap-2">
             <CustomSlider
               value={opacity}
-              onValueChange={setOpacity}
+              onValueChange={(val) => {
+                setOpacity(val);
+                emitPreview({ opacity: val });
+              }}
               min={0}
               max={100}
               step={1}
               aria-label="Layer opacity"
               className="flex-1"
             />
-            <Input
-              type="number"
+            <StudioNumberInput
+              value={opacity}
+              onValueChange={(val) => {
+                const clamped = Math.max(0, Math.min(100, Math.round(val)));
+                setOpacity(clamped);
+                emitPreview({ opacity: clamped });
+              }}
               min={0}
               max={100}
-              value={opacity}
+              suffix="%"
               aria-label="Opacity percentage"
-              onChange={(e) => {
-                const val = parseInt(e.target.value, 10);
-                setOpacity(isNaN(val) ? 100 : Math.max(0, Math.min(100, val)));
-              }}
-              className="h-7 w-12 shrink-0 px-1 text-center font-mono tabular-nums"
+              className="w-16 shrink-0"
+              inputClassName="px-1.5 text-right"
             />
-            <span className="font-mono text-[11px] text-muted-foreground">%</span>
           </div>
         </div>
 
         <div className="grid grid-cols-3 items-center gap-2">
-          <span className="text-[11px] font-medium text-muted-foreground">Color Tag</span>
+          <FieldLabel>Color Tag</FieldLabel>
           <div className="col-span-2 flex flex-wrap items-center gap-1.5">
             <button
               type="button"
-              onClick={() => setColorTag(undefined)}
+              onClick={() => {
+                setColorTag(undefined);
+                emitPreview({ colorTag: undefined });
+              }}
               className={cn(
-                'rounded-sm border px-1.5 py-0.5 text-[11px] transition-colors',
+                'rounded-sm border px-1.5 py-0.5 text-[11px] transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                 !colorTag
                   ? 'border-primary bg-primary/15 font-medium text-foreground'
                   : 'border-border text-muted-foreground hover:text-foreground'
@@ -244,19 +319,23 @@ export const LayerPropertiesDialogContent: React.FC<{
             >
               None
             </button>
-            {COLOR_TAGS.map((t) => (
+            {ENTITY_COLOR_TAGS.map((t) => (
               <button
                 key={t.id}
                 type="button"
                 aria-label={t.label}
-                onClick={() => setColorTag(t.id)}
+                aria-pressed={colorTag === t.id}
+                onClick={() => {
+                  setColorTag(t.id);
+                  emitPreview({ colorTag: t.id });
+                }}
                 className={cn(
-                  'relative flex h-4 w-4 items-center justify-center rounded-full border transition-transform',
+                  'relative flex h-4 w-4 items-center justify-center rounded-full border transition-transform cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                   colorTag === t.id
                     ? 'scale-110 border-foreground ring-2 ring-primary ring-offset-1 ring-offset-popover'
                     : 'border-border-strong hover:scale-105'
                 )}
-                style={{ backgroundColor: t.color }}
+                style={{ backgroundColor: t.hex }}
               >
                 {colorTag === t.id && <Check size={10} className="text-white" />}
               </button>
@@ -264,12 +343,20 @@ export const LayerPropertiesDialogContent: React.FC<{
           </div>
         </div>
 
-        <div className="flex flex-col gap-1.5 border-t border-border pt-2">
-          <span className="text-[11px] font-medium text-muted-foreground">Flags</span>
+        <div className="flex flex-col gap-1.5 border-t border-border pt-2.5">
+          <FieldLabel>Flags</FieldLabel>
           <div className="grid grid-cols-2 gap-1.5">
             {(
               [
-                { label: 'Visible', checked: visible, setter: setVisible, icon: <Eye size={12} /> },
+                {
+                  label: 'Visible',
+                  checked: visible,
+                  setter: (v: boolean) => {
+                    setVisible(v);
+                    emitPreview({ visible: v });
+                  },
+                  icon: <Eye size={12} />,
+                },
                 { label: 'Locked', checked: locked, setter: setLocked, icon: <Lock size={12} /> },
                 {
                   label: 'Lock Motion',
@@ -309,52 +396,46 @@ export const LayerPropertiesDialogContent: React.FC<{
           </div>
         </div>
 
-        <div className="flex flex-col gap-1.5 border-t border-border pt-2">
-          <div className="flex items-center justify-between text-[11px]">
-            <span className="flex items-center gap-1 font-medium text-muted-foreground">
+        <Field className="border-t border-border pt-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <FieldLabel htmlFor="layer-notes-input" className="flex items-center gap-1">
               <Palette size={12} />
               <span>User Notes</span>
-            </span>
-            <label className="flex cursor-pointer items-center gap-1.5">
-              <CustomCheckbox checked={hasUserColor} onCheckedChange={setHasUserColor} />
-              <span className="text-[11px] text-muted-foreground">Highlight</span>
+            </FieldLabel>
+            <div className="flex items-center gap-1.5">
+              <label className="flex cursor-pointer items-center gap-1.5">
+                <CustomCheckbox checked={hasUserColor} onCheckedChange={setHasUserColor} />
+                <span className="text-[11px] text-muted-foreground">Highlight</span>
+              </label>
               {hasUserColor && (
-                <input
-                  type="color"
+                <ColorSwatchField
                   value={userColor}
-                  onChange={(e) => setUserColor(e.target.value)}
-                  aria-label="User note highlight color"
-                  className="h-3.5 w-3.5 cursor-pointer rounded border-0 bg-transparent p-0"
+                  onChange={setUserColor}
+                  presets={ENTITY_COLOR_TAGS.map((t) => t.hex)}
+                  label="User note highlight color"
+                  className="h-6 px-1.5 text-[10px]"
                 />
               )}
-            </label>
+            </div>
           </div>
-          <Input
-            type="text"
+          <Textarea
+            id="layer-notes-input"
             value={userText}
             onChange={(e) => setUserText(e.target.value)}
-            placeholder="Notes or metadata..."
-            className="h-7"
+            placeholder="Notes or engine metadata..."
+            rows={2}
           />
-        </div>
+        </Field>
       </div>
 
-      <div className="mt-1 flex items-center justify-end gap-1.5 border-t border-border pt-2">
-        <button
-          type="button"
-          onClick={onClose}
-          className="h-7 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        >
+      <div className="mt-1 flex items-center justify-end gap-1.5 border-t border-border pt-2.5">
+        <Button type="button" variant="ghost" size="sm" onClick={handleCancel}>
           Cancel
-        </button>
-        <button
-          type="button"
-          onClick={() => handleSubmit()}
-          className="flex h-7 items-center gap-1 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-        >
+        </Button>
+        <Button type="button" variant="primary" size="sm" onClick={() => handleSubmit()}>
           <Check size={12} />
           <span>Save Layer</span>
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -365,6 +446,8 @@ export const LayerPropertiesDialog: React.FC<LayerPropertiesDialogProps> = ({
   onClose,
   layer,
   onUpdateLayer,
+  onPreviewLayer,
+  onRevertPreview,
   isEmbedded = false,
 }) => {
   if (isEmbedded) {
@@ -374,6 +457,8 @@ export const LayerPropertiesDialog: React.FC<LayerPropertiesDialogProps> = ({
         layer={layer}
         onClose={onClose}
         onUpdateLayer={onUpdateLayer}
+        onPreviewLayer={onPreviewLayer}
+        onRevertPreview={onRevertPreview}
       />
     );
   }
@@ -390,6 +475,8 @@ export const LayerPropertiesDialog: React.FC<LayerPropertiesDialogProps> = ({
           layer={layer}
           onClose={onClose}
           onUpdateLayer={onUpdateLayer}
+          onPreviewLayer={onPreviewLayer}
+          onRevertPreview={onRevertPreview}
           hideHeader
         />
       )}

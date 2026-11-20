@@ -1,9 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { Slice, SliceKey, ProjectState } from '../types';
+import { ENTITY_COLOR_TAGS } from '../constants';
 import { Crop, Plus, Trash2, Shield, Crosshair, Check, Layers } from './Icons';
 import { ModalShell } from './ui/dialog';
-import { CustomCheckbox } from './ui/checkbox';
+import { Switch } from './ui/switch';
 import { Input } from './ui/input';
+import { Textarea } from './ui/textarea';
+import { Button, IconButton } from './ui/button';
+import { Field, FieldLabel } from './ui/field';
+import { StudioNumberInput } from './ui/number-input';
+import { ColorSwatchField } from './ui/color-picker';
+import { ScrollArea } from './ui/scroll-area';
 import { cn } from '../lib/utils';
 
 interface SlicesDialogProps {
@@ -11,6 +18,8 @@ interface SlicesDialogProps {
   onClose: () => void;
   state: ProjectState;
   onUpdateSlices: (slices: Slice[]) => void;
+  onPreviewSlices?: (slices: Slice[]) => void;
+  onRevertPreview?: (snapshot: Slice[]) => void;
 }
 
 export const SlicesDialog: React.FC<SlicesDialogProps> = ({
@@ -18,73 +27,101 @@ export const SlicesDialog: React.FC<SlicesDialogProps> = ({
   onClose,
   state,
   onUpdateSlices,
+  onPreviewSlices,
+  onRevertPreview,
 }) => {
   const [slices, setSlices] = useState<Slice[]>(state.slices || []);
-  const [editingSlice, setEditingSlice] = useState<Slice | null>(null);
+  const [selectedSliceId, setSelectedSliceId] = useState<string | null>(null);
 
-  const [name, setName] = useState('');
-  const [color, setColor] = useState('#ef4444');
-  const [x, setX] = useState(0);
-  const [y, setY] = useState(0);
-  const [w, setW] = useState(16);
-  const [h, setH] = useState(16);
+  const wasOpenRef = useRef(false);
+  const snapshotRef = useRef<Slice[]>(state.slices || []);
+  const isCommittedRef = useRef(false);
+  const hasPreviewedRef = useRef(false);
+  const onPreviewRef = useRef(onPreviewSlices);
+  const onRevertRef = useRef(onRevertPreview);
 
-  const [useCenter, setUseCenter] = useState(false);
-  const [cx, setCx] = useState(4);
-  const [cy, setCy] = useState(4);
-  const [cw, setCw] = useState(8);
-  const [ch, setCh] = useState(8);
-
-  const [usePivot, setUsePivot] = useState(false);
-  const [px, setPx] = useState(8);
-  const [py, setPy] = useState(8);
-
-  const [userText, setUserText] = useState('');
+  useLayoutEffect(() => {
+    onPreviewRef.current = onPreviewSlices;
+    onRevertRef.current = onRevertPreview;
+  });
 
   useEffect(() => {
-    if (!isOpen) return;
-    setSlices(state.slices || []);
-    setEditingSlice(null);
+    const justOpened = isOpen && !wasOpenRef.current;
+    const justClosed = !isOpen && wasOpenRef.current;
+    wasOpenRef.current = isOpen;
+
+    if (justOpened) {
+      const initial = (state.slices || []).map((s) => ({
+        ...s,
+        keys: s.keys.map((k) => ({
+          ...k,
+          center: k.center ? { ...k.center } : undefined,
+          pivot: k.pivot ? { ...k.pivot } : undefined,
+        })),
+        userData: s.userData ? { ...s.userData } : undefined,
+      }));
+      snapshotRef.current = initial;
+      isCommittedRef.current = false;
+      hasPreviewedRef.current = false;
+      setSlices(initial);
+      setSelectedSliceId(initial[0]?.id ?? null);
+    } else if (justClosed) {
+      if (!isCommittedRef.current && hasPreviewedRef.current) {
+        onRevertRef.current?.(snapshotRef.current);
+      }
+      hasPreviewedRef.current = false;
+    }
   }, [isOpen, state.slices]);
 
-  const startEdit = (s: Slice) => {
-    setEditingSlice(s);
-    setName(s.name);
-    setColor(s.color || '#ef4444');
-    const key = s.keys[0] || { x: 0, y: 0, w: 16, h: 16 };
-    setX(key.x);
-    setY(key.y);
-    setW(key.w);
-    setH(key.h);
+  useEffect(() => {
+    return () => {
+      if (!isCommittedRef.current && hasPreviewedRef.current) {
+        onRevertRef.current?.(snapshotRef.current);
+      }
+    };
+  }, []);
 
-    if (key.center) {
-      setUseCenter(true);
-      setCx(key.center.x);
-      setCy(key.center.y);
-      setCw(key.center.w);
-      setCh(key.center.h);
-    } else {
-      setUseCenter(false);
-      setCx(2);
-      setCy(2);
-      setCw(Math.max(1, key.w - 4));
-      setCh(Math.max(1, key.h - 4));
+  const commitLocalSlices = (next: Slice[]) => {
+    setSlices(next);
+    if (onPreviewRef.current) {
+      hasPreviewedRef.current = true;
+      onPreviewRef.current(next);
     }
-
-    if (key.pivot) {
-      setUsePivot(true);
-      setPx(key.pivot.x);
-      setPy(key.pivot.y);
-    } else {
-      setUsePivot(false);
-      setPx(Math.floor(key.w / 2));
-      setPy(Math.floor(key.h / 2));
-    }
-
-    setUserText(s.userData?.text || '');
   };
 
-  const handleStartAdd = () => {
+  const activeSlice = slices.find((s) => s.id === selectedSliceId) ?? null;
+  const activeKey: SliceKey = activeSlice?.keys[0] ?? {
+    frameIndex: state.activeFrameIndex,
+    x: 0,
+    y: 0,
+    w: 16,
+    h: 16,
+  };
+
+  const updateActiveSlice = (updater: (slice: Slice) => Slice) => {
+    if (!activeSlice) return;
+    const next = slices.map((s) => (s.id === activeSlice.id ? updater(s) : s));
+    commitLocalSlices(next);
+  };
+
+  const updateActiveKey = (patch: Partial<SliceKey>) => {
+    updateActiveSlice((s) => {
+      const currentKey = s.keys[0] ?? {
+        frameIndex: state.activeFrameIndex,
+        x: 0,
+        y: 0,
+        w: 16,
+        h: 16,
+      };
+      const updatedKey: SliceKey = {
+        ...currentKey,
+        ...patch,
+      };
+      return { ...s, keys: [updatedKey, ...s.keys.slice(1)] };
+    });
+  };
+
+  const handleAddSlice = () => {
     const canvasWidth = state?.width || 16;
     const canvasHeight = state?.height || 16;
     const activeIdx = state?.activeFrameIndex || 0;
@@ -102,95 +139,54 @@ export const SlicesDialog: React.FC<SlicesDialogProps> = ({
         },
       ],
     };
-    startEdit(newSlice);
-  };
-
-  const buildUpdatedSlices = (): { nextSlices: Slice[]; updatedSlice: Slice | null } => {
-    if (!editingSlice) return { nextSlices: slices, updatedSlice: null };
-
-    const key: SliceKey = {
-      frameIndex: state.activeFrameIndex,
-      x: Math.max(0, isNaN(x) ? 0 : x),
-      y: Math.max(0, isNaN(y) ? 0 : y),
-      w: Math.max(1, isNaN(w) ? 1 : w),
-      h: Math.max(1, isNaN(h) ? 1 : h),
-      center: useCenter
-        ? {
-            x: isNaN(cx) ? 0 : cx,
-            y: isNaN(cy) ? 0 : cy,
-            w: Math.max(1, isNaN(cw) ? 1 : cw),
-            h: Math.max(1, isNaN(ch) ? 1 : ch),
-          }
-        : undefined,
-      pivot: usePivot
-        ? {
-            x: isNaN(px) ? 0 : px,
-            y: isNaN(py) ? 0 : py,
-          }
-        : undefined,
-    };
-
-    const updatedSlice: Slice = {
-      ...editingSlice,
-      name: name.trim() || 'Slice',
-      color,
-      keys: [key],
-      userData: userText ? { text: userText } : undefined,
-    };
-
-    const exists = slices.some((s) => s.id === updatedSlice.id);
-    const nextSlices = exists
-      ? slices.map((s) => (s.id === updatedSlice.id ? updatedSlice : s))
-      : [...slices, updatedSlice];
-
-    return { nextSlices, updatedSlice };
-  };
-
-  const handleSaveSlice = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const { nextSlices, updatedSlice } = buildUpdatedSlices();
-    if (!updatedSlice) return;
-    setSlices(nextSlices);
-    setEditingSlice(updatedSlice);
+    commitLocalSlices([...slices, newSlice]);
+    setSelectedSliceId(newSlice.id);
   };
 
   const handleDeleteSlice = (id: string) => {
-    const newSlices = slices.filter((s) => s.id !== id);
-    setSlices(newSlices);
-    if (editingSlice?.id === id) setEditingSlice(null);
+    const next = slices.filter((s) => s.id !== id);
+    commitLocalSlices(next);
+    if (selectedSliceId === id) {
+      setSelectedSliceId(next[0]?.id ?? null);
+    }
+  };
+
+  const handleCancel = () => {
+    if (!isCommittedRef.current && hasPreviewedRef.current) {
+      onRevertRef.current?.(snapshotRef.current);
+      hasPreviewedRef.current = false;
+    }
+    onClose();
   };
 
   const handleApply = () => {
-    const { nextSlices } = buildUpdatedSlices();
-    onUpdateSlices(nextSlices);
+    isCommittedRef.current = true;
+    hasPreviewedRef.current = false;
+    const cleaned = slices.map((s, idx) => ({
+      ...s,
+      name: s.name.trim() || `Slice ${idx + 1}`,
+    }));
+    onUpdateSlices(cleaned);
     onClose();
   };
 
   return (
     <ModalShell
       open={isOpen}
-      onClose={onClose}
+      onClose={handleCancel}
       title="Slices Manager"
       subtitle="UI regions, 9-patch borders, and pivot points"
       maxWidthClassName="max-w-2xl"
       bodyClassName="flex flex-col gap-4 md:flex-row"
       footer={
         <>
-          <button
-            type="button"
-            onClick={onClose}
-            className="h-7 rounded-md px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
+          <Button type="button" variant="ghost" size="sm" onClick={handleCancel}>
             Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleApply}
-            className="flex h-7 items-center gap-1.5 rounded-md bg-primary px-3.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-          >
+          </Button>
+          <Button type="button" variant="primary" size="sm" onClick={handleApply}>
             <Check size={13} />
-            <span>Apply Slices</span>
-          </button>
+            <span>Save Slices</span>
+          </Button>
         </>
       }
     >
@@ -201,211 +197,266 @@ export const SlicesDialog: React.FC<SlicesDialogProps> = ({
             <Layers size={13} className="text-muted-foreground" />
             <span className="tabular-nums">Slices ({slices.length})</span>
           </span>
-          <button
-            type="button"
-            onClick={handleStartAdd}
-            className="flex h-7 items-center gap-1 rounded-md bg-primary px-2.5 text-[11px] font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-          >
+          <Button type="button" variant="primary" size="xs" onClick={handleAddSlice}>
             <Plus size={12} />
             <span>New</span>
-          </button>
+          </Button>
         </div>
 
-        <div className="flex max-h-72 flex-col gap-1.5 overflow-y-auto pr-1">
-          {slices.length === 0 ? (
-            <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border bg-background/40 px-3 py-8 text-center">
-              <Crop size={22} className="mb-2 text-muted-foreground/50" />
-              <p className="text-xs font-medium text-muted-foreground">No slices created</p>
-              <p className="mt-0.5 text-[11px] text-muted-foreground/80">
-                Click New to define a region
-              </p>
-            </div>
-          ) : (
-            slices.map((s) => {
-              const isSelected = editingSlice?.id === s.id;
-              const key = s.keys[0] || { x: 0, y: 0, w: 0, h: 0 };
-              return (
-                <div
-                  key={s.id}
-                  onClick={() => startEdit(s)}
-                  className={cn(
-                    'group flex cursor-pointer items-center justify-between rounded-lg border px-2.5 py-2 transition-colors',
-                    isSelected
-                      ? 'border-primary/70 bg-primary/10 text-foreground'
-                      : 'border-border bg-background/50 text-foreground hover:border-border-strong hover:bg-accent/50'
-                  )}
-                >
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span
-                      className="h-3 w-3 shrink-0 rounded-full border border-border-strong"
-                      style={{ backgroundColor: s.color || '#ef4444' }}
-                    />
-                    <div className="flex min-w-0 flex-col">
-                      <span className="truncate text-xs font-medium">{s.name}</span>
-                      <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
-                        {key.w}×{key.h} at ({key.x}, {key.y})
-                      </span>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    aria-label={`Delete ${s.name}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDeleteSlice(s.id);
+        <ScrollArea className="max-h-72 pr-1">
+          <div className="flex flex-col gap-1.5">
+            {slices.length === 0 ? (
+              <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border bg-background/40 px-3 py-8 text-center">
+                <Crop size={22} className="mb-2 text-muted-foreground/50" />
+                <p className="text-xs font-medium text-muted-foreground">No slices created</p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground/80">
+                  Click New to define a region
+                </p>
+              </div>
+            ) : (
+              slices.map((s) => {
+                const isSelected = selectedSliceId === s.id;
+                const key = s.keys[0] || { x: 0, y: 0, w: 0, h: 0 };
+                return (
+                  <div
+                    key={s.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelectedSliceId(s.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setSelectedSliceId(s.id);
+                      }
                     }}
-                    className="rounded-sm p-1 text-muted-foreground opacity-70 transition-colors hover:bg-destructive/15 hover:text-destructive group-hover:opacity-100"
+                    className={cn(
+                      'group flex cursor-pointer items-center justify-between rounded-lg border px-2.5 py-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                      isSelected
+                        ? 'border-primary/70 bg-primary/10 text-foreground'
+                        : 'border-border bg-background/50 text-foreground hover:border-border-strong hover:bg-accent/50'
+                    )}
                   >
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-              );
-            })
-          )}
-        </div>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span
+                        className="h-3 w-3 shrink-0 rounded-full border border-border-strong"
+                        style={{ backgroundColor: s.color || '#ef4444' }}
+                      />
+                      <div className="flex min-w-0 flex-col">
+                        <span className="truncate text-xs font-medium">{s.name || 'Slice'}</span>
+                        <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+                          {key.w}×{key.h} at ({key.x}, {key.y})
+                        </span>
+                      </div>
+                    </div>
+                    <IconButton
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      aria-label={`Delete ${s.name}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteSlice(s.id);
+                      }}
+                      className="opacity-70 hover:bg-destructive/15 hover:text-destructive group-hover:opacity-100"
+                    >
+                      <Trash2 size={13} />
+                    </IconButton>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </ScrollArea>
       </div>
 
-      {/* Active Slice Form */}
+      {/* Active Slice Inspector (edits auto-sync to working slices list) */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {editingSlice ? (
-          <form onSubmit={handleSaveSlice} className="flex flex-col gap-3">
+        {activeSlice ? (
+          <div className="flex flex-col gap-3">
             <div className="grid grid-cols-3 gap-2.5">
-              <div className="col-span-2 flex flex-col gap-1">
-                <label className="text-[11px] font-medium text-muted-foreground">Slice Name</label>
+              <Field className="col-span-2">
+                <FieldLabel htmlFor="slice-name-input">Slice Name</FieldLabel>
                 <Input
+                  id="slice-name-input"
                   type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  value={activeSlice.name}
+                  onChange={(e) => updateActiveSlice((s) => ({ ...s, name: e.target.value }))}
                   placeholder="Slice name"
                 />
+              </Field>
+              <Field>
+                <FieldLabel>Color</FieldLabel>
+                <ColorSwatchField
+                  value={activeSlice.color || '#ef4444'}
+                  onChange={(hex) => updateActiveSlice((s) => ({ ...s, color: hex }))}
+                  presets={ENTITY_COLOR_TAGS.map((t) => t.hex)}
+                  label="Slice color"
+                  className="w-full"
+                />
+              </Field>
+            </div>
+
+            <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-background/50 p-2.5">
+              <FieldLabel>Bounds (px)</FieldLabel>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <StudioNumberInput
+                  value={activeKey.x}
+                  onValueChange={(v) => updateActiveKey({ x: Math.max(0, Math.round(v)) })}
+                  min={0}
+                  max={state.width}
+                  prefix="X"
+                  aria-label="Slice X"
+                />
+                <StudioNumberInput
+                  value={activeKey.y}
+                  onValueChange={(v) => updateActiveKey({ y: Math.max(0, Math.round(v)) })}
+                  min={0}
+                  max={state.height}
+                  prefix="Y"
+                  aria-label="Slice Y"
+                />
+                <StudioNumberInput
+                  value={activeKey.w}
+                  onValueChange={(v) => updateActiveKey({ w: Math.max(1, Math.round(v)) })}
+                  min={1}
+                  max={state.width}
+                  prefix="W"
+                  aria-label="Slice Width"
+                />
+                <StudioNumberInput
+                  value={activeKey.h}
+                  onValueChange={(v) => updateActiveKey({ h: Math.max(1, Math.round(v)) })}
+                  min={1}
+                  max={state.height}
+                  prefix="H"
+                  aria-label="Slice Height"
+                />
               </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-[11px] font-medium text-muted-foreground">Color</label>
-                <label className="flex h-8 cursor-pointer items-center gap-2 rounded-md border border-border bg-background px-2">
-                  <input
-                    type="color"
-                    value={color}
-                    onChange={(e) => setColor(e.target.value)}
-                    aria-label="Slice color"
-                    className="h-4 w-4 shrink-0 cursor-pointer border-0 bg-transparent p-0"
+            </div>
+
+            <div className="flex flex-col gap-2 rounded-lg border border-border bg-background/50 p-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                  <Shield size={12} className="shrink-0 text-muted-foreground" />
+                  <span>9-Patch Center Slice</span>
+                </span>
+                <Switch
+                  checked={!!activeKey.center}
+                  onCheckedChange={(checked) =>
+                    updateActiveKey({
+                      center: checked
+                        ? {
+                            x: 2,
+                            y: 2,
+                            w: Math.max(1, activeKey.w - 4),
+                            h: Math.max(1, activeKey.h - 4),
+                          }
+                        : undefined,
+                    })
+                  }
+                  aria-label="Toggle 9-patch center slice"
+                />
+              </div>
+              {activeKey.center && (
+                <div className="grid grid-cols-2 gap-2 border-t border-border pt-2 sm:grid-cols-4">
+                  <StudioNumberInput
+                    value={activeKey.center.x}
+                    onValueChange={(v) =>
+                      updateActiveKey({ center: { ...activeKey.center!, x: Math.round(v) } })
+                    }
+                    prefix="CX"
+                    aria-label="Center slice X"
                   />
-                  <span className="truncate font-mono text-[11px] uppercase text-muted-foreground">
-                    {color}
-                  </span>
-                </label>
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-background/50 p-2.5">
-              <span className="text-[11px] font-medium text-muted-foreground">Bounds (px)</span>
-              <div className="grid grid-cols-4 gap-2">
-                {(
-                  [
-                    { label: 'X', value: x, setter: setX },
-                    { label: 'Y', value: y, setter: setY },
-                    { label: 'W', value: w, setter: setW },
-                    { label: 'H', value: h, setter: setH },
-                  ] as const
-                ).map((field) => (
-                  <label key={field.label} className="flex flex-col gap-1">
-                    <span className="font-mono text-[11px] text-muted-foreground">
-                      {field.label}
-                    </span>
-                    <Input
-                      type="number"
-                      value={isNaN(field.value) ? '' : field.value}
-                      onChange={(e) => field.setter(parseInt(e.target.value, 10))}
-                      className="h-7 px-1.5 text-center font-mono tabular-nums"
-                    />
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-background/50 p-2.5">
-              <label className="flex cursor-pointer items-center gap-2">
-                <CustomCheckbox checked={useCenter} onCheckedChange={setUseCenter} />
-                <Shield size={12} className="shrink-0 text-muted-foreground" />
-                <span className="text-xs font-medium text-foreground">9-Patch Center Slice</span>
-              </label>
-              {useCenter && (
-                <div className="grid grid-cols-4 gap-2 border-t border-border pt-2">
-                  {(
-                    [
-                      { label: 'CX', value: cx, setter: setCx },
-                      { label: 'CY', value: cy, setter: setCy },
-                      { label: 'CW', value: cw, setter: setCw },
-                      { label: 'CH', value: ch, setter: setCh },
-                    ] as const
-                  ).map((field) => (
-                    <label key={field.label} className="flex flex-col gap-1">
-                      <span className="font-mono text-[11px] text-muted-foreground">
-                        {field.label}
-                      </span>
-                      <Input
-                        type="number"
-                        value={isNaN(field.value) ? '' : field.value}
-                        onChange={(e) => field.setter(parseInt(e.target.value, 10))}
-                        className="h-7 px-1.5 text-center font-mono tabular-nums"
-                      />
-                    </label>
-                  ))}
+                  <StudioNumberInput
+                    value={activeKey.center.y}
+                    onValueChange={(v) =>
+                      updateActiveKey({ center: { ...activeKey.center!, y: Math.round(v) } })
+                    }
+                    prefix="CY"
+                    aria-label="Center slice Y"
+                  />
+                  <StudioNumberInput
+                    value={activeKey.center.w}
+                    onValueChange={(v) =>
+                      updateActiveKey({
+                        center: { ...activeKey.center!, w: Math.max(1, Math.round(v)) },
+                      })
+                    }
+                    min={1}
+                    prefix="CW"
+                    aria-label="Center slice width"
+                  />
+                  <StudioNumberInput
+                    value={activeKey.center.h}
+                    onValueChange={(v) =>
+                      updateActiveKey({
+                        center: { ...activeKey.center!, h: Math.max(1, Math.round(v)) },
+                      })
+                    }
+                    min={1}
+                    prefix="CH"
+                    aria-label="Center slice height"
+                  />
                 </div>
               )}
             </div>
 
-            <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-background/50 p-2.5">
-              <label className="flex cursor-pointer items-center gap-2">
-                <CustomCheckbox checked={usePivot} onCheckedChange={setUsePivot} />
-                <Crosshair size={12} className="shrink-0 text-muted-foreground" />
-                <span className="text-xs font-medium text-foreground">Pivot Position</span>
-              </label>
-              {usePivot && (
+            <div className="flex flex-col gap-2 rounded-lg border border-border bg-background/50 p-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                  <Crosshair size={12} className="shrink-0 text-muted-foreground" />
+                  <span>Pivot Position</span>
+                </span>
+                <Switch
+                  checked={!!activeKey.pivot}
+                  onCheckedChange={(checked) =>
+                    updateActiveKey({
+                      pivot: checked
+                        ? { x: Math.floor(activeKey.w / 2), y: Math.floor(activeKey.h / 2) }
+                        : undefined,
+                    })
+                  }
+                  aria-label="Toggle pivot position"
+                />
+              </div>
+              {activeKey.pivot && (
                 <div className="grid grid-cols-2 gap-2 border-t border-border pt-2">
-                  <label className="flex flex-col gap-1">
-                    <span className="font-mono text-[11px] text-muted-foreground">PX</span>
-                    <Input
-                      type="number"
-                      value={isNaN(px) ? '' : px}
-                      onChange={(e) => setPx(parseInt(e.target.value, 10))}
-                      className="h-7 px-1.5 text-center font-mono tabular-nums"
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1">
-                    <span className="font-mono text-[11px] text-muted-foreground">PY</span>
-                    <Input
-                      type="number"
-                      value={isNaN(py) ? '' : py}
-                      onChange={(e) => setPy(parseInt(e.target.value, 10))}
-                      className="h-7 px-1.5 text-center font-mono tabular-nums"
-                    />
-                  </label>
+                  <StudioNumberInput
+                    value={activeKey.pivot.x}
+                    onValueChange={(v) =>
+                      updateActiveKey({ pivot: { ...activeKey.pivot!, x: Math.round(v) } })
+                    }
+                    prefix="PX"
+                    aria-label="Pivot X"
+                  />
+                  <StudioNumberInput
+                    value={activeKey.pivot.y}
+                    onValueChange={(v) =>
+                      updateActiveKey({ pivot: { ...activeKey.pivot!, y: Math.round(v) } })
+                    }
+                    prefix="PY"
+                    aria-label="Pivot Y"
+                  />
                 </div>
               )}
             </div>
 
-            <div className="flex flex-col gap-1">
-              <label className="text-[11px] font-medium text-muted-foreground">
-                Metadata / Notes
-              </label>
-              <Input
-                type="text"
-                value={userText}
-                onChange={(e) => setUserText(e.target.value)}
+            <Field>
+              <FieldLabel htmlFor="slice-notes-input">Metadata / Notes</FieldLabel>
+              <Textarea
+                id="slice-notes-input"
+                value={activeSlice.userData?.text || ''}
+                onChange={(e) =>
+                  updateActiveSlice((s) => ({
+                    ...s,
+                    userData: e.target.value ? { ...s.userData, text: e.target.value } : undefined,
+                  }))
+                }
                 placeholder="Engine tag or notes..."
+                rows={2}
               />
-            </div>
-
-            <div className="flex justify-end pt-1">
-              <button
-                type="submit"
-                className="flex h-7 items-center gap-1.5 rounded-md border border-border bg-secondary px-3 text-xs font-medium text-secondary-foreground transition-colors hover:bg-accent"
-              >
-                <Check size={12} />
-                <span>Update Slice</span>
-              </button>
-            </div>
-          </form>
+            </Field>
+          </div>
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center rounded-lg border border-dashed border-border bg-background/40 p-6 text-center">
             <Crop size={24} className="mb-2 text-muted-foreground/45" />

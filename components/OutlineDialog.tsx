@@ -35,9 +35,13 @@ import {
   SegmentedControlItem,
 } from './ui/segmented-control';
 import { CustomSlider } from './ui/slider';
-import { CustomCheckbox } from './ui/checkbox';
+import { Switch } from './ui/switch';
 import { StudioSelect } from './ui/select';
-import { Input } from './ui/input';
+import { Button, IconButton } from './ui/button';
+import { Toggle } from './ui/toggle';
+import { Field, FieldLabel } from './ui/field';
+import { StudioNumberInput } from './ui/number-input';
+import { ColorSwatchField } from './ui/color-picker';
 import { cn } from '../lib/utils';
 
 interface OutlineDialogProps {
@@ -162,8 +166,7 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
   };
 
   const toggleDirection = (dir: keyof OutlineMatrix) => {
-    const updated = { ...matrix, [dir]: !matrix[dir] };
-    setMatrix(updated);
+    setMatrix({ ...matrix, [dir]: !matrix[dir] });
     setShapePreset('custom');
   };
 
@@ -214,7 +217,7 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
 
   const hasSelection = !!state.selection && state.selection.size > 0;
   const isAnimated = state.frames.length > 1;
-  const paletteSwatches = state.palette.slice(0, 8);
+  const paletteSwatches = state.palette.slice(0, 12);
 
   const directions: { key: keyof OutlineMatrix; label: string; icon: React.ReactNode }[] = [
     { key: 'nw', label: 'North-West', icon: <ArrowUpLeft size={12} /> },
@@ -241,20 +244,20 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
         <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
           <DialogHeader>
             <DialogTitle>Outline FX</DialogTitle>
-            <button
+            <IconButton
               type="button"
+              variant="ghost"
+              size="xs"
               onClick={handleCancel}
               aria-label="Close Outline FX"
-              className="flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <X size={14} />
-            </button>
+            </IconButton>
           </DialogHeader>
 
-          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4 text-xs">
-            {/* Placement */}
-            <div className="flex flex-col gap-1.5">
-              <span className="text-[11px] font-medium text-muted-foreground">Placement</span>
+          <div className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto p-4 text-xs">
+            <Field>
+              <FieldLabel>Placement</FieldLabel>
               <SegmentedControl<OutlinePlacement>
                 value={placement}
                 onValueChange={(next) => next && setPlacement(next as OutlinePlacement)}
@@ -265,22 +268,15 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
                 <SegmentedControlItem value="inside">Inside</SegmentedControlItem>
                 <SegmentedControlItem value="both">Both</SegmentedControlItem>
               </SegmentedControl>
-            </div>
+            </Field>
 
-            {/* Shape & Direction */}
-            <div className="flex flex-col gap-1.5">
+            <Field>
               <div className="flex items-center justify-between">
-                <span className="text-[11px] font-medium text-muted-foreground">
-                  Shape & Direction
-                </span>
-                <button
-                  type="button"
-                  onClick={handleInvertMatrix}
-                  className="flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                >
+                <FieldLabel>Shape & Direction</FieldLabel>
+                <Button type="button" variant="ghost" size="xs" onClick={handleInvertMatrix}>
                   <RotateCcw size={10} />
                   <span>Invert</span>
-                </button>
+                </Button>
               </div>
 
               <div className="grid grid-cols-4 gap-1 rounded-md border border-border bg-background p-0.5">
@@ -297,7 +293,7 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
                     type="button"
                     onClick={() => handlePresetSelect(preset.id)}
                     className={cn(
-                      'h-6 rounded-sm text-[11px] font-medium transition-colors',
+                      'h-6 rounded-sm text-[11px] font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                       shapePreset === preset.id
                         ? 'border border-border-strong bg-accent text-foreground'
                         : 'text-muted-foreground hover:text-foreground'
@@ -311,50 +307,41 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
               <div className="flex justify-center pt-1">
                 <div className="grid h-24 w-24 grid-cols-3 gap-1 rounded-md border border-border bg-background p-1">
                   {directions.map((d) => (
-                    <button
+                    <Toggle
                       key={d.key}
-                      type="button"
+                      pressed={matrix[d.key]}
+                      onPressedChange={() => toggleDirection(d.key)}
+                      variant="solid"
+                      size="xs"
                       aria-label={d.label}
-                      aria-pressed={matrix[d.key]}
-                      onClick={() => toggleDirection(d.key)}
-                      className={cn(
-                        'flex items-center justify-center rounded-sm transition-colors',
-                        matrix[d.key]
-                          ? 'bg-primary text-primary-foreground'
-                          : 'border border-border bg-card text-muted-foreground hover:text-foreground'
-                      )}
+                      className="h-full w-full p-0 border border-border data-[pressed]:border-primary"
                     >
                       {d.icon}
-                    </button>
+                    </Toggle>
                   ))}
                   <div className="pointer-events-none flex items-center justify-center rounded-sm border border-border bg-muted">
                     <span className="h-1.5 w-1.5 rounded-full bg-foreground/50" />
                   </div>
                   {directionsRight.map((d) => (
-                    <button
+                    <Toggle
                       key={d.key}
-                      type="button"
+                      pressed={matrix[d.key]}
+                      onPressedChange={() => toggleDirection(d.key)}
+                      variant="solid"
+                      size="xs"
                       aria-label={d.label}
-                      aria-pressed={matrix[d.key]}
-                      onClick={() => toggleDirection(d.key)}
-                      className={cn(
-                        'flex items-center justify-center rounded-sm transition-colors',
-                        matrix[d.key]
-                          ? 'bg-primary text-primary-foreground'
-                          : 'border border-border bg-card text-muted-foreground hover:text-foreground'
-                      )}
+                      className="h-full w-full p-0 border border-border data-[pressed]:border-primary"
                     >
                       {d.icon}
-                    </button>
+                    </Toggle>
                   ))}
                 </div>
               </div>
-            </div>
+            </Field>
 
-            {/* Thickness */}
-            <div className="flex flex-col gap-1">
+            <Field>
               <div className="flex items-center justify-between">
-                <span className="text-[11px] font-medium text-muted-foreground">Thickness</span>
+                <FieldLabel>Thickness</FieldLabel>
                 <span className="font-mono text-[11px] text-foreground tabular-nums">
                   {thickness} px
                 </span>
@@ -369,76 +356,42 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
                   aria-label="Outline thickness"
                   className="flex-1"
                 />
-                <Input
-                  type="number"
+                <StudioNumberInput
+                  value={thickness}
+                  onValueChange={setThickness}
                   min={1}
                   max={8}
-                  value={thickness}
                   aria-label="Thickness pixels"
-                  onChange={(e) =>
-                    setThickness(Math.max(1, Math.min(8, parseInt(e.target.value, 10) || 1)))
-                  }
-                  className="h-7 w-12 px-1 text-center font-mono tabular-nums"
+                  className="w-14 shrink-0"
+                  inputClassName="text-center px-1"
                 />
               </div>
-            </div>
+            </Field>
 
-            {/* Color */}
-            <div className="flex flex-col gap-1.5">
+            <Field>
               <div className="flex items-center justify-between">
-                <span className="text-[11px] font-medium text-muted-foreground">Color</span>
-                <button
+                <FieldLabel>Outline Color</FieldLabel>
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="xs"
                   onClick={() => setOutlineColor(state.primaryColor)}
-                  className="text-[11px] text-primary hover:underline"
+                  className="text-primary hover:text-primary"
                 >
                   Use Active
-                </button>
+                </Button>
               </div>
-              <div className="flex items-center gap-1.5">
-                <div className="flex flex-1 flex-wrap items-center gap-1">
-                  {paletteSwatches.map((c, i) => (
-                    <button
-                      key={`${c}-${i}`}
-                      type="button"
-                      aria-label={`Color ${c}`}
-                      onClick={() => setOutlineColor(c)}
-                      className={cn(
-                        'h-4 w-4 shrink-0 rounded-full border transition-transform',
-                        outlineColor.toLowerCase() === c.toLowerCase()
-                          ? 'scale-110 border-foreground ring-2 ring-primary ring-offset-1 ring-offset-card'
-                          : 'border-border-strong hover:scale-105'
-                      )}
-                      style={{ backgroundColor: c }}
-                    />
-                  ))}
-                  <label
-                    className="relative flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-full border border-dashed border-border-strong text-[11px] text-muted-foreground hover:border-foreground"
-                    title="Custom color"
-                  >
-                    <input
-                      type="color"
-                      value={outlineColor}
-                      onChange={(e) => setOutlineColor(e.target.value)}
-                      aria-label="Custom outline color"
-                      className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-                    />
-                    +
-                  </label>
-                </div>
-                <Input
-                  type="text"
-                  value={outlineColor}
-                  aria-label="Outline hex color"
-                  onChange={(e) => setOutlineColor(e.target.value)}
-                  className="h-7 w-20 shrink-0 px-1.5 text-center font-mono text-[11px] uppercase"
-                />
-              </div>
-            </div>
+              <ColorSwatchField
+                value={outlineColor}
+                onChange={setOutlineColor}
+                presets={paletteSwatches}
+                label="Choose outline color"
+                className="w-full"
+              />
+            </Field>
 
-            {/* Background */}
             <div className="flex items-center justify-between gap-2">
-              <span className="text-[11px] font-medium text-muted-foreground">Background</span>
+              <FieldLabel>Background</FieldLabel>
               <div className="flex items-center gap-1.5">
                 <StudioSelect<'transparent' | 'color'>
                   value={bgMode}
@@ -448,23 +401,19 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
                   aria-label="Outline background mode"
                 />
                 {bgMode === 'color' && (
-                  <label className="relative h-7 w-7 shrink-0 cursor-pointer overflow-hidden rounded-md border border-border-strong">
-                    <input
-                      type="color"
-                      value={bgColor}
-                      onChange={(e) => setBgColor(e.target.value)}
-                      aria-label="Outline background color"
-                      className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-                    />
-                    <span className="block h-full w-full" style={{ backgroundColor: bgColor }} />
-                  </label>
+                  <ColorSwatchField
+                    value={bgColor}
+                    onChange={setBgColor}
+                    presets={paletteSwatches}
+                    label="Outline background color"
+                    className="h-7 w-24"
+                  />
                 )}
               </div>
             </div>
 
-            {/* Target Layer */}
-            <div className="flex flex-col gap-1.5">
-              <span className="text-[11px] font-medium text-muted-foreground">Target Layer</span>
+            <Field>
+              <FieldLabel>Target Layer</FieldLabel>
               <SegmentedControl<'active' | 'new'>
                 value={targetLayer}
                 onValueChange={(next) => next && setTargetLayer(next as 'active' | 'new')}
@@ -474,12 +423,11 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
                 <SegmentedControlItem value="active">Active Layer</SegmentedControlItem>
                 <SegmentedControlItem value="new">New Layer</SegmentedControlItem>
               </SegmentedControl>
-            </div>
+            </Field>
 
-            {/* Target Frames */}
             {isAnimated && (
-              <div className="flex flex-col gap-1.5">
-                <span className="text-[11px] font-medium text-muted-foreground">Target Frames</span>
+              <Field>
+                <FieldLabel>Target Frames</FieldLabel>
                 <SegmentedControl<'current' | 'all'>
                   value={targetFrames}
                   onValueChange={(next) => next && setTargetFrames(next as 'current' | 'all')}
@@ -489,51 +437,44 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
                   <SegmentedControlItem value="current">Current Frame</SegmentedControlItem>
                   <SegmentedControlItem value="all">All Frames</SegmentedControlItem>
                 </SegmentedControl>
-              </div>
+              </Field>
             )}
 
-            {/* Options */}
-            <div className="flex flex-col gap-2 border-t border-border pt-2">
+            <div className="flex flex-col gap-2.5 border-t border-border pt-2.5">
               {hasSelection && (
-                <label className="flex cursor-pointer items-center gap-2 text-[11px] text-foreground select-none">
-                  <CustomCheckbox
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-foreground">Selected pixels only</span>
+                  <Switch
                     checked={limitToSelection}
                     onCheckedChange={setLimitToSelection}
+                    aria-label="Limit outline to selected pixels"
                   />
-                  <span>Selected pixels only</span>
-                </label>
+                </div>
               )}
 
-              <div className="flex items-center justify-between">
-                <label className="flex cursor-pointer items-center gap-2 text-[11px] text-muted-foreground hover:text-foreground select-none">
-                  <CustomCheckbox checked={livePreview} onCheckedChange={setLivePreview} />
-                  <span>Live preview</span>
-                </label>
-                <button
-                  type="button"
-                  onClick={handleReset}
-                  className="rounded-sm px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Switch
+                    checked={livePreview}
+                    onCheckedChange={setLivePreview}
+                    aria-label="Toggle live preview"
+                  />
+                  <span className="text-xs text-muted-foreground">Live preview</span>
+                </div>
+                <Button type="button" variant="ghost" size="xs" onClick={handleReset}>
                   Reset
-                </button>
+                </Button>
               </div>
             </div>
           </div>
 
           <DialogFooter>
-            <button
-              type="button"
-              onClick={handleCancel}
-              className="h-7 rounded-md px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            >
+            <Button type="button" variant="ghost" size="sm" onClick={handleCancel}>
               Cancel
-            </button>
-            <button
-              type="submit"
-              className="h-7 rounded-md bg-primary px-3.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-            >
-              Apply
-            </button>
+            </Button>
+            <Button type="submit" variant="primary" size="sm">
+              Apply Outline
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>

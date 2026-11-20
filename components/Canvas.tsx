@@ -19,6 +19,7 @@ import {
 } from '../utils';
 import { setLiveZoom } from '../hooks/useCursorStore';
 import { subscribeLiveStroke, getLiveStroke, LiveStrokePayload } from '../hooks/useLiveStrokeStore';
+import { MIN_ZOOM, MAX_ZOOM } from '../constants';
 
 const CURSOR_SVG = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M10 2H14V8H10V2ZM10 16H14V22H10V16ZM2 10H8V14H2V10ZM16 10H22V14H16V10ZM10 10H14V14H10V10Z" fill="white"/></svg>`;
 const CURSOR_URI = `data:image/svg+xml;utf8,${encodeURIComponent(CURSOR_SVG)}`;
@@ -116,6 +117,7 @@ interface CanvasProps {
   onScalePixels: (newSelection: Set<number>, srcBox: any, destBox: any) => void;
   onZoom: (zoom: number) => void;
   onMousePosUpdate?: (pos: Position | null) => void;
+  fitTrigger?: number;
 }
 
 const TILE_OFFSETS = [
@@ -207,7 +209,8 @@ export const Canvas: React.FC<CanvasProps> = ({
   onRotatePixels,
   onScalePixels,
   onZoom,
-  onMousePosUpdate
+  onMousePosUpdate,
+  fitTrigger,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const containerRectRef = useRef<DOMRect | null>(null);
@@ -310,8 +313,22 @@ export const Canvas: React.FC<CanvasProps> = ({
   const cursorPosRef = useRef<Position | null>(null);
   const uiRafIdRef = useRef<number | null>(null);
   const [showCursor, setShowCursor] = useState(false);
+  const [useCustomCursor, setUseCustomCursor] = useState(() =>
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(hover: hover) and (pointer: fine)').matches
+      : true
+  );
   const [pan, setPan] = useState<Position>({ x: 0, y: 0 });
   const [localZoom, setLocalZoom] = useState(zoom);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia('(hover: hover) and (pointer: fine)');
+    const onChange = (e: MediaQueryListEvent) => setUseCustomCursor(e.matches);
+    setUseCustomCursor(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
   const panRef = useRef<Position>({ x: 0, y: 0 });
   const zoomRef = useRef(zoom);
 
@@ -457,6 +474,28 @@ export const Canvas: React.FC<CanvasProps> = ({
       }
     }
   }, [projectId, width, height, zoom, containerSize]);
+
+  const lastFitTriggerRef = useRef<number | undefined>(fitTrigger);
+  useEffect(() => {
+    if (fitTrigger === undefined || fitTrigger === lastFitTriggerRef.current) return;
+    lastFitTriggerRef.current = fitTrigger;
+    if (containerSize.width <= 0 || containerSize.height <= 0) return;
+    const padding = 48;
+    const availW = Math.max(64, containerSize.width - padding);
+    const availH = Math.max(64, containerSize.height - padding);
+    const rawZoom = Math.min(availW / Math.max(1, width), availH / Math.max(1, height));
+    const fittedZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.floor(rawZoom * 10) / 10));
+    const nextPan = {
+      x: (containerSize.width - width * fittedZoom) / 2,
+      y: (containerSize.height - height * fittedZoom) / 2,
+    };
+    panRef.current = nextPan;
+    setPan(nextPan);
+    zoomRef.current = fittedZoom;
+    setLocalZoom(fittedZoom);
+    lastCommittedZoomRef.current = fittedZoom;
+    onZoomRef.current(fittedZoom);
+  }, [fitTrigger, containerSize, width, height]);
 
   const getPixelCoords = useCallback((clientX: number, clientY: number) => {
     const el = containerRef.current;
@@ -693,7 +732,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       if (tool === 'lasso-select') {
         setPolyPoints(prev => [...prev, { x, y }]);
       } else if (['rect-select', 'ellipse-select'].includes(tool)) {
-      } else if (['pencil', 'eraser', 'smudge', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'blur', 'sharpen'].includes(tool)) {
+      } else if (['pencil', 'eraser', 'smudge', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'blur', 'sharpen', 'color-replace'].includes(tool)) {
         if (x >= 0 && x < width && y >= 0 && y < height) {
           callbacks.current.onDraw(x, y, modifiers);
         }
@@ -828,7 +867,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         const cx = mx - currentPan.x;
         const cy = my - currentPan.y;
         const ZOOM_SPEED = 0.006;
-        const newZoom = Math.min(Math.max(currentZoom * Math.exp(-zoomDelta * ZOOM_SPEED), 0.1), 128);
+        const newZoom = Math.min(Math.max(currentZoom * Math.exp(-zoomDelta * ZOOM_SPEED), MIN_ZOOM), MAX_ZOOM);
         const newPanX = mx - (cx / currentZoom) * newZoom - panDx;
         const newPanY = my - (cy / currentZoom) * newZoom - panDy;
         const newPan = { x: newPanX, y: newPanY };
@@ -897,7 +936,7 @@ export const Canvas: React.FC<CanvasProps> = ({
          const cy = (t1.clientY + t2.clientY) / 2;
          const { startZoom, startDist, startPan, startCenter } = gestureState.current;
          const scaleFactor = dist / Math.max(1, startDist);
-         let newZoom = Math.min(Math.max(startZoom * scaleFactor, 0.1), 128);
+         let newZoom = Math.min(Math.max(startZoom * scaleFactor, MIN_ZOOM), MAX_ZOOM);
          const dx = cx - startCenter.x;
          const dy = cy - startCenter.y;
          const rect = containerRectRef.current || containerRef.current!.getBoundingClientRect();
@@ -1608,7 +1647,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
 
     // 6. Draw Brush Preview (Optimized with direct rect & contour caching)
-    const isBrushTool = ['pencil', 'eraser', 'smudge', 'blur', 'sharpen'].includes(tool);
+    const isBrushTool = ['pencil', 'eraser', 'smudge', 'blur', 'sharpen', 'color-replace'].includes(tool);
     const isOtherToolWithPreview = ['bucket', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'eyedropper'].includes(tool);
     if (cursorPos && !isMoving && !isRotating && !isScaling && (isBrushTool || (!isDrawing && isOtherToolWithPreview))) {
         const { x, y } = cursorPos;
@@ -1644,7 +1683,10 @@ export const Canvas: React.FC<CanvasProps> = ({
             }
           });
         }
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.78)';
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
         ctx.lineWidth = 1;
         ctx.stroke();
         ctx.restore();
@@ -1690,8 +1732,8 @@ export const Canvas: React.FC<CanvasProps> = ({
   return (
     <div 
         ref={containerRef}
-        className="w-full h-full flex-1 bg-[oklch(0.145_0_0)] overflow-hidden relative shadow-inner border-l border-r border-background touch-none"
-        style={{ cursor: 'none' }}
+        className="w-full h-full flex-1 bg-canvas overflow-hidden relative shadow-inner border-l border-r border-background touch-none"
+        style={{ cursor: showCursor && useCustomCursor ? 'none' : 'crosshair' }}
         onMouseEnter={(e) => { refreshContainerRect(); mousePosRef.current = { x: e.clientX, y: e.clientY }; setShowCursor(true); }}
         onMouseLeave={() => { setShowCursor(false); cursorPosRef.current = null; lastReportedCoordsRef.current = null; scheduleRenderUI(); if (onMousePosUpdate) onMousePosUpdate(null); handlePointerUp(); }}
         onMouseDown={(e) => handlePointerDown(e.clientX, e.clientY, getModifiers(e), e.button)}
@@ -1737,7 +1779,7 @@ export const Canvas: React.FC<CanvasProps> = ({
           transform: `translate(${pan.x}px, ${pan.y}px)`, 
           transformOrigin: 'top left',
           pointerEvents: 'none',
-          backgroundImage: 'conic-gradient(#1a1a1a 90deg, #2a2a2a 90deg 180deg, #1a1a1a 180deg 270deg, #2a2a2a 270deg)',
+          backgroundImage: 'conic-gradient(var(--checker-a) 90deg, var(--checker-b) 90deg 180deg, var(--checker-a) 180deg 270deg, var(--checker-b) 270deg)',
           backgroundPosition: '0 0',
           backgroundSize: '32px 32px'
         }}
@@ -1760,7 +1802,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         className="absolute inset-0 pointer-events-none"
       />
 
-      {showCursor && (
+      {showCursor && useCustomCursor && (
         <div
           ref={(el) => {
             cursorRef.current = el;
@@ -1768,7 +1810,7 @@ export const Canvas: React.FC<CanvasProps> = ({
               el.style.transform = `translate(${mousePosRef.current.x}px, ${mousePosRef.current.y}px)`;
             }
           }}
-          className="fixed top-0 left-0 pointer-events-none z-[9999] mix-blend-difference hidden md:block"
+          className="fixed top-0 left-0 pointer-events-none z-[9999] mix-blend-difference"
           style={{
             width: '24px',
             height: '24px',

@@ -3,14 +3,21 @@ import { ToolType, InkType, Position } from '../types';
 import { SELECTION_TOOLS } from '../constants';
 import { useCursorMousePos, useCursorDragStartPos, useLiveZoom } from '../hooks/useCursorStore';
 import { useStatusMessage } from '../hooks/useStatusStore';
+import { Button, IconButton } from './ui/button';
+import { Separator } from './ui/separator';
+import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import {
   MousePointer2,
   Layers,
   Maximize,
-  ZoomIn,
   Clock,
   AlertCircle,
+  AlertTriangle,
+  CheckCircle2,
+  Info,
   AngleIcon,
+  Minus,
+  Plus,
 } from './Icons';
 
 interface StatusBarProps {
@@ -27,6 +34,10 @@ interface StatusBarProps {
   mousePos?: Position | null;
   dragStartPos?: Position | null;
   selectionSize: { w: number; h: number } | null;
+  onZoomIn?: () => void;
+  onZoomOut?: () => void;
+  onZoomReset?: () => void;
+  onZoomFit?: () => void;
 }
 
 export const StatusBar: React.FC<StatusBarProps> = ({
@@ -43,6 +54,10 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   mousePos: mousePosProp,
   dragStartPos: dragStartPosProp,
   selectionSize,
+  onZoomIn,
+  onZoomOut,
+  onZoomReset,
+  onZoomFit,
 }) => {
   const storeMousePos = useCursorMousePos();
   const storeDragStartPos = useCursorDragStartPos();
@@ -72,10 +87,17 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   }
 
   const renderHints = () => {
-    if (statusMessage.type === 'error') {
+    if (statusMessage.text) {
+      const styleMap = {
+        error: { cls: 'text-destructive', Icon: AlertCircle },
+        warning: { cls: 'text-warning', Icon: AlertTriangle },
+        success: { cls: 'text-success', Icon: CheckCircle2 },
+        info: { cls: 'text-primary', Icon: Info },
+      } as const;
+      const { cls, Icon } = styleMap[statusMessage.type] || styleMap.info;
       return (
-        <div className="flex items-center gap-1.5 font-medium text-destructive">
-          <AlertCircle size={12} className="shrink-0" />
+        <div role="status" aria-live="polite" className={`flex items-center gap-1.5 font-medium ${cls}`}>
+          <Icon size={12} className="shrink-0" />
           <span className="truncate">{statusMessage.text}</span>
         </div>
       );
@@ -86,7 +108,8 @@ export const StatusBar: React.FC<StatusBarProps> = ({
 
     const toolLabel = `${isShading ? 'Shading ' : ''}${tool
       .replace('-select', ' Select')
-      .replace('filled-', 'Filled ')}`;
+      .replace('filled-', 'Filled ')
+      .replace('color-replace', 'Color Replace')}`;
 
     return (
       <div className="flex items-center gap-2.5 overflow-hidden text-muted-foreground">
@@ -173,6 +196,11 @@ export const StatusBar: React.FC<StatusBarProps> = ({
                   <kbd className="font-mono text-foreground">Shift+R</kbd> Crisp edges
                 </span>
               )}
+              {tool === 'color-replace' && (
+                <span className="shrink-0">
+                  <kbd className="font-mono text-foreground">Drag</kbd> Replace secondary with primary
+                </span>
+              )}
               {tool === 'bucket' && !isShading && (
                 <span className="shrink-0">
                   <kbd className="font-mono text-foreground">Shift</kbd> Global fill
@@ -193,22 +221,6 @@ export const StatusBar: React.FC<StatusBarProps> = ({
                   <kbd className="font-mono text-foreground">Alt</kbd> Set secondary
                 </span>
               )}
-              {statusMessage.text &&
-                ![
-                  'pencil',
-                  'eraser',
-                  'smudge',
-                  'line',
-                  'rect',
-                  'filled-rect',
-                  'ellipse',
-                  'filled-ellipse',
-                  'bucket',
-                  'move',
-                  'eyedropper',
-                  'blur',
-                  'sharpen',
-                ].includes(tool) && <span className="truncate">{statusMessage.text}</span>}
             </>
           )}
         </div>
@@ -221,15 +233,18 @@ export const StatusBar: React.FC<StatusBarProps> = ({
     tool === 'eraser' ||
     tool === 'smudge' ||
     tool === 'blur' ||
-    tool === 'sharpen';
+    tool === 'sharpen' ||
+    tool === 'color-replace';
+
+  const zoomPercent = Math.round((liveZoom ?? zoom) * 100);
 
   return (
     <div className="flex h-7 shrink-0 items-center overflow-hidden border-t border-border bg-card/90 px-3 text-[11px] text-muted-foreground select-none">
       <div className="mr-4 min-w-0 flex-1">{renderHints()}</div>
 
-      <div className="flex h-full items-center gap-2.5 tabular-nums">
+      <div className="flex h-full items-center gap-2 tabular-nums">
         {dragInfo && (
-          <div className="flex items-center gap-2.5 font-mono text-primary">
+          <div className="flex items-center gap-2 font-mono text-primary">
             {isFreeformTool ? (
               <span>
                 {dragInfo.start.x},{dragInfo.start.y} → {dragInfo.end.x},{dragInfo.end.y}
@@ -244,7 +259,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
                 </span>
               </>
             )}
-            <div className="h-3 w-px bg-border" />
+            <Separator orientation="vertical" className="h-3" />
           </div>
         )}
 
@@ -253,7 +268,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
           <span>{mousePos ? `${mousePos.x}, ${mousePos.y}` : '—, —'}</span>
         </div>
 
-        <div className="h-3 w-px bg-border" />
+        <Separator orientation="vertical" className="h-3" />
 
         <div className="flex items-center gap-1 font-mono text-foreground">
           <Maximize size={11} className="text-muted-foreground" />
@@ -264,7 +279,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
 
         {selectionSize && (
           <>
-            <div className="h-3 w-px bg-border" />
+            <Separator orientation="vertical" className="h-3" />
             <div className="flex items-center gap-1 font-mono text-primary">
               <span className="text-muted-foreground">Sel</span>
               <span>
@@ -274,7 +289,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
           </>
         )}
 
-        <div className="h-3 w-px bg-border" />
+        <Separator orientation="vertical" className="h-3" />
 
         <div className="flex items-center gap-1 font-mono text-foreground">
           <Clock size={11} className="text-muted-foreground" />
@@ -283,14 +298,74 @@ export const StatusBar: React.FC<StatusBarProps> = ({
           </span>
         </div>
 
-        <div className="h-3 w-px bg-border" />
+        <Separator orientation="vertical" className="h-3" />
 
-        <div className="flex w-12 items-center justify-end gap-1 font-mono text-foreground">
-          <ZoomIn size={11} className="text-muted-foreground" />
-          <span>{Math.round((liveZoom ?? zoom) * 100)}%</span>
+        <div className="flex items-center gap-0.5">
+          {onZoomOut && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <IconButton
+                    size="xs"
+                    variant="ghost"
+                    aria-label="Zoom out"
+                    onClick={onZoomOut}
+                    className="h-5 w-5"
+                  />
+                }
+              >
+                <Minus size={11} />
+              </TooltipTrigger>
+              <TooltipContent side="top">Zoom out (Ctrl+-)</TooltipContent>
+            </Tooltip>
+          )}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  onClick={onZoomReset}
+                  disabled={!onZoomReset}
+                  className="h-5 min-w-[44px] px-1 font-mono text-[11px] text-foreground tabular-nums"
+                />
+              }
+            >
+              {zoomPercent}%
+            </TooltipTrigger>
+            <TooltipContent side="top">Reset zoom</TooltipContent>
+          </Tooltip>
+          {onZoomIn && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <IconButton
+                    size="xs"
+                    variant="ghost"
+                    aria-label="Zoom in"
+                    onClick={onZoomIn}
+                    className="h-5 w-5"
+                  />
+                }
+              >
+                <Plus size={11} />
+              </TooltipTrigger>
+              <TooltipContent side="top">Zoom in (Ctrl++)</TooltipContent>
+            </Tooltip>
+          )}
+          {onZoomFit && (
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={onZoomFit}
+              className="h-5 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              Fit
+            </Button>
+          )}
         </div>
 
-        <div className="h-3 w-px bg-border" />
+        <Separator orientation="vertical" className="h-3" />
 
         <div className="flex max-w-[112px] items-center gap-1 truncate text-foreground">
           <Layers size={11} className="shrink-0 text-muted-foreground" />

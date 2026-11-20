@@ -26,6 +26,8 @@ import {
 import { getLayerParentMap, isLayerVisible } from '../utils';
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 import { Popover, PopoverContent } from './ui/popover';
+import { Button, IconButton } from './ui/button';
+import { Toolbar, ToolbarSeparator } from './ui/toolbar';
 import { AnimationTagPopover } from './AnimationTagPopover';
 import {
   ContextMenu,
@@ -34,6 +36,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from './ui/context-menu';
+import { cn } from '../lib/utils';
 
 interface TimelineProps {
   layers: Layer[];
@@ -58,6 +61,8 @@ interface TimelineProps {
   onOpenTagProperties?: (tag?: FrameTag) => void;
   activeTagPopover?: { isOpen: boolean; tag: FrameTag | null };
   onCloseTagPopover?: () => void;
+  onPreviewTag?: (tag: FrameTag) => void;
+  onRevertTagPreview?: (snapshot: FrameTag | null) => void;
   onSelectLayer: (id: string) => void;
   onToggleLayerVisibility: (id: string) => void;
   onToggleLayerLock: (id: string) => void;
@@ -70,6 +75,7 @@ interface TimelineProps {
     position: 'before' | 'after' | 'inside' | 'outside' | 'root-bottom'
   ) => void;
   onReorderFrames: (fromIndex: number, toIndex: number) => void;
+  density?: 'compact' | 'touch';
 }
 
 interface DragState {
@@ -866,8 +872,11 @@ export const Timeline: React.FC<TimelineProps> = ({
   onAddTag,
   onSaveTag,
   onDeleteTag,
+  onOpenTagProperties,
   activeTagPopover,
   onCloseTagPopover,
+  onPreviewTag,
+  onRevertTagPreview,
   onSelectLayer,
   onToggleLayerVisibility,
   onToggleLayerLock,
@@ -875,7 +884,9 @@ export const Timeline: React.FC<TimelineProps> = ({
   onAddLayer,
   onReorderLayers,
   onReorderFrames,
+  density = 'compact',
 }) => {
+  const isTouch = density === 'touch';
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [tagPopover, setTagPopover] = useState<{
     isOpen: boolean;
@@ -1158,6 +1169,7 @@ export const Timeline: React.FC<TimelineProps> = ({
   };
 
   useEffect(() => {
+    if (isTouch) return;
     if (activeTagPopover?.isOpen) {
       const { selectedFrameIndices: curSelFrames, activeFrameIndex: curActiveFrame } =
         latestRef.current;
@@ -1180,45 +1192,40 @@ export const Timeline: React.FC<TimelineProps> = ({
         isNew: !activeTagPopover.tag,
       });
     }
-  }, [activeTagPopover]);
+  }, [activeTagPopover, isTouch]);
 
   const handleOpenTagPopover = (existingTag?: FrameTag, e?: React.MouseEvent | Event) => {
     if (e && 'stopPropagation' in e && typeof e.stopPropagation === 'function') {
       e.stopPropagation();
     }
+    if (isTouch && onOpenTagProperties) {
+      onOpenTagProperties(existingTag);
+      return;
+    }
     const {
       selectedFrameIndices: curSelFrames,
       activeFrameIndex: curActiveFrame,
-      onSaveTag: saveTagFn,
-      onAddTag: addTagFn,
     } = latestRef.current;
     const from = curSelFrames.length > 0 ? Math.min(...curSelFrames) : curActiveFrame;
     const to = curSelFrames.length > 0 ? Math.max(...curSelFrames) : curActiveFrame;
 
-    let tag: FrameTag;
-    if (existingTag) {
-      tag = { ...existingTag };
-    } else {
-      tag = {
-        id: `tag-${Date.now()}`,
-        name: 'New Tag',
-        from,
-        to,
-        color: '#3b82f6',
-        direction: 'forward',
-        repeat: 0,
-      };
-      if (saveTagFn) {
-        saveTagFn(tag);
-      } else if (addTagFn) {
-        addTagFn(tag.name, tag.from, tag.to, tag.color);
-      }
-    }
+    // Draft new tags locally until explicitly committed via Create Tag
+    const tag: FrameTag = existingTag
+      ? { ...existingTag }
+      : {
+          id: `tag-${Date.now()}`,
+          name: '',
+          from,
+          to,
+          color: '#3b82f6',
+          direction: 'forward',
+          repeat: 0,
+        };
 
     setTagPopover({
       isOpen: true,
       tag,
-      isNew: false,
+      isNew: !existingTag,
     });
   };
 
@@ -1595,7 +1602,7 @@ export const Timeline: React.FC<TimelineProps> = ({
       {/* Single Shared Popover for Tag Properties */}
       {activeEditingTag && (
         <Popover
-          open={!!(tagPopover?.isOpen && tagPopoverAnchor)}
+          open={!!(tagPopover?.isOpen && tagPopoverAnchor && !isTouch)}
           onOpenChange={(open) => {
             if (!open) handleCloseTagPopover();
           }}
@@ -1612,7 +1619,7 @@ export const Timeline: React.FC<TimelineProps> = ({
             <AnimationTagPopover
               isOpen={true}
               tag={activeEditingTag}
-              isNew={false}
+              isNew={tagPopover?.isNew ?? false}
               totalFrames={frames.length}
               frames={frames}
               onSave={(savedTag) => {
@@ -1622,6 +1629,8 @@ export const Timeline: React.FC<TimelineProps> = ({
                   onAddTag(savedTag.name, savedTag.from, savedTag.to, savedTag.color);
                 }
               }}
+              onPreviewTag={onPreviewTag}
+              onRevertPreview={onRevertTagPreview}
               onClose={handleCloseTagPopover}
               onDelete={
                 onDeleteTag
@@ -1657,86 +1666,99 @@ export const Timeline: React.FC<TimelineProps> = ({
               </div>
             )}
 
-            <div className="flex h-8 shrink-0 items-center gap-1 overflow-hidden px-2">
+            <Toolbar
+              aria-label="Timeline frame actions"
+              className={cn(
+                'shrink-0 overflow-hidden px-1.5',
+                isTouch ? 'h-11 gap-0.5' : 'h-8 gap-0.5'
+              )}
+            >
               <Tooltip>
                 <TooltipTrigger
                   render={
-                    <button
+                    <IconButton
                       type="button"
+                      variant="ghost"
+                      size={isTouch ? 'sm' : 'xs'}
                       aria-label="Duplicate Frame"
                       onClick={() =>
                         isMultiFrame ? onDuplicateSelectedFrames() : onDuplicateFrame()
                       }
-                      className={`flex h-6 w-6 items-center justify-center rounded-sm transition-colors hover:bg-accent ${
-                        isMultiFrame ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
-                      }`}
-                    >
-                      <Copy size={13} />
-                    </button>
+                      className={cn(isMultiFrame && 'text-primary')}
+                    />
                   }
-                />
+                >
+                  <Copy size={13} />
+                </TooltipTrigger>
                 <TooltipContent side="top">Duplicate Frame</TooltipContent>
               </Tooltip>
 
               <Tooltip>
                 <TooltipTrigger
                   render={
-                    <button
+                    <IconButton
                       type="button"
+                      variant="ghost"
+                      size={isTouch ? 'sm' : 'xs'}
                       aria-label="Delete Frame"
                       onClick={() => (isMultiFrame ? onDeleteSelectedFrames() : onDeleteFrame())}
-                      className={`flex h-6 w-6 items-center justify-center rounded-sm transition-colors hover:bg-destructive/15 hover:text-destructive ${
-                        isMultiFrame ? 'text-destructive' : 'text-muted-foreground'
-                      }`}
-                    >
-                      <Trash2 size={13} />
-                    </button>
+                      className={cn(
+                        'hover:bg-destructive/15 hover:text-destructive',
+                        isMultiFrame && 'text-destructive'
+                      )}
+                    />
                   }
-                />
+                >
+                  <Trash2 size={13} />
+                </TooltipTrigger>
                 <TooltipContent side="top">Delete Frame</TooltipContent>
               </Tooltip>
 
-              <div className="mx-0.5 h-3.5 w-px bg-border" />
+              <ToolbarSeparator className="mx-0.5 h-3.5" />
 
               <Tooltip>
                 <TooltipTrigger
                   render={
-                    <button
+                    <IconButton
                       type="button"
+                      variant="ghost"
+                      size={isTouch ? 'sm' : 'xs'}
                       aria-label="Tween Between Selected Frames"
                       onClick={onTweenFrames}
                       disabled={!canTween}
-                      className="flex h-6 w-6 items-center justify-center rounded-sm text-primary transition-colors hover:bg-primary hover:text-primary-foreground disabled:cursor-not-allowed disabled:text-muted-foreground/35 disabled:hover:bg-transparent"
-                    >
-                      <Sparkles size={13} />
-                    </button>
+                      className="text-primary hover:bg-primary hover:text-primary-foreground"
+                    />
                   }
-                />
+                >
+                  <Sparkles size={13} />
+                </TooltipTrigger>
                 <TooltipContent side="top">
                   Interpolate (Tween) Between Selection
                 </TooltipContent>
               </Tooltip>
 
-              <div className="mx-0.5 h-3.5 w-px bg-border" />
+              <ToolbarSeparator className="mx-0.5 h-3.5" />
 
               <Tooltip>
                 <TooltipTrigger
                   render={
-                    <button
+                    <Button
                       ref={tagButtonRef}
                       type="button"
+                      variant="ghost"
+                      size="xs"
                       aria-label="Create Animation Tag"
                       onClick={(e) => handleOpenTagPopover(undefined, e)}
-                      className="flex h-6 items-center gap-1 rounded-sm px-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                    >
-                      <Tag size={12} className="text-primary" />
-                      <span className="hidden sm:inline">Tag</span>
-                    </button>
+                      className="px-1.5"
+                    />
                   }
-                />
+                >
+                  <Tag size={12} className="text-primary" />
+                  <span className="hidden sm:inline">Tag</span>
+                </TooltipTrigger>
                 <TooltipContent side="top">Create Animation Tag from Selection</TooltipContent>
               </Tooltip>
-            </div>
+            </Toolbar>
           </div>
 
           {/* Right Top Header (Tag Strip + Frame Ruler) */}

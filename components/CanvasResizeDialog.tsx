@@ -1,6 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { MIN_CANVAS_DIM, MAX_CANVAS_DIM } from '../constants';
 import { ModalShell } from './ui/dialog';
-import { Input } from './ui/input';
+import { Button } from './ui/button';
+import { Field, FieldLabel } from './ui/field';
+import { StudioNumberInput } from './ui/number-input';
 import { Move } from './Icons';
 import { cn } from '../lib/utils';
 
@@ -34,9 +37,12 @@ export const CanvasResizeDialog: React.FC<CanvasResizeDialogProps> = ({
   const [width, setWidth] = useState(currentWidth);
   const [height, setHeight] = useState(currentHeight);
   const [anchor, setAnchor] = useState('cc');
+  const wasOpenRef = useRef(false);
 
   useEffect(() => {
-    if (!isOpen) return;
+    const justOpened = isOpen && !wasOpenRef.current;
+    wasOpenRef.current = isOpen;
+    if (!justOpened) return;
     setWidth(currentWidth);
     setHeight(currentHeight);
     setAnchor('cc');
@@ -44,7 +50,9 @@ export const CanvasResizeDialog: React.FC<CanvasResizeDialogProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onResize(Math.max(1, width), Math.max(1, height), anchor);
+    const clampedW = Math.max(MIN_CANVAS_DIM, Math.min(MAX_CANVAS_DIM, Math.round(width)));
+    const clampedH = Math.max(MIN_CANVAS_DIM, Math.min(MAX_CANVAS_DIM, Math.round(height)));
+    onResize(clampedW, clampedH, anchor);
     onClose();
   };
 
@@ -57,78 +65,69 @@ export const CanvasResizeDialog: React.FC<CanvasResizeDialogProps> = ({
       maxWidthClassName="max-w-sm"
       footer={
         <>
-          <button
-            type="button"
-            onClick={onClose}
-            className="h-7 rounded-md px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
+          <Button type="button" variant="ghost" size="sm" onClick={onClose}>
             Cancel
-          </button>
-          <button
-            type="submit"
-            form="canvas-resize-form"
-            className="h-7 rounded-md bg-primary px-3.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-          >
-            Resize
-          </button>
+          </Button>
+          <Button type="submit" form="canvas-resize-form" variant="primary" size="sm">
+            Resize Canvas
+          </Button>
         </>
       }
     >
       <form id="canvas-resize-form" onSubmit={handleSubmit} className="flex flex-col gap-5">
         <div className="grid grid-cols-2 gap-3">
-          <div className="flex flex-col gap-1.5">
-            <label
-              htmlFor="resize-width"
-              className="text-[11px] font-medium text-muted-foreground"
-            >
-              Width (px)
-            </label>
-            <Input
-              id="resize-width"
-              type="number"
+          <Field>
+            <FieldLabel>Width</FieldLabel>
+            <StudioNumberInput
               value={width}
-              onChange={(e) => setWidth(Math.max(1, parseInt(e.target.value, 10) || 1))}
-              min={1}
-              max={2048}
-              className="font-mono tabular-nums"
+              onValueChange={setWidth}
+              min={MIN_CANVAS_DIM}
+              max={MAX_CANVAS_DIM}
+              step={1}
+              largeStep={8}
+              suffix="px"
+              showSteppers
+              aria-label="Canvas width in pixels"
             />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <label
-              htmlFor="resize-height"
-              className="text-[11px] font-medium text-muted-foreground"
-            >
-              Height (px)
-            </label>
-            <Input
-              id="resize-height"
-              type="number"
+          </Field>
+          <Field>
+            <FieldLabel>Height</FieldLabel>
+            <StudioNumberInput
               value={height}
-              onChange={(e) => setHeight(Math.max(1, parseInt(e.target.value, 10) || 1))}
-              min={1}
-              max={2048}
-              className="font-mono tabular-nums"
+              onValueChange={setHeight}
+              min={MIN_CANVAS_DIM}
+              max={MAX_CANVAS_DIM}
+              step={1}
+              largeStep={8}
+              suffix="px"
+              showSteppers
+              aria-label="Canvas height in pixels"
             />
-          </div>
+          </Field>
         </div>
 
         <div className="flex flex-col gap-2">
-          <span className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+          <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
             <Move size={12} />
-            <span>Anchor</span>
+            <span>Anchor Position</span>
           </span>
-          <div className="mx-auto grid w-32 grid-cols-3 gap-1 rounded-lg border border-border bg-background p-1.5">
+          <div
+            role="radiogroup"
+            aria-label="Resize anchor position"
+            className="mx-auto grid w-32 grid-cols-3 gap-1 rounded-lg border border-border bg-background p-1.5"
+          >
             {ANCHORS.map((a) => {
               const selected = anchor === a.id;
               return (
                 <button
                   key={a.id}
                   type="button"
+                  role="radio"
                   aria-label={a.label}
-                  aria-pressed={selected}
+                  aria-checked={selected}
                   onClick={() => setAnchor(a.id)}
                   className={cn(
-                    'flex aspect-square w-full items-center justify-center rounded-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                    'flex aspect-square w-full items-center justify-center rounded-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer',
                     selected ? 'bg-primary' : 'hover:bg-accent'
                   )}
                 >
