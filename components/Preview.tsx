@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Frame, Layer } from '../types';
-import { renderFrameToCanvas } from '../utils';
+import { renderFrameToDownsampledCanvas } from '../utils';
 import { Play, Pause, SkipBack, SkipForward, X } from './Icons';
 import { CustomSlider } from './ui/slider';
 import { IconButton } from './ui/button';
@@ -8,6 +8,8 @@ import { Toggle } from './ui/toggle';
 import { Toolbar } from './ui/toolbar';
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 import { cn } from '../lib/utils';
+
+const MAX_PREVIEW_DIM = 256;
 
 interface PreviewProps {
   width?: number;
@@ -68,6 +70,18 @@ export const Preview: React.FC<PreviewProps> = ({
     }
   }, [previewFrame, frames.length]);
 
+  const safeSpriteW = Math.max(1, spriteWidth);
+  const safeSpriteH = Math.max(1, spriteHeight);
+  const maxSpriteDim = Math.max(safeSpriteW, safeSpriteH);
+  const previewScale =
+    maxSpriteDim > MAX_PREVIEW_DIM
+      ? MAX_PREVIEW_DIM / maxSpriteDim
+      : maxSpriteDim < 64
+        ? 64 / maxSpriteDim
+        : 1;
+  const previewCanvasW = Math.max(1, Math.round(safeSpriteW * previewScale));
+  const previewCanvasH = Math.max(1, Math.round(safeSpriteH * previewScale));
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -93,9 +107,10 @@ export const Preview: React.FC<PreviewProps> = ({
           palette,
           width: spriteWidth,
           height: spriteHeight,
-          canvas: renderFrameToCanvas(
+          canvas: renderFrameToDownsampledCanvas(
             { width: spriteWidth, height: spriteHeight, frames, palette, layers },
-            frameIndex
+            frameIndex,
+            MAX_PREVIEW_DIM
           ),
         };
         frameCacheRef.current.set(frame, cached);
@@ -108,6 +123,8 @@ export const Preview: React.FC<PreviewProps> = ({
     palette,
     spriteWidth,
     spriteHeight,
+    previewCanvasW,
+    previewCanvasH,
     activeFrameIndex,
     previewFrame,
     isPlaying,
@@ -219,8 +236,8 @@ export const Preview: React.FC<PreviewProps> = ({
       <div className="flex min-h-[110px] flex-1 items-center justify-center overflow-hidden bg-canvas p-2.5">
         <canvas
           ref={canvasRef}
-          width={Math.max(64, spriteWidth)}
-          height={Math.max(64, spriteHeight)}
+          width={previewCanvasW}
+          height={previewCanvasH}
           className="checkerboard-alpha pixelated h-full w-full max-h-full max-w-full rounded-sm border border-border object-contain shadow-sm"
         />
       </div>

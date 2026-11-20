@@ -1,5 +1,59 @@
 
-import { PixelGrid, Position, ProjectState, Layer, Frame, SavedPalette, PixelValue } from './types';
+import { PixelGrid, Position, ProjectState, Layer, Frame, SavedPalette, PixelValue, ColorMode } from './types';
+import {
+  EMPTY_PIXEL,
+  createPixelGrid,
+  clonePixelGrid,
+  packRGBA,
+  encodeIndexedPixel,
+  decodeIndexedPixel,
+  isPackedRgbaPixel,
+  isIndexedPixel,
+  hexToRgb,
+  getPackedColor,
+  rgbToHex,
+  packedToHex,
+  packedToRgb,
+  pixelToHex,
+  pixelToRgb,
+  resolveColorToPixel,
+  getPackedPalette255,
+  pixelToPackedImageData,
+  findNearestPaletteIndex,
+  computeInitialZoom,
+  migrateLegacyPixelGrid,
+  extractRectPatch,
+  applyRectPatch,
+  buildLayerPatch,
+} from './utils/pixelBuffer';
+import { parseAsepriteAsync } from './utils/asepriteWorkerClient';
+
+export {
+  EMPTY_PIXEL,
+  createPixelGrid,
+  clonePixelGrid,
+  packRGBA,
+  encodeIndexedPixel,
+  decodeIndexedPixel,
+  isPackedRgbaPixel,
+  isIndexedPixel,
+  hexToRgb,
+  getPackedColor,
+  rgbToHex,
+  packedToHex,
+  packedToRgb,
+  pixelToHex,
+  pixelToRgb,
+  resolveColorToPixel,
+  getPackedPalette255,
+  pixelToPackedImageData,
+  findNearestPaletteIndex,
+  computeInitialZoom,
+  migrateLegacyPixelGrid,
+  extractRectPatch,
+  applyRectPatch,
+  buildLayerPatch,
+};
 
 export const getIndex = (x: number, y: number, width: number): number => {
   return y * width + x;
@@ -217,12 +271,12 @@ export const floodFill = (
   pixels: PixelGrid,
   startX: number,
   startY: number,
-  fillValue: string | number,
+  fillValue: PixelValue,
   width: number,
   height: number,
   contiguous: boolean = true
 ): PixelGrid => {
-  const newPixels = [...pixels];
+  const newPixels = clonePixelGrid(pixels);
   const startIndex = getIndex(startX, startY, width);
   const targetValue = newPixels[startIndex];
 
@@ -308,37 +362,7 @@ export const drawCheckeredBackground = (
   ctx.fill();
 };
 
-const HEX_CACHE: Record<string, [number, number, number]> = {};
-export const hexToRgb = (hex: string): [number, number, number] => {
-  if (HEX_CACHE[hex]) return HEX_CACHE[hex];
-  let r = 0, g = 0, b = 0;
-  if (hex.charCodeAt(0) === 35) { // '#'
-    if (hex.length === 7) {
-      r = parseInt(hex.substring(1, 3), 16) || 0;
-      g = parseInt(hex.substring(3, 5), 16) || 0;
-      b = parseInt(hex.substring(5, 7), 16) || 0;
-    } else if (hex.length === 4) {
-      r = parseInt(hex[1] + hex[1], 16) || 0;
-      g = parseInt(hex[2] + hex[2], 16) || 0;
-      b = parseInt(hex[3] + hex[3], 16) || 0;
-    }
-  }
-  const rgb: [number, number, number] = [r, g, b];
-  HEX_CACHE[hex] = rgb;
-  return rgb;
-};
-
-const HEX_BGR_CACHE = new Map<string, number>();
-
-export const getPackedColor = (hex: string, alpha: number = 255): number => {
-  let bgr = HEX_BGR_CACHE.get(hex);
-  if (bgr === undefined) {
-    const [r, g, b] = hexToRgb(hex);
-    bgr = ((b & 0xff) << 16) | ((g & 0xff) << 8) | (r & 0xff);
-    HEX_BGR_CACHE.set(hex, bgr);
-  }
-  return ((alpha & 0xff) << 24) | bgr;
-};
+// hexToRgb and getPackedColor are re-exported from ./utils/pixelBuffer without unbounded global caches.
 
 export interface Segment {
   x1: number;
@@ -606,8 +630,20 @@ let scratchLayerCtx: CanvasRenderingContext2D | null = null;
 let scratchLayerImgData: ImageData | null = null;
 let scratchLayerData32: Uint32Array | null = null;
 
+let scratchSmallCanvas: HTMLCanvasElement | null = null;
+let scratchSmallCtx: CanvasRenderingContext2D | null = null;
+let scratchSmallImgData: ImageData | null = null;
+let scratchSmallData32: Uint32Array | null = null;
+
+const getCompositeOp = (blendMode: Layer['blendMode']): GlobalCompositeOperation => {
+  if (blendMode === 'normal') return 'source-over';
+  if (blendMode === 'addition') return 'lighter';
+  if (blendMode === 'subtract' || blendMode === 'divide') return 'source-over';
+  return blendMode as GlobalCompositeOperation;
+};
+
 export const renderFrameToCanvas = (
-    state: Pick<ProjectState, 'width' | 'height' | 'frames' | 'palette' | 'layers'>,
+    state: Pick<ProjectState, 'width' | 'height' | 'frames' | 'palette' | 'layers'> & { colorMode?: ColorMode },
     frameIndex: number
 ): HTMLCanvasElement => {
     const canvas = document.createElement('canvas');
@@ -635,23 +671,6 @@ export const renderFrameToCanvas = (
     if (!layerCtx) return canvas;
     scratchLayerCtx = layerCtx;
 
-    const palLen = state.palette.length;
-    // Cache paletteUint32 buffers by alpha
-    const paletteBufferCache = new Map<number, Uint32Array>();
-    const getPaletteForAlpha = (alpha: number) => {
-      let buf = paletteBufferCache.get(alpha);
-      if (!buf) {
-        buf = new Uint32Array(palLen);
-        for (let p = 0; p < palLen; p++) {
-          if (state.palette[p]) {
-            buf[p] = getPackedColor(state.palette[p], alpha);
-          }
-        }
-        paletteBufferCache.set(alpha, buf);
-      }
-      return buf;
-    };
-
     // Reuse scratch ImageData buffer across calls for the same canvas dimensions
     if (!scratchLayerImgData || !scratchLayerData32 || scratchLayerImgData.width !== state.width || scratchLayerImgData.height !== state.height) {
       scratchLayerImgData = layerCtx.createImageData(state.width, state.height);
@@ -659,8 +678,10 @@ export const renderFrameToCanvas = (
     }
     const layerImgData = scratchLayerImgData;
     const data32 = scratchLayerData32;
+    const paletteUint32 = getPackedPalette255(state.palette);
     const parentMap = getLayerParentMap(state.layers);
     const totalPixels = state.width * state.height;
+    const isRgbaMode = state.colorMode === 'rgba';
 
     for (let lIdx = 0; lIdx < state.layers.length; lIdx++) {
         const l = state.layers[lIdx];
@@ -670,32 +691,123 @@ export const renderFrameToCanvas = (
         if (!px) continue;
 
         const effectiveOpacity = getEffectiveLayerOpacity(l, state.layers, parentMap);
-        const alpha = Math.round((effectiveOpacity / 100) * 255);
-        if (alpha <= 0) continue;
-
-        data32.fill(0);
-        const paletteUint32 = getPaletteForAlpha(alpha);
+        if (effectiveOpacity <= 0) continue;
 
         const pxLen = Math.min(px.length, totalPixels);
-        for (let i = 0; i < pxLen; i++) {
-            const val = px[i];
-            if (val === null || val === undefined) continue;
-
-            if (typeof val === 'number') {
-                if (val >= 0 && val < palLen) data32[i] = paletteUint32[val];
-            } else {
-                data32[i] = getPackedColor(val, alpha);
+        if (isRgbaMode) {
+            data32.set(px.subarray(0, pxLen));
+            if (pxLen < totalPixels) {
+                data32.fill(0, pxLen);
+            }
+        } else {
+            data32.fill(0);
+            for (let i = 0; i < pxLen; i++) {
+                const val = px[i];
+                if (val !== 0) {
+                    data32[i] = pixelToPackedImageData(val, paletteUint32);
+                }
             }
         }
 
         layerCtx.putImageData(layerImgData, 0, 0);
-        const compositeOp: GlobalCompositeOperation = l.blendMode === 'normal' 
-          ? 'source-over' 
-          : (l.blendMode === 'addition' ? 'lighter' : (l.blendMode === 'subtract' || l.blendMode === 'divide' ? 'source-over' : l.blendMode as GlobalCompositeOperation));
-        ctx.globalCompositeOperation = compositeOp;
+        ctx.globalAlpha = effectiveOpacity / 100;
+        ctx.globalCompositeOperation = getCompositeOp(l.blendMode);
         ctx.drawImage(layerCanvas, 0, 0);
-        ctx.globalCompositeOperation = 'source-over';
     }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+
+    return canvas;
+};
+
+/**
+ * Renders a frame directly into a bounded display-sized canvas (max dimension <= maxDim)
+ * using nearest-neighbor sampling directly from the Uint32Array pixel buffers.
+ * Avoids allocating full-resolution 4K offscreen canvases for previews and thumbnails.
+ */
+export const renderFrameToDownsampledCanvas = (
+    state: Pick<ProjectState, 'width' | 'height' | 'frames' | 'palette' | 'layers'> & { colorMode?: ColorMode },
+    frameIndex: number,
+    maxDim: number = 256
+): HTMLCanvasElement => {
+    const srcW = Math.max(1, state.width);
+    const srcH = Math.max(1, state.height);
+
+    if (srcW <= maxDim && srcH <= maxDim) {
+      return renderFrameToCanvas(state, frameIndex);
+    }
+
+    const scale = maxDim / Math.max(srcW, srcH);
+    const dstW = Math.max(1, Math.round(srcW * scale));
+    const dstH = Math.max(1, Math.round(srcH * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = dstW;
+    canvas.height = dstH;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return canvas;
+
+    const frame = state.frames[frameIndex];
+    if (!frame) return canvas;
+
+    if (!scratchSmallCanvas) {
+      scratchSmallCanvas = document.createElement('canvas');
+      scratchSmallCtx = scratchSmallCanvas.getContext('2d');
+    }
+    if (scratchSmallCanvas.width !== dstW || scratchSmallCanvas.height !== dstH) {
+      scratchSmallCanvas.width = dstW;
+      scratchSmallCanvas.height = dstH;
+      scratchSmallImgData = null;
+      scratchSmallData32 = null;
+    }
+    const smallCtx = scratchSmallCtx || scratchSmallCanvas.getContext('2d');
+    if (!smallCtx) return canvas;
+    scratchSmallCtx = smallCtx;
+
+    if (!scratchSmallImgData || !scratchSmallData32 || scratchSmallImgData.width !== dstW || scratchSmallImgData.height !== dstH) {
+      scratchSmallImgData = smallCtx.createImageData(dstW, dstH);
+      scratchSmallData32 = new Uint32Array(scratchSmallImgData.data.buffer);
+    }
+
+    const data32 = scratchSmallData32;
+    const paletteUint32 = getPackedPalette255(state.palette);
+    const parentMap = getLayerParentMap(state.layers);
+
+    const xMap = new Int32Array(dstW);
+    for (let x = 0; x < dstW; x++) {
+      xMap[x] = Math.min(srcW - 1, Math.floor(((x + 0.5) * srcW) / dstW));
+    }
+    const yRowOff = new Int32Array(dstH);
+    for (let y = 0; y < dstH; y++) {
+      yRowOff[y] = Math.min(srcH - 1, Math.floor(((y + 0.5) * srcH) / dstH)) * srcW;
+    }
+
+    for (let lIdx = 0; lIdx < state.layers.length; lIdx++) {
+      const l = state.layers[lIdx];
+      if (l.type === 'group') continue;
+      if (!isLayerVisible(l, state.layers, parentMap)) continue;
+      const px = frame.layerData[l.id];
+      if (!px) continue;
+
+      const effectiveOpacity = getEffectiveLayerOpacity(l, state.layers, parentMap);
+      if (effectiveOpacity <= 0) continue;
+
+      let dstIdx = 0;
+      for (let y = 0; y < dstH; y++) {
+        const rowOffset = yRowOff[y];
+        for (let x = 0; x < dstW; x++) {
+          const val = px[rowOffset + xMap[x]];
+          data32[dstIdx++] = val === 0 ? 0 : pixelToPackedImageData(val, paletteUint32);
+        }
+      }
+
+      smallCtx.putImageData(scratchSmallImgData, 0, 0);
+      ctx.globalAlpha = effectiveOpacity / 100;
+      ctx.globalCompositeOperation = getCompositeOp(l.blendMode);
+      ctx.drawImage(scratchSmallCanvas, 0, 0);
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
 
     return canvas;
 };
@@ -843,80 +955,7 @@ export const getWandSelection = (
   return selection;
 };
 
-// --- Color Parsers ---
-export const rgbToHex = (r: number, g: number, b: number): string => {
-  return "#" + [r, g, b].map(x => {
-    const hex = Math.round(Math.max(0, Math.min(255, x))).toString(16);
-    return hex.length === 1 ? '0' + hex : hex;
-  }).join('');
-};
-
-interface PaletteRgbLookup {
-  len: number;
-  rgb: Uint8Array;
-  cache: Map<number, number>;
-}
-
-const PALETTE_RGB_LOOKUP_CACHE = new WeakMap<string[], PaletteRgbLookup>();
-
-const getPaletteRgbLookup = (palette: string[]): PaletteRgbLookup => {
-  const cached = PALETTE_RGB_LOOKUP_CACHE.get(palette);
-  if (cached && cached.len === palette.length) {
-    return cached;
-  }
-  const len = palette.length;
-  const rgb = new Uint8Array(len * 3);
-  for (let i = 0; i < len; i++) {
-    const hex = palette[i];
-    if (hex) {
-      const [pr, pg, pb] = hexToRgb(hex);
-      const off = i * 3;
-      rgb[off] = pr;
-      rgb[off + 1] = pg;
-      rgb[off + 2] = pb;
-    }
-  }
-  const entry: PaletteRgbLookup = { len, rgb, cache: new Map<number, number>() };
-  PALETTE_RGB_LOOKUP_CACHE.set(palette, entry);
-  return entry;
-};
-
-/**
- * Weighted RGB distance for better perceptual color matching.
- */
-export const findNearestPaletteIndex = (r: number, g: number, b: number, palette: string[]): number => {
-    const len = palette.length;
-    if (len === 0) return 0;
-
-    const lookup = getPaletteRgbLookup(palette);
-    const isIntKey = (r | 0) === r && (g | 0) === g && (b | 0) === b && r >= 0 && r <= 255 && g >= 0 && g <= 255 && b >= 0 && b <= 255;
-    const key = isIntKey ? ((r << 16) | (g << 8) | b) : -1;
-    if (key >= 0) {
-      const cachedIdx = lookup.cache.get(key);
-      if (cachedIdx !== undefined) return cachedIdx;
-    }
-
-    let minDistance = Infinity;
-    let nearestIndex = 0;
-    const rgb = lookup.rgb;
-
-    for (let i = 0, off = 0; i < len; i++, off += 3) {
-        const dr = r - rgb[off];
-        const dg = g - rgb[off + 1];
-        const db = b - rgb[off + 2];
-        const dist = 0.3 * dr * dr + 0.59 * dg * dg + 0.11 * db * db;
-        if (dist < minDistance) {
-            minDistance = dist;
-            nearestIndex = i;
-            if (dist === 0) break;
-        }
-    }
-
-    if (key >= 0 && lookup.cache.size < 4096) {
-      lookup.cache.set(key, nearestIndex);
-    }
-    return nearestIndex;
-};
+// Color parsers (rgbToHex, findNearestPaletteIndex) are re-exported from ./utils/pixelBuffer.
 
 export const parseGPL = async (text: string): Promise<string[]> => {
   const lines = text.split('\n');
@@ -973,151 +1012,179 @@ export const parseASE = async (buffer: ArrayBuffer): Promise<string[]> => {
   return colors;
 };
 
-import { parseAseprite } from './utils/aseprite';
-
 // --- Project & Palette Utilities ---
+
+const decodeImageFileToImageData = async (
+  file: File
+): Promise<{ width: number; height: number; data: Uint8ClampedArray }> => {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const bitmap = await createImageBitmap(file);
+      try {
+        const width = bitmap.width;
+        const height = bitmap.height;
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        if (!ctx) throw new Error('Failed to get canvas context');
+        ctx.drawImage(bitmap, 0, 0);
+        const imageData = ctx.getImageData(0, 0, width, height);
+        return { width, height, data: imageData.data };
+      } finally {
+        bitmap.close();
+      }
+    } catch {
+      // Fall back to Object URL + HTMLImageElement (e.g., SVG or unsupported bitmap formats)
+    }
+  }
+
+  return new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const { width, height } = img;
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        if (!ctx) {
+          reject(new Error('Failed to get canvas context'));
+          return;
+        }
+        ctx.drawImage(img, 0, 0);
+        const imageData = ctx.getImageData(0, 0, width, height);
+        resolve({ width, height, data: imageData.data });
+      } catch (err) {
+        reject(err);
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('Failed to load image'));
+    };
+    img.src = objectUrl;
+  });
+};
 
 export const fileToProjectState = async (file: File): Promise<ProjectState> => {
   const fileNameLower = file.name.toLowerCase();
 
   if (fileNameLower.endsWith('.aseprite') || fileNameLower.endsWith('.ase')) {
     const buffer = await file.arrayBuffer();
-    return parseAseprite(buffer, file.name);
+    return parseAsepriteAsync(buffer, file.name);
   }
 
   if (fileNameLower.endsWith('.json') || fileNameLower.endsWith('.pxa')) {
     const text = await file.text();
     const state = JSON.parse(text);
+    const width = Math.max(1, Number(state.width) || 32);
+    const height = Math.max(1, Number(state.height) || 32);
+    const colorMode: ColorMode = state.colorMode === 'indexed' ? 'indexed' : 'rgba';
+
     if (state.selection && Array.isArray(state.selection)) {
       state.selection = new Set(state.selection);
+    }
+    if (Array.isArray(state.frames)) {
+      for (const frame of state.frames) {
+        if (frame && frame.layerData && typeof frame.layerData === 'object') {
+          for (const layerId of Object.keys(frame.layerData)) {
+            frame.layerData[layerId] = migrateLegacyPixelGrid(
+              frame.layerData[layerId],
+              width,
+              height,
+              colorMode
+            );
+          }
+        }
+      }
+    }
+    if (Array.isArray(state.tilesets)) {
+      for (const ts of state.tilesets) {
+        if (ts && ts.pixels) {
+          const tsW = ts.tileWidth || 1;
+          const tsH = (ts.tileHeight || 1) * (ts.tilesCount || 1);
+          ts.pixels = migrateLegacyPixelGrid(ts.pixels, tsW, tsH, colorMode);
+        }
+      }
+    }
+    if (!state.zoom || state.zoom <= 0) {
+      state.zoom = computeInitialZoom(width, height, 32);
     }
     return state as ProjectState;
   }
 
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onload = () => {
-        const { width, height } = img;
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          reject(new Error("Failed to get canvas context"));
-          return;
-        }
-        ctx.drawImage(img, 0, 0);
-        const imageData = ctx.getImageData(0, 0, width, height).data;
-        const pixels: PixelGrid = new Array(width * height).fill(null);
-        const colorCache: Record<number, string> = {};
+  const { width, height, data } = await decodeImageFileToImageData(file);
+  const src32 = new Uint32Array(data.buffer, data.byteOffset, width * height);
+  const pixels = createPixelGrid(width * height);
+  for (let i = 0; i < src32.length; i++) {
+    const px = src32[i];
+    if ((px >>> 24) !== 0) {
+      pixels[i] = px >>> 0;
+    }
+  }
 
-        for (let i = 0; i < width * height; i++) {
-          const a = imageData[i * 4 + 3];
-          if (a > 128) { 
-            const r = imageData[i * 4];
-            const g = imageData[i * 4 + 1];
-            const b = imageData[i * 4 + 2];
-            const key = (r << 16) | (g << 8) | b;
-            let hex = colorCache[key];
-            if (!hex) {
-              hex = rgbToHex(r, g, b);
-              colorCache[key] = hex;
-            }
-            pixels[i] = hex;
-          }
-        }
+  const layerId = `layer-${Date.now()}`;
+  const frameId = `frame-${Date.now()}`;
 
-        const layerId = `layer-${Date.now()}`;
-        const frameId = `frame-${Date.now()}`;
+  return {
+    id: `project-${Date.now()}`,
+    title: file.name.replace(/\.[^/.]+$/, ''),
+    width,
+    height,
+    colorMode: 'rgba',
+    layers: [{ id: layerId, name: 'Layer 1', visible: true, locked: false, opacity: 100, blendMode: 'normal' }],
+    frames: [{ id: frameId, layerData: { [layerId]: pixels } }],
+    activeLayerId: layerId,
+    selectedLayerIds: [layerId],
+    activeFrameIndex: 0,
+    selectedFrameIndices: [0],
+    palette: [],
+    paletteLibrary: [],
+    activePaletteId: '',
+    primaryColor: '#ffffff',
+    secondaryColor: '#000000',
 
-        const state: ProjectState = {
-          id: `project-${Date.now()}`,
-          title: file.name.replace(/\.[^/.]+$/, ""), 
-          width,
-          height,
-          colorMode: 'rgba', 
-          layers: [{ id: layerId, name: 'Layer 1', visible: true, locked: false, opacity: 100, blendMode: 'normal' }],
-          frames: [{ id: frameId, layerData: { [layerId]: pixels } }],
-          activeLayerId: layerId,
-          selectedLayerIds: [layerId],
-          activeFrameIndex: 0,
-          selectedFrameIndices: [0],
-          palette: [], 
-          paletteLibrary: [],
-          activePaletteId: '',
-          primaryColor: '#ffffff',
-          secondaryColor: '#000000',
-          
-          symmetry: { x: false, y: false },
-          inkType: 'simple',
-          shades: ['#000000', '#5d5d5d', '#b4b4b4', '#ffffff'],
-          
-          tool: 'pencil',
-          brushSize: 1,
-          brushShape: 'circle',
-          fillContiguous: true,
-          pixelPerfect: false,
-          ditheringEnabled: false,
-          rotationAlgorithm: 'nearest',
-          zoom: Math.min(32, Math.floor(512 / Math.max(width, height))),
-          onionSkin: false,
-          showGrid: false,
-          selection: null,
-          selectionMode: 'replace',
-          tiled: false,
-          referenceImage: null,
-        };
-        resolve(state);
-      };
-      img.onerror = () => reject(new Error("Failed to load image"));
-      img.src = e.target?.result as string;
-    };
-    reader.onerror = () => reject(new Error("Failed to read file"));
-    reader.readAsDataURL(file);
-  });
+    symmetry: { x: false, y: false },
+    inkType: 'simple',
+    shades: ['#000000', '#5d5d5d', '#b4b4b4', '#ffffff'],
+
+    tool: 'pencil',
+    brushSize: 1,
+    brushShape: 'circle',
+    fillContiguous: true,
+    pixelPerfect: false,
+    ditheringEnabled: false,
+    rotationAlgorithm: 'nearest',
+    zoom: computeInitialZoom(width, height, 32),
+    onionSkin: false,
+    showGrid: false,
+    selection: null,
+    selectionMode: 'replace',
+    tiled: false,
+    referenceImage: null,
+  };
 };
 
 export const extractColorsFromPNG = async (file: File): Promise<string[]> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        canvas.width = img.width;
-        canvas.height = img.height;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          reject(new Error("Failed to get canvas context"));
-          return;
-        }
-        ctx.drawImage(img, 0, 0);
-        const data = ctx.getImageData(0, 0, img.width, img.height).data;
-        // Bolt Optimization: Use Uint32Array view and a packed 32-bit integer Set
-        // to avoid allocating millions of string objects during palette extraction on high-res PNGs.
-        const data32 = new Uint32Array(data.buffer);
-        const packedColors = new Set<number>();
-        for (let i = 0; i < data32.length; i++) {
-          const pixel = data32[i];
-          const a = (pixel >> 24) & 0xff;
-          if (a > 0) {
-            const r = pixel & 0xff;
-            const g = (pixel >> 8) & 0xff;
-            const b = (pixel >> 16) & 0xff;
-            packedColors.add((r << 16) | (g << 8) | b);
-          }
-        }
-        const colors = Array.from(packedColors).map(p => rgbToHex((p >> 16) & 0xff, (p >> 8) & 0xff, p & 0xff));
-        resolve(colors);
-      };
-      img.onerror = () => reject(new Error("Failed to load image"));
-      img.src = e.target?.result as string;
-    };
-    reader.onerror = () => reject(new Error("Failed to read file"));
-    reader.readAsDataURL(file);
-  });
+  const { width, height, data } = await decodeImageFileToImageData(file);
+  const data32 = new Uint32Array(data.buffer, data.byteOffset, width * height);
+  const packedColors = new Set<number>();
+  for (let i = 0; i < data32.length; i++) {
+    const pixel = data32[i];
+    if ((pixel >>> 24) !== 0) {
+      const r = pixel & 0xff;
+      const g = (pixel >>> 8) & 0xff;
+      const b = (pixel >>> 16) & 0xff;
+      packedColors.add((r << 16) | (g << 8) | b);
+    }
+  }
+  return Array.from(packedColors).map(p =>
+    rgbToHex((p >> 16) & 0xff, (p >> 8) & 0xff, p & 0xff)
+  );
 };
 
 // --- RotSprite & Scale Algorithm Helpers ---
@@ -1125,7 +1192,7 @@ export const extractColorsFromPNG = async (file: File): Promise<string[]> => {
 const scale2xPass = (pixels: PixelGrid, width: number, height: number): { pixels: PixelGrid, width: number, height: number } => {
   const newWidth = width * 2;
   const newHeight = height * 2;
-  const newPixels: PixelGrid = new Array(newWidth * newHeight).fill(null);
+  const newPixels = createPixelGrid(newWidth * newHeight);
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -1168,7 +1235,7 @@ export const prepareRotSpriteBuffer = (
   if (!selection || selection.size === 0) return null;
   const box = getSelectionBoundingBox(selection, width);
   if (box.w <= 0 || box.h <= 0) return null;
-  const subGrid: PixelGrid = new Array(box.w * box.h).fill(null);
+  const subGrid = createPixelGrid(box.w * box.h);
   selection.forEach(idx => {
     const { x, y } = getCoords(idx, width);
     subGrid[(y - box.y) * box.w + (x - box.x)] = layerPixels[idx];
@@ -1194,7 +1261,7 @@ export const rotateSelectionPixels = (
     algorithm: 'nearest' | 'rotsprite',
     precomputedScale8x?: RotSpritePrecomputedBuffer | null
 ): PixelGrid => {
-    const newPixels = new Array(width * height).fill(null);
+    const newPixels = createPixelGrid(width * height);
     if (!selection || selection.size === 0) return newPixels;
 
     const cos = Math.cos(angleRad);
@@ -1232,7 +1299,7 @@ export const rotateSelectionPixels = (
         if (precomputedScale8x) {
             scaled = precomputedScale8x;
         } else {
-            const subGrid: PixelGrid = new Array(box.w * box.h).fill(null);
+            const subGrid = createPixelGrid(box.w * box.h);
             selection.forEach(idx => {
                 const { x, y } = getCoords(idx, width);
                 subGrid[(y - box.y) * box.w + (x - box.x)] = layerPixels[idx];
@@ -1275,7 +1342,7 @@ export const rotateSelectionPixels = (
                 if (srcX >= 0 && srcX < width && srcY >= 0 && srcY < height) {
                     const srcIdx = getIndex(srcX, srcY, width);
                     if (selection.has(srcIdx)) {
-                        newPixels[getIndex(x, y, width)] = layerPixels[srcIdx] ?? null;
+                        newPixels[getIndex(x, y, width)] = layerPixels[srcIdx] ?? EMPTY_PIXEL;
                     }
                 }
             }
@@ -1353,7 +1420,7 @@ export const scaleSelectionPixels = (
     width: number,
     height: number
 ): PixelGrid => {
-    const newPixels = new Array(width * height).fill(null);
+    const newPixels = createPixelGrid(width * height);
     if (srcBox.w <= 0 || srcBox.h <= 0 || destBox.w <= 0 || destBox.h <= 0) return newPixels;
 
     for (let dy = 0; dy < destBox.h; dy++) {
@@ -1433,28 +1500,29 @@ export const applyConvolution = (
             const ny = y + ky - kHalf;
             if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
                 const val = pixels[getIndex(nx, ny, width)];
-                if (val !== null) {
-                    const hex = typeof val === 'number' ? palette[val] : val;
-                    const [pr, pg, pb] = hexToRgb(hex);
-                    const kw = kernel[ky][kx];
-                    r += pr * kw;
-                    g += pg * kw;
-                    b += pb * kw;
-                    weight += kw;
+                if (val !== EMPTY_PIXEL) {
+                    const rgb = pixelToRgb(val, palette);
+                    if (rgb) {
+                        const kw = kernel[ky][kx];
+                        r += rgb[0] * kw;
+                        g += rgb[1] * kw;
+                        b += rgb[2] * kw;
+                        weight += kw;
+                    }
                 }
             }
         }
     }
 
-    if (weight === 0) return null;
+    if (weight === 0) return EMPTY_PIXEL;
     
-    const finalR = weight > 0 ? r / weight : r;
-    const finalG = weight > 0 ? g / weight : g;
-    const finalB = weight > 0 ? b / weight : b;
+    const finalR = Math.max(0, Math.min(255, Math.round(weight > 0 ? r / weight : r)));
+    const finalG = Math.max(0, Math.min(255, Math.round(weight > 0 ? g / weight : g)));
+    const finalB = Math.max(0, Math.min(255, Math.round(weight > 0 ? b / weight : b)));
 
     if (colorMode === 'indexed') {
-        return findNearestPaletteIndex(finalR, finalG, finalB, palette);
+        return encodeIndexedPixel(findNearestPaletteIndex(finalR, finalG, finalB, palette));
     } else {
-        return rgbToHex(finalR, finalG, finalB);
+        return packRGBA(finalR, finalG, finalB, 255);
     }
 };

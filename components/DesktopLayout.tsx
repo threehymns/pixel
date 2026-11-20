@@ -2094,6 +2094,7 @@ const DesktopWorkspace: React.FC<DesktopWorkspaceProps> = ({
       layers={state.layers}
       activeLayerId={state.activeLayerId}
       palette={state.palette}
+      colorMode={state.colorMode}
       width={state.width}
       height={state.height}
       zoom={state.zoom}

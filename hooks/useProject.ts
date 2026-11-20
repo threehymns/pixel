@@ -1,9 +1,36 @@
 
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
-import { ProjectState, Frame, Layer, FrameTag, SavedPalette, PixelGrid, HistoryEntry, ToolType, RecentProject, FileSystemFileHandle, ProjectInstance, ColorMode, PixelValue, Slice } from '../types';
+import { ProjectState, Frame, Layer, FrameTag, SavedPalette, PixelGrid, HistoryEntry, PixelHistoryPatch, PixelLayerPatch, ToolType, RecentProject, FileSystemFileHandle, ProjectInstance, ColorMode, PixelValue, Slice } from '../types';
 import { INITIAL_STATE, DEFAULT_PALETTE, GAMEBOY_PALETTE, ENDESGA_64_PALETTE } from '../constants';
-import { parseASE, parseGPL, extractColorsFromPNG, fileToProjectState, renderFrameToCanvas, renderSpriteSheet, getCoords, getIndex, hexToRgb, rgbToHex, findNearestPaletteIndex, getSelectionBoundingBox, getLayerParentMap, isDescendant, getGroupChildren } from '../utils';
-import { encodeAseprite } from '../utils/aseprite';
+import {
+  EMPTY_PIXEL,
+  createPixelGrid,
+  clonePixelGrid,
+  packRGBA,
+  encodeIndexedPixel,
+  getPackedColor,
+  getPackedPalette255,
+  pixelToPackedImageData,
+  pixelToRgb,
+  resolveColorToPixel,
+  computeInitialZoom,
+  applyRectPatch,
+  buildLayerPatch,
+  parseASE,
+  parseGPL,
+  extractColorsFromPNG,
+  fileToProjectState,
+  renderFrameToCanvas,
+  renderSpriteSheet,
+  getCoords,
+  getIndex,
+  hexToRgb,
+  findNearestPaletteIndex,
+  getSelectionBoundingBox,
+  isDescendant,
+  getGroupChildren,
+} from '../utils';
+import { encodeAsepriteAsync } from '../utils/asepriteWorkerClient';
 import { saveRecentProject, getRecentProjects, loadRecentProjectState, clearAllRecents } from '../utils/storage';
 import { applyOutlineEffect, DEFAULT_OUTLINE_MATRIX } from '../utils/outline';
 
@@ -231,6 +258,7 @@ function applyFloydSteinbergDither(
   targetGrid: PixelGrid,
   width: number,
   height: number,
+  sourcePalette: string[],
   newPalette: string[]
 ): void {
   const errorBufferR = new Float32Array(width * height);
@@ -248,16 +276,17 @@ function applyFloydSteinbergDither(
     for (let x = 0; x < width; x++) {
       const i = getIndex(x, y, width);
       const val = sourceGrid[i];
-      if (val === null) continue;
+      if (val === EMPTY_PIXEL) continue;
 
-      const [r, g, b] = hexToRgb(typeof val === 'number' ? newPalette[val] : val);
+      const rgb = pixelToRgb(val, sourcePalette);
+      if (!rgb) continue;
 
-      const curR = Math.max(0, Math.min(255, r + errorBufferR[i]));
-      const curG = Math.max(0, Math.min(255, g + errorBufferG[i]));
-      const curB = Math.max(0, Math.min(255, b + errorBufferB[i]));
+      const curR = Math.max(0, Math.min(255, rgb[0] + errorBufferR[i]));
+      const curG = Math.max(0, Math.min(255, rgb[1] + errorBufferG[i]));
+      const curB = Math.max(0, Math.min(255, rgb[2] + errorBufferB[i]));
 
       const paletteIndex = findNearestPaletteIndex(curR, curG, curB, newPalette);
-      targetGrid[i] = paletteIndex;
+      targetGrid[i] = encodeIndexedPixel(paletteIndex);
 
       const [pr, pg, pb] = hexToRgb(newPalette[paletteIndex]);
       const errR = curR - pr;
@@ -276,6 +305,177 @@ function applyFloydSteinbergDither(
         }
       }
     }
+  }
+}
+
+function convertFramesColorMode(
+  frames: Frame[],
+  width: number,
+  height: number,
+  targetMode: ColorMode,
+  palette: string[],
+  ditheringEnabled: boolean
+): Frame[] {
+  const totalPixels = width * height;
+  if (targetMode === 'indexed') {
+    if (palette.length === 0) return frames;
+    return frames.map(f => {
+      const newLayerData: Record<string, PixelGrid> = {};
+      Object.keys(f.layerData).forEach(lid => {
+        const sourceGrid = f.layerData[lid];
+        const targetGrid = createPixelGrid(totalPixels);
+        if (!ditheringEnabled) {
+          const len = Math.min(sourceGrid.length, totalPixels);
+          for (let i = 0; i < len; i++) {
+            const val = sourceGrid[i];
+            if (val === EMPTY_PIXEL) continue;
+            const rgb = pixelToRgb(val, palette);
+            if (!rgb) continue;
+            targetGrid[i] = encodeIndexedPixel(findNearestPaletteIndex(rgb[0], rgb[1], rgb[2], palette));
+          }
+        } else {
+          applyFloydSteinbergDither(sourceGrid, targetGrid, width, height, palette, palette);
+        }
+        newLayerData[lid] = targetGrid;
+      });
+      return { ...f, layerData: newLayerData };
+    });
+  }
+
+  // Indexed -> RGBA
+  const paletteUint32 = getPackedPalette255(palette);
+  const fallbackBlack = packRGBA(0, 0, 0, 255);
+  return frames.map(f => {
+    const newLayerData: Record<string, PixelGrid> = {};
+    Object.keys(f.layerData).forEach(lid => {
+      const src = f.layerData[lid];
+      const dst = createPixelGrid(src.length);
+      for (let i = 0; i < src.length; i++) {
+        const val = src[i];
+        if (val === EMPTY_PIXEL) continue;
+        const packed = pixelToPackedImageData(val, paletteUint32);
+        dst[i] = packed !== 0 ? packed : fallbackBlack;
+      }
+      newLayerData[lid] = dst;
+    });
+    return { ...f, layerData: newLayerData };
+  });
+}
+
+// --- Patch-Based History Helpers ---
+
+const MAX_HISTORY_ENTRIES = 50;
+const MAX_HISTORY_BYTES = 512 * 1024 * 1024; // 512 MB cap to prevent OOM on 4K images
+
+function applyPixelHistoryPatch(
+  baseState: ProjectState,
+  patch: PixelHistoryPatch,
+  direction: 'before' | 'after'
+): ProjectState {
+  const frameIdx = patch.frameIndex;
+  const targetFrame = baseState.frames[frameIdx];
+  if (!targetFrame) return baseState;
+
+  const nextLayerData = { ...targetFrame.layerData };
+  const totalPixels = baseState.width * baseState.height;
+
+  for (let i = 0; i < patch.layers.length; i++) {
+    const lp = patch.layers[i];
+    const existing = nextLayerData[lp.layerId];
+    const cloned = existing ? clonePixelGrid(existing) : createPixelGrid(totalPixels);
+    const data = direction === 'before' ? lp.before : lp.after;
+    applyRectPatch(cloned, baseState.width, lp.x, lp.y, lp.w, lp.h, data);
+    nextLayerData[lp.layerId] = cloned;
+  }
+
+  const nextFrames = baseState.frames.slice();
+  nextFrames[frameIdx] = {
+    ...targetFrame,
+    layerData: nextLayerData,
+  };
+
+  let nextSelection = baseState.selection;
+  if (direction === 'before' && patch.selectionBefore !== undefined) {
+    nextSelection = patch.selectionBefore;
+  } else if (direction === 'after' && patch.selectionAfter !== undefined) {
+    nextSelection = patch.selectionAfter;
+  }
+
+  return {
+    ...baseState,
+    frames: nextFrames,
+    selection: nextSelection,
+  };
+}
+
+function materializeHistoryState(history: HistoryEntry[], targetIndex: number): ProjectState | null {
+  if (targetIndex < 0 || targetIndex >= history.length) return null;
+
+  const targetEntry = history[targetIndex];
+  if (targetEntry.kind === 'snapshot' && targetEntry.state) {
+    return targetEntry.state;
+  }
+
+  let snapIdx = targetIndex;
+  while (snapIdx >= 0) {
+    const entry = history[snapIdx];
+    if (entry.kind === 'snapshot' && entry.state) break;
+    snapIdx--;
+  }
+  if (snapIdx < 0 || !history[snapIdx].state) return null;
+
+  let curState = history[snapIdx].state!;
+  for (let i = snapIdx + 1; i <= targetIndex; i++) {
+    const entry = history[i];
+    if (entry.kind === 'snapshot' && entry.state) {
+      curState = entry.state;
+    } else if (entry.kind === 'pixel-patch' && entry.patch) {
+      curState = applyPixelHistoryPatch(curState, entry.patch, 'after');
+    }
+  }
+  return curState;
+}
+
+function estimateHistoryBytes(history: HistoryEntry[]): number {
+  const seenGrids = new Set<PixelGrid>();
+  let bytes = 0;
+  for (let i = 0; i < history.length; i++) {
+    const entry = history[i];
+    if (entry.kind === 'pixel-patch' && entry.patch) {
+      for (let j = 0; j < entry.patch.layers.length; j++) {
+        const lp = entry.patch.layers[j];
+        bytes += lp.before.byteLength + lp.after.byteLength;
+      }
+    } else if (entry.kind === 'snapshot' && entry.state) {
+      const frames = entry.state.frames;
+      for (let f = 0; f < frames.length; f++) {
+        const ld = frames[f].layerData;
+        for (const lid in ld) {
+          const grid = ld[lid];
+          if (grid && !seenGrids.has(grid)) {
+            seenGrids.add(grid);
+            bytes += grid.byteLength;
+          }
+        }
+      }
+    }
+  }
+  return bytes;
+}
+
+function shiftHistoryBase(history: HistoryEntry[]): void {
+  if (history.length <= 1) return;
+  const oldBase = history.shift()!;
+  const newBase = history[0];
+  if (newBase.kind === 'pixel-patch' && newBase.patch && oldBase.state) {
+    const materialized = applyPixelHistoryPatch(oldBase.state, newBase.patch, 'after');
+    history[0] = {
+      kind: 'snapshot',
+      state: materialized,
+      action: newBase.action,
+      tool: newBase.tool,
+      timestamp: newBase.timestamp,
+    };
   }
 }
 
@@ -408,7 +608,7 @@ export function useProject() {
       
       setProjects(prev => [...prev, {
         data: newProjectState,
-        history: [{ state: newProjectState, action: 'Open Recent', timestamp: Date.now() }],
+        history: [{ kind: 'snapshot', state: newProjectState, action: 'Open Recent', timestamp: Date.now() }],
         historyIndex: 0,
         lastSavedHistoryIndex: 0
       }]);
@@ -497,11 +697,17 @@ export function useProject() {
     state.userData,
   ]);
 
-  // Save on window unload/hide so last-second unsaved work (including UI state) is never lost
+  // Save on window unload/hide so last-second unsaved work (including UI state) is never lost.
+  // Skip very large canvases (>1MP) during unload since async worker encoding won't finish before page teardown.
   useEffect(() => {
     const handleBeforeUnload = () => {
       const currentProject = activeProjectRef.current;
-      if (currentProject && currentProject.id && currentProject.id !== 'default') {
+      if (
+        currentProject &&
+        currentProject.id &&
+        currentProject.id !== 'default' &&
+        currentProject.width * currentProject.height <= 1_000_000
+      ) {
         saveRecentProject(currentProject).catch(() => {});
       }
     };
@@ -537,12 +743,13 @@ export function useProject() {
       secondaryColor: chosenPalette ? (chosenPalette.colors[0] || '#000000') : INITIAL_STATE.secondaryColor,
       layers: [{ id: 'layer-1', name: 'Layer 1', visible: true, locked: false, opacity: 100, blendMode: 'normal' }],
       selectedLayerIds: ['layer-1'],
-      frames: [{ id: 'frame-1', layerData: { 'layer-1': new Array(w * h).fill(null) } }],
+      frames: [{ id: 'frame-1', layerData: { 'layer-1': createPixelGrid(w * h) } }],
       selectedFrameIndices: [0],
-      zoom: Math.min(64, Math.floor(512 / Math.max(w, h))),
+      zoom: computeInitialZoom(w, h, 64),
     };
     
     const initialEntry: HistoryEntry = {
+        kind: 'snapshot',
         state: newProject,
         action: 'New Project',
         timestamp: Date.now()
@@ -564,12 +771,11 @@ export function useProject() {
 
       setProjects(prev => [...prev, {
         data: newState,
-        history: [{ state: newState, action: 'Import File', timestamp: Date.now() }],
+        history: [{ kind: 'snapshot', state: newState, action: 'Import File', timestamp: Date.now() }],
         historyIndex: 0,
         lastSavedHistoryIndex: 0
       }]);
       setActiveProjectId(newState.id);
-      addToRecents(newState);
     } catch (e) {
       console.error(e);
       alert("Failed to load project: " + e);
@@ -578,7 +784,7 @@ export function useProject() {
 
   const updateState = (
       updater: ProjectStateUpdater,
-      historyConfig?: { action: string, tool?: ToolType }
+      historyConfig?: { action: string; tool?: ToolType; patch?: PixelHistoryPatch }
   ) => {
     const curActiveId = latestRef.current.activeProjectId;
     if (curActiveId === 'home') return;
@@ -609,16 +815,37 @@ export function useProject() {
 
       let newHistory = p.history;
       let newIndex = p.historyIndex;
+      let newLastSavedIndex = p.lastSavedHistoryIndex;
 
       if (historyConfig) {
         newHistory = p.history.slice(0, p.historyIndex + 1);
-        newHistory.push({
+        if (historyConfig.patch && historyConfig.patch.layers.length > 0 && newHistory.length > 0) {
+          newHistory.push({
+            kind: 'pixel-patch',
+            patch: historyConfig.patch,
+            action: historyConfig.action,
+            tool: historyConfig.tool,
+            timestamp: Date.now(),
+          });
+        } else {
+          newHistory.push({
+            kind: 'snapshot',
             state: sanitizedState,
             action: historyConfig.action,
             tool: historyConfig.tool,
-            timestamp: Date.now()
-        });
-        if (newHistory.length > 50) newHistory.shift(); 
+            timestamp: Date.now(),
+          });
+        }
+
+        while (
+          newHistory.length > MAX_HISTORY_ENTRIES ||
+          (newHistory.length > 2 && estimateHistoryBytes(newHistory) > MAX_HISTORY_BYTES)
+        ) {
+          shiftHistoryBase(newHistory);
+          if (newLastSavedIndex >= 0) {
+            newLastSavedIndex--;
+          }
+        }
         newIndex = newHistory.length - 1;
       }
 
@@ -626,7 +853,7 @@ export function useProject() {
         data: sanitizedState,
         history: newHistory,
         historyIndex: newIndex,
-        lastSavedHistoryIndex: p.lastSavedHistoryIndex
+        lastSavedHistoryIndex: newLastSavedIndex
       };
     }));
   };
@@ -647,9 +874,9 @@ export function useProject() {
 
     const isInIframe = window.self !== window.top;
 
-    const performFallbackDownload = () => {
-      const aseBytes = encodeAseprite(state);
-      const blob = new Blob([aseBytes.buffer], { type: 'image/x-aseprite' });
+    const performFallbackDownload = async () => {
+      const aseBytes = await encodeAsepriteAsync(state);
+      const blob = new Blob([aseBytes.buffer as ArrayBuffer], { type: 'image/x-aseprite' });
       const href = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = href;
@@ -664,7 +891,7 @@ export function useProject() {
     };
 
     if (isInIframe || typeof (window as any).showSaveFilePicker !== 'function') {
-      performFallbackDownload();
+      await performFallbackDownload();
       return;
     }
 
@@ -703,9 +930,9 @@ export function useProject() {
              markSaved();
              addToRecents(newState);
         } else {
-             const aseBytes = encodeAseprite(state);
+             const aseBytes = await encodeAsepriteAsync(state);
              const writable = await handle.createWritable();
-             await writable.write(aseBytes.buffer);
+             await writable.write(aseBytes.buffer as ArrayBuffer);
              await writable.close();
 
              const newState = { ...state, title: handle.name, fileHandle: handle };
@@ -719,7 +946,7 @@ export function useProject() {
              return;
          }
          console.warn("showSaveFilePicker failed or restricted, falling back to standard download", e);
-         performFallbackDownload();
+         await performFallbackDownload();
     }
   };
 
@@ -751,9 +978,9 @@ export function useProject() {
         }
         
         if (isProjectFile) {
-            const aseBytes = encodeAseprite(state);
+            const aseBytes = await encodeAsepriteAsync(state);
             const writable = await fileHandle.createWritable();
-            await writable.write(aseBytes.buffer);
+            await writable.write(aseBytes.buffer as ArrayBuffer);
             await writable.close();
             markSaved();
             alert(`Saved ${fileHandle.name}`);
@@ -818,10 +1045,25 @@ export function useProject() {
         if (p.data.id !== curActiveId) return p;
         if (p.historyIndex > 0) {
             const newIndex = p.historyIndex - 1;
-            const historicalState = p.history[newIndex].state;
+            const curEntry = p.history[p.historyIndex];
+            const prevEntry = p.history[newIndex];
+
+            let nextData: ProjectState | null = null;
+            if (prevEntry.kind === 'snapshot' && prevEntry.state) {
+              nextData = mergeUIState(prevEntry.state, p.data);
+            } else if (curEntry.kind === 'pixel-patch' && curEntry.patch) {
+              nextData = applyPixelHistoryPatch(p.data, curEntry.patch, 'before');
+            } else {
+              const materialized = materializeHistoryState(p.history, newIndex);
+              if (materialized) {
+                nextData = mergeUIState(materialized, p.data);
+              }
+            }
+
+            if (!nextData) return p;
             return { 
                 ...p, 
-                data: mergeUIState(historicalState, p.data), 
+                data: nextData, 
                 historyIndex: newIndex 
             };
         }
@@ -836,10 +1078,24 @@ export function useProject() {
         if (p.data.id !== curActiveId) return p;
         if (p.historyIndex < p.history.length - 1) {
             const newIndex = p.historyIndex + 1;
-            const historicalState = p.history[newIndex].state;
+            const nextEntry = p.history[newIndex];
+
+            let nextData: ProjectState | null = null;
+            if (nextEntry.kind === 'snapshot' && nextEntry.state) {
+              nextData = mergeUIState(nextEntry.state, p.data);
+            } else if (nextEntry.kind === 'pixel-patch' && nextEntry.patch) {
+              nextData = applyPixelHistoryPatch(p.data, nextEntry.patch, 'after');
+            } else {
+              const materialized = materializeHistoryState(p.history, newIndex);
+              if (materialized) {
+                nextData = mergeUIState(materialized, p.data);
+              }
+            }
+
+            if (!nextData) return p;
             return { 
                 ...p, 
-                data: mergeUIState(historicalState, p.data), 
+                data: nextData, 
                 historyIndex: newIndex 
             };
         }
@@ -853,10 +1109,27 @@ export function useProject() {
     setProjects(prev => prev.map(p => {
       if (p.data.id !== curActiveId) return p;
       if (index >= 0 && index < p.history.length) {
-        const historicalState = p.history[index].state;
+        if (index === p.historyIndex) return p;
+
+        let nextData: ProjectState | null = null;
+        const targetEntry = p.history[index];
+        if (targetEntry.kind === 'snapshot' && targetEntry.state) {
+          nextData = mergeUIState(targetEntry.state, p.data);
+        } else if (index === p.historyIndex - 1 && p.history[p.historyIndex].kind === 'pixel-patch' && p.history[p.historyIndex].patch) {
+          nextData = applyPixelHistoryPatch(p.data, p.history[p.historyIndex].patch!, 'before');
+        } else if (index === p.historyIndex + 1 && targetEntry.kind === 'pixel-patch' && targetEntry.patch) {
+          nextData = applyPixelHistoryPatch(p.data, targetEntry.patch, 'after');
+        } else {
+          const materialized = materializeHistoryState(p.history, index);
+          if (materialized) {
+            nextData = mergeUIState(materialized, p.data);
+          }
+        }
+
+        if (!nextData) return p;
         return { 
             ...p, 
-            data: mergeUIState(historicalState, p.data), 
+            data: nextData, 
             historyIndex: index 
         };
       }
@@ -864,59 +1137,37 @@ export function useProject() {
     }));
   };
 
+  const restoreCurrentHistoryState = () => {
+    const curActiveId = latestRef.current.activeProjectId;
+    if (curActiveId === 'home') return;
+    setProjects(prev => prev.map(p => {
+      if (p.data.id !== curActiveId) return p;
+      const materialized = materializeHistoryState(p.history, p.historyIndex);
+      if (!materialized) return p;
+      return {
+        ...p,
+        data: mergeUIState(materialized, p.data),
+      };
+    }));
+  };
+
   const setColorMode = (mode: ColorMode) => {
     const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home' || state.colorMode === mode) return;
 
-    let newPalette = [...state.palette];
-    const width = state.width;
-    const height = state.height;
-    const ditheringEnabled = state.ditheringEnabled;
-
-    let newFrames = state.frames.map(f => ({ ...f, layerData: { ...f.layerData } }));
-
-    if (mode === 'indexed') {
-        // Floyd-Steinberg Dithering conversion if enabled
-        newFrames = state.frames.map(f => {
-            const newLayerData: Record<string, PixelGrid> = {};
-            Object.keys(f.layerData).forEach(lid => {
-                const sourceGrid = f.layerData[lid];
-                const targetGrid: PixelGrid = new Array(width * height).fill(null);
-                
-                if (!ditheringEnabled) {
-                    // Standard Weighted Mapping
-                    targetGrid.fill(null);
-                    sourceGrid.forEach((val, i) => {
-                        if (val === null) return;
-                        const [r, g, b] = hexToRgb(typeof val === 'number' ? newPalette[val] : val);
-                        targetGrid[i] = findNearestPaletteIndex(r, g, b, newPalette);
-                    });
-                } else {
-                    // Floyd-Steinberg
-                    applyFloydSteinbergDither(sourceGrid, targetGrid, width, height, newPalette);
-                }
-                newLayerData[lid] = targetGrid;
-            });
-            return { ...f, layerData: newLayerData };
-        });
-    } else {
-        // Convert Indexed -> RGBA
-        newFrames = state.frames.map(f => {
-            const newLayerData: Record<string, PixelGrid> = {};
-            Object.keys(f.layerData).forEach(lid => {
-                newLayerData[lid] = f.layerData[lid].map(val => {
-                    if (val === null) return null;
-                    if (typeof val === 'string') return val;
-                    return state.palette[val] || '#000000';
-                });
-            });
-            return { ...f, layerData: newLayerData };
-        });
-    }
+    const newPalette = [...state.palette];
+    const newFrames = convertFramesColorMode(
+      state.frames,
+      state.width,
+      state.height,
+      mode,
+      newPalette,
+      state.ditheringEnabled
+    );
 
     updateState(
         { ...state, colorMode: mode, palette: newPalette, frames: newFrames },
-        { action: `Switch to ${mode.toUpperCase()} mode${ditheringEnabled ? ' (Dithered)' : ''}` }
+        { action: `Switch to ${mode.toUpperCase()} mode${state.ditheringEnabled ? ' (Dithered)' : ''}` }
     );
   };
 
@@ -924,7 +1175,7 @@ export function useProject() {
     const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     const newFrame: Frame = { id: `frame-${Date.now()}`, layerData: {} };
-    state.layers.forEach(l => newFrame.layerData[l.id] = new Array(state.width * state.height).fill(null));
+    state.layers.forEach(l => newFrame.layerData[l.id] = createPixelGrid(state.width * state.height));
     updateState(
         { 
           ...state, 
@@ -942,7 +1193,7 @@ export function useProject() {
     const current = state.frames[state.activeFrameIndex];
     if (!current) return;
     const newData: Record<string, PixelGrid> = {};
-    Object.keys(current.layerData).forEach(key => newData[key] = [...current.layerData[key]]);
+    Object.keys(current.layerData).forEach(key => newData[key] = clonePixelGrid(current.layerData[key]));
     const newFrame: Frame = { id: `frame-${Date.now()}`, layerData: newData };
     const newFrames = [...state.frames]; newFrames.splice(state.activeFrameIndex + 1, 0, newFrame);
     updateState(
@@ -971,7 +1222,7 @@ export function useProject() {
         const source = state.frames[idx];
         if (!source) return;
         const newData: Record<string, PixelGrid> = {};
-        Object.keys(source.layerData).forEach(key => newData[key] = [...source.layerData[key]]);
+        Object.keys(source.layerData).forEach(key => newData[key] = clonePixelGrid(source.layerData[key]));
         const newFrame: Frame = { id: `frame-${Date.now()}-${i}`, layerData: newData };
         newFrames.splice(offset + i, 0, newFrame);
         insertedIndices.push(offset + i);
@@ -1025,7 +1276,7 @@ export function useProject() {
     const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     const newFrame: Frame = { id: `frame-${Date.now()}`, layerData: {} };
-    state.layers.forEach(l => newFrame.layerData[l.id] = new Array(state.width * state.height).fill(null));
+    state.layers.forEach(l => newFrame.layerData[l.id] = createPixelGrid(state.width * state.height));
     const newFrames = [...state.frames];
     newFrames.splice(index, 0, newFrame);
     updateState(
@@ -1055,34 +1306,35 @@ export function useProject() {
     const height = state.height;
     const palette = state.palette;
 
-    const startPixelsArr = state.frames[startIdx].layerData[layerId] || [];
-    const endPixelsArr = state.frames[endIdx].layerData[layerId] || [];
+    const startPixelsArr = state.frames[startIdx].layerData[layerId];
+    const endPixelsArr = state.frames[endIdx].layerData[layerId];
 
-    // Resolve color helpers
-    const getHex = (val: string | number | null): string | null => {
-        if (val === null) return null;
-        if (typeof val === 'number') return palette[val];
-        return val;
-    };
-
-    // 1. Collect all non-null pixels from start and end frames
+    // 1. Collect all non-empty pixels from start and end frames
     const startList: PixelPoint[] = [];
-    startPixelsArr.forEach((val, i) => {
-        const hex = getHex(val);
-        if (hex) {
-          const [r, g, b] = hexToRgb(hex);
-          startList.push({ ...getCoords(i, width), r, g, b });
+    if (startPixelsArr) {
+      for (let i = 0; i < startPixelsArr.length; i++) {
+        const val = startPixelsArr[i];
+        if (val !== EMPTY_PIXEL) {
+          const rgb = pixelToRgb(val, palette);
+          if (rgb) {
+            startList.push({ ...getCoords(i, width), r: rgb[0], g: rgb[1], b: rgb[2] });
+          }
         }
-    });
+      }
+    }
 
     const endList: PixelPoint[] = [];
-    endPixelsArr.forEach((val, i) => {
-        const hex = getHex(val);
-        if (hex) {
-          const [r, g, b] = hexToRgb(hex);
-          endList.push({ ...getCoords(i, width), r, g, b });
+    if (endPixelsArr) {
+      for (let i = 0; i < endPixelsArr.length; i++) {
+        const val = endPixelsArr[i];
+        if (val !== EMPTY_PIXEL) {
+          const rgb = pixelToRgb(val, palette);
+          if (rgb) {
+            endList.push({ ...getCoords(i, width), r: rgb[0], g: rgb[1], b: rgb[2] });
+          }
         }
-    });
+      }
+    }
 
     // Handle empty frames gracefully
     if (startList.length === 0 && endList.length === 0) return;
@@ -1104,7 +1356,7 @@ export function useProject() {
         const currentFrameIdx = selected[i];
         const t = i / (selected.length - 1); 
 
-        const framePixels: PixelGrid = new Array(width * height).fill(null);
+        const framePixels = createPixelGrid(width * height);
 
         for (const pair of pairs) {
             const { s, e } = pair;
@@ -1116,13 +1368,16 @@ export function useProject() {
             const curG = s.g + (e.g - s.g) * t;
             const curB = s.b + (e.b - s.b) * t;
 
-            const nearestIdx = findNearestPaletteIndex(curR, curG, curB, palette);
-            const curVal =
-              state.colorMode === 'indexed'
-                ? palette.length > 0
-                  ? nearestIdx
-                  : '#000000'
-                : palette[nearestIdx] || '#000000';
+            let curVal: PixelValue;
+            if (state.colorMode === 'indexed' && palette.length > 0) {
+              const nearestIdx = findNearestPaletteIndex(curR, curG, curB, palette);
+              curVal = encodeIndexedPixel(nearestIdx);
+            } else if (palette.length > 0) {
+              const nearestIdx = findNearestPaletteIndex(curR, curG, curB, palette);
+              curVal = getPackedColor(palette[nearestIdx], 255);
+            } else {
+              curVal = packRGBA(Math.round(curR), Math.round(curG), Math.round(curB), 255);
+            }
 
             if (curX >= 0 && curX < width && curY >= 0 && curY < height) {
                 framePixels[getIndex(curX, curY, width)] = curVal;
@@ -1167,7 +1422,7 @@ export function useProject() {
     }
 
     const newLayer: Layer = { id: newId, name: newName, visible: true, locked: false, opacity: 100, blendMode: 'normal', childLevel, parentId };
-    const newFrames = state.frames.map(f => ({ ...f, layerData: { ...f.layerData, [newId]: new Array(state.width * state.height).fill(null) } }));
+    const newFrames = state.frames.map(f => ({ ...f, layerData: { ...f.layerData, [newId]: createPixelGrid(state.width * state.height) } }));
     const newLayers = [...state.layers];
     if (insertIndex >= 0 && insertIndex <= newLayers.length) {
       newLayers.splice(insertIndex, 0, newLayer);
@@ -1208,7 +1463,7 @@ export function useProject() {
       parentId,
       collapsed: false
     };
-    const newFrames = state.frames.map(f => ({ ...f, layerData: { ...f.layerData, [newId]: new Array(state.width * state.height).fill(null) } }));
+    const newFrames = state.frames.map(f => ({ ...f, layerData: { ...f.layerData, [newId]: createPixelGrid(state.width * state.height) } }));
     const newLayers = [...state.layers]; const idx = state.layers.findIndex(l => l.id === state.activeLayerId);
     if(idx!==-1) newLayers.splice(idx+1, 0, newLayer); else newLayers.push(newLayer);
     updateState(
@@ -1281,7 +1536,7 @@ export function useProject() {
          ...f,
          layerData: {
              ...f.layerData,
-             [newId]: f.layerData[id] ? [...f.layerData[id]] : new Array(state.width * state.height).fill(null)
+             [newId]: f.layerData[id] ? clonePixelGrid(f.layerData[id]) : createPixelGrid(state.width * state.height)
          }
      }));
 
@@ -1311,7 +1566,7 @@ export function useProject() {
         duplicatedIds.push(newId);
 
         newFrames.forEach(f => {
-            f.layerData[newId] = sourceLayer.id in f.layerData ? [...f.layerData[id]] : new Array(state.width * state.height).fill(null);
+            f.layerData[newId] = sourceLayer.id in f.layerData ? clonePixelGrid(f.layerData[id]) : createPixelGrid(state.width * state.height);
         });
     });
 
@@ -1390,7 +1645,7 @@ export function useProject() {
       ...f,
       layerData: {
         ...f.layerData,
-        [groupId]: new Array(state.width * state.height).fill(null)
+        [groupId]: createPixelGrid(state.width * state.height)
       }
     }));
 
@@ -1469,7 +1724,7 @@ export function useProject() {
       ...f,
       layerData: {
         ...f.layerData,
-        [newId]: new Array(state.width * state.height).fill(null)
+        [newId]: createPixelGrid(state.width * state.height)
       }
     }));
 
@@ -1699,15 +1954,16 @@ export function useProject() {
           const newLayerData: Record<string, PixelGrid> = {};
           Object.keys(f.layerData).forEach(lid => {
               const oldGrid = f.layerData[lid];
-              const newGrid: PixelGrid = new Array(newWidth * newHeight).fill(null);
+              const newGrid = createPixelGrid(newWidth * newHeight);
               for (let y = 0; y < oldHeight; y++) {
-                  for (let x = 0; x < oldWidth; x++) {
-                      const nx = x + ox;
-                      const ny = y + oy;
-                      if (nx >= 0 && nx < newWidth && ny >= 0 && ny < newHeight) {
-                          newGrid[ny * newWidth + nx] = oldGrid[y * oldWidth + x];
-                      }
-                  }
+                  const ny = y + oy;
+                  if (ny < 0 || ny >= newHeight) continue;
+                  const srcXStart = Math.max(0, -ox);
+                  const srcXEnd = Math.min(oldWidth, newWidth - ox);
+                  if (srcXEnd <= srcXStart) continue;
+                  const srcOff = y * oldWidth + srcXStart;
+                  const dstOff = ny * newWidth + (srcXStart + ox);
+                  newGrid.set(oldGrid.subarray(srcOff, srcOff + (srcXEnd - srcXStart)), dstOff);
               }
               newLayerData[lid] = newGrid;
           });
@@ -1741,16 +1997,17 @@ export function useProject() {
           ? getSelectionBoundingBox(selection, width) 
           : { x: 0, y: 0, w: width, h: height };
 
+      const layerPatches: PixelLayerPatch[] = [];
       const newFrames = frames.map((f, i) => {
           if (i !== activeFrameIndex) return f;
           const newLayerData = { ...f.layerData };
           selectedLayerIds.forEach(lId => {
-              const layerPixels = [...(f.layerData[lId] || new Array(width * height).fill(null))];
-              const updatedPixels = [...layerPixels];
+              const basePixels = f.layerData[lId] || createPixelGrid(width * height);
+              const updatedPixels = clonePixelGrid(basePixels);
 
               if (selection) {
                   // Clear original selection pixels
-                  selection.forEach(idx => updatedPixels[idx] = null);
+                  selection.forEach(idx => { updatedPixels[idx] = EMPTY_PIXEL; });
               }
 
               for (let y = 0; y < box.h; y++) {
@@ -1764,13 +2021,21 @@ export function useProject() {
                       const destIdx = getIndex(destX, destY, width);
 
                       if (!selection || selection.has(srcIdx)) {
-                          if (layerPixels[srcIdx] !== null) {
-                              updatedPixels[destIdx] = layerPixels[srcIdx];
+                          const val = basePixels[srcIdx];
+                          if (!selection || val !== EMPTY_PIXEL) {
+                              updatedPixels[destIdx] = val;
                           }
                       }
                   }
               }
               newLayerData[lId] = updatedPixels;
+              const patch = buildLayerPatch(lId, basePixels, updatedPixels, width, height, {
+                minX: box.x,
+                minY: box.y,
+                maxX: box.x + box.w - 1,
+                maxY: box.y + box.h - 1,
+              });
+              if (patch) layerPatches.push(patch);
           });
           return { ...f, layerData: newLayerData };
       });
@@ -1790,7 +2055,15 @@ export function useProject() {
 
       updateState(
           { ...state, frames: newFrames, selection: newSelection },
-          { action: `Flip ${axis === 'h' ? 'Horizontal' : 'Vertical'}` }
+          {
+            action: `Flip ${axis === 'h' ? 'Horizontal' : 'Vertical'}`,
+            patch: layerPatches.length > 0 ? {
+              frameIndex: activeFrameIndex,
+              layers: layerPatches,
+              selectionBefore: selection,
+              selectionAfter: newSelection,
+            } : undefined,
+          }
       );
   };
 
@@ -1807,8 +2080,9 @@ export function useProject() {
           const pixels = currentFrame.layerData[lId];
           if (!pixels) return;
           for (let y = 0; y < height; y++) {
+              const rowOff = y * width;
               for (let x = 0; x < width; x++) {
-                  if (pixels[y * width + x] !== null) {
+                  if (pixels[rowOff + x] !== EMPTY_PIXEL) {
                       if (x < minX) minX = x;
                       if (x > maxX) maxX = x;
                       if (y < minY) minY = y;
@@ -1830,25 +2104,30 @@ export function useProject() {
 
       if (offsetX === 0 && offsetY === 0) return;
 
+      const patchBounds = {
+        minX: Math.min(minX, targetX),
+        minY: Math.min(minY, targetY),
+        maxX: Math.max(maxX, targetX + contentW - 1),
+        maxY: Math.max(maxY, targetY + contentH - 1),
+      };
+      const layerPatches: PixelLayerPatch[] = [];
+
       const newFrames = frames.map((f, i) => {
           if (i !== activeFrameIndex) return f;
           const newLayerData = { ...f.layerData };
           selectedLayerIds.forEach(lId => {
-              const oldPixels = f.layerData[lId] || new Array(width * height).fill(null);
-              const newPixels = new Array(width * height).fill(null);
-              for (let y = 0; y < height; y++) {
-                  for (let x = 0; x < width; x++) {
-                      const val = oldPixels[y * width + x];
-                      if (val !== null) {
-                          const nx = x + offsetX;
-                          const ny = y + offsetY;
-                          if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-                              newPixels[ny * width + nx] = val;
-                          }
-                      }
-                  }
+              const oldPixels = f.layerData[lId] || createPixelGrid(width * height);
+              const newPixels = createPixelGrid(width * height);
+              for (let y = minY; y <= maxY; y++) {
+                  const ny = y + offsetY;
+                  if (ny < 0 || ny >= height) continue;
+                  const srcOff = y * width + minX;
+                  const dstOff = ny * width + (minX + offsetX);
+                  newPixels.set(oldPixels.subarray(srcOff, srcOff + contentW), dstOff);
               }
               newLayerData[lId] = newPixels;
+              const patch = buildLayerPatch(lId, oldPixels, newPixels, width, height, patchBounds);
+              if (patch) layerPatches.push(patch);
           });
           return { ...f, layerData: newLayerData };
       });
@@ -1868,7 +2147,15 @@ export function useProject() {
 
       updateState(
           { ...state, frames: newFrames, selection: newSelection },
-          { action: 'Center Content' }
+          {
+            action: 'Center Content',
+            patch: layerPatches.length > 0 ? {
+              frameIndex: activeFrameIndex,
+              layers: layerPatches,
+              selectionBefore: state.selection,
+              selectionAfter: newSelection,
+            } : undefined,
+          }
       );
   };
 
@@ -1894,15 +2181,15 @@ export function useProject() {
       const { frames, width, height, activeFrameIndex, activeLayerId, selection, primaryColor, colorMode, palette } = state;
       if (!selection || selection.size === 0) return;
 
-      const strokeColor = colorMode === 'indexed' 
-          ? (palette.findIndex(c => c.toLowerCase() === primaryColor.toLowerCase()) > -1 ? palette.findIndex(c => c.toLowerCase() === primaryColor.toLowerCase()) : 0)
-          : primaryColor;
+      const strokeColor = resolveColorToPixel(primaryColor, colorMode, palette);
+      const box = getSelectionBoundingBox(selection, width);
+      const layerPatches: PixelLayerPatch[] = [];
 
       const newFrames = frames.map((f, i) => {
           if (i !== activeFrameIndex) return f;
           const newLayerData = { ...f.layerData };
-          const pixels = f.layerData[activeLayerId] || new Array(width * height).fill(null);
-          const newPixels = [...pixels];
+          const pixels = f.layerData[activeLayerId] || createPixelGrid(width * height);
+          const newPixels = clonePixelGrid(pixels);
           
           selection.forEach(idx => {
               const { x, y } = getCoords(idx, width);
@@ -1916,12 +2203,22 @@ export function useProject() {
               }
           });
           newLayerData[activeLayerId] = newPixels;
+          const patch = buildLayerPatch(activeLayerId, pixels, newPixels, width, height, {
+            minX: box.x,
+            minY: box.y,
+            maxX: box.x + box.w - 1,
+            maxY: box.y + box.h - 1,
+          });
+          if (patch) layerPatches.push(patch);
           return { ...f, layerData: newLayerData };
       });
 
       updateState(
           { ...state, frames: newFrames },
-          { action: 'Stroke Selection' }
+          {
+            action: 'Stroke Selection',
+            patch: layerPatches.length > 0 ? { frameIndex: activeFrameIndex, layers: layerPatches } : undefined,
+          }
       );
   };
 
@@ -1931,27 +2228,37 @@ export function useProject() {
       const { frames, width, height, activeFrameIndex, selectedLayerIds, selection } = state;
       if (!selection || selection.size === 0) return;
 
+      const box = getSelectionBoundingBox(selection, width);
+      const bounds = { minX: box.x, minY: box.y, maxX: box.x + box.w - 1, maxY: box.y + box.h - 1 };
+      const layerPatches: PixelLayerPatch[] = [];
+
       const newFrames = frames.map((f, i) => {
           if (i !== activeFrameIndex) return f;
           const newLayerData = { ...f.layerData };
           selectedLayerIds.forEach(lId => {
-              const layerPixels = [...(f.layerData[lId] || new Array(width * height).fill(null))];
-              selection.forEach(idx => layerPixels[idx] = null);
+              const basePixels = f.layerData[lId] || createPixelGrid(width * height);
+              const layerPixels = clonePixelGrid(basePixels);
+              selection.forEach(idx => { layerPixels[idx] = EMPTY_PIXEL; });
               newLayerData[lId] = layerPixels;
+              const patch = buildLayerPatch(lId, basePixels, layerPixels, width, height, bounds);
+              if (patch) layerPatches.push(patch);
           });
           return { ...f, layerData: newLayerData };
       });
 
       updateState(
           { ...state, frames: newFrames },
-          { action: `Clear Selection` }
+          {
+            action: `Clear Selection`,
+            patch: layerPatches.length > 0 ? { frameIndex: activeFrameIndex, layers: layerPatches } : undefined,
+          }
       );
   };
 
   const cropCanvas = () => {
       const { activeProjectId, state } = latestRef.current;
       if (activeProjectId === 'home') return;
-      const { frames, width, height, activeFrameIndex, selectedLayerIds, selection } = state;
+      const { frames, width, height, selection } = state;
       if (!selection || selection.size === 0) return;
 
       const box = getSelectionBoundingBox(selection, width);
@@ -1959,15 +2266,16 @@ export function useProject() {
           const newLayerData: Record<string, PixelGrid> = {};
           Object.keys(f.layerData).forEach(lid => {
               const oldGrid = f.layerData[lid];
-              const newGrid: PixelGrid = new Array(box.w * box.h).fill(null);
+              const newGrid = createPixelGrid(box.w * box.h);
               for (let y = 0; y < box.h; y++) {
-                  for (let x = 0; x < box.w; x++) {
-                      const srcX = box.x + x;
-                      const srcY = box.y + y;
-                      if (srcX >= 0 && srcX < width && srcY >= 0 && srcY < height) {
-                          newGrid[y * box.w + x] = oldGrid[srcY * width + srcX];
-                      }
-                  }
+                  const srcY = box.y + y;
+                  if (srcY < 0 || srcY >= height) continue;
+                  const srcXStart = Math.max(0, box.x);
+                  const srcXEnd = Math.min(width, box.x + box.w);
+                  if (srcXEnd <= srcXStart) continue;
+                  const dstXStart = srcXStart - box.x;
+                  const srcOff = srcY * width + srcXStart;
+                  newGrid.set(oldGrid.subarray(srcOff, srcOff + (srcXEnd - srcXStart)), y * box.w + dstXStart);
               }
               newLayerData[lid] = newGrid;
           });
@@ -2049,12 +2357,25 @@ export function useProject() {
   }) => {
     const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
+    const nextColorMode = props.colorMode ?? state.colorMode;
+    const nextFrames = nextColorMode !== state.colorMode
+      ? convertFramesColorMode(
+          state.frames,
+          state.width,
+          state.height,
+          nextColorMode,
+          state.palette,
+          state.ditheringEnabled
+        )
+      : state.frames;
+
     updateState({
       ...state,
       title: props.title ?? state.title,
       pixelRatio: props.pixelRatio ?? state.pixelRatio,
       transparentIndex: props.transparentIndex ?? state.transparentIndex,
-      colorMode: props.colorMode ?? state.colorMode,
+      colorMode: nextColorMode,
+      frames: nextFrames,
       grid: props.grid ?? state.grid,
     }, { action: 'Update Sprite Properties' });
   };
@@ -2085,6 +2406,7 @@ export function useProject() {
     undo,
     redo,
     jumpToHistory,
+    restoreCurrentHistoryState,
     setColorMode,
     getActiveState,
     getActiveHistoryInfo,
@@ -2148,7 +2470,8 @@ export function useProject() {
     updateState,
     undo,
     redo,
-    jumpToHistory, 
+    jumpToHistory,
+    restoreCurrentHistoryState,
     setColorMode,
     history: activeInstance.history, 
     historyIndex: activeInstance.historyIndex, 

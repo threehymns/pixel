@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
-import { Layer, LayerBlendMode, Frame } from '../types';
+import { Layer, LayerBlendMode, Frame, PixelGrid } from '../types';
 import {
   Eye,
   EyeOff,
@@ -23,7 +23,8 @@ import {
   Tag,
 } from './Icons';
 import {
-  getPackedColor,
+  getPackedPalette255,
+  pixelToPackedImageData,
   getLayerParentMap,
   isLayerVisible,
   getGroupChildren,
@@ -73,24 +74,50 @@ const BLEND_MODE_OPTIONS: { value: LayerBlendMode; label: string }[] = [
   { value: 'divide', label: 'Divide' },
 ];
 
-const PACKED_PALETTE_255_CACHE = new WeakMap<string[], Uint32Array>();
+const THUMB_SIZE = 28;
 
-const getPackedPalette255 = (palette: string[]): Uint32Array => {
-  const cached = PACKED_PALETTE_255_CACHE.get(palette);
-  if (cached && cached.length === palette.length) return cached;
-  const palLen = palette.length;
-  const packed = new Uint32Array(palLen);
-  for (let p = 0; p < palLen; p++) {
-    if (palette[p]) {
-      packed[p] = getPackedColor(palette[p], 255);
+const computeThumbBox = (width: number, height: number) => {
+  const safeW = Math.max(1, width);
+  const safeH = Math.max(1, height);
+  const scale = Math.min(THUMB_SIZE / safeW, THUMB_SIZE / safeH);
+  const dstW = Math.max(1, Math.min(THUMB_SIZE, Math.round(safeW * scale)));
+  const dstH = Math.max(1, Math.min(THUMB_SIZE, Math.round(safeH * scale)));
+  const dstX = Math.floor((THUMB_SIZE - dstW) / 2);
+  const dstY = Math.floor((THUMB_SIZE - dstH) / 2);
+  return { dstX, dstY, dstW, dstH };
+};
+
+const downsamplePixelsToThumb = (
+  pixels: PixelGrid,
+  srcW: number,
+  srcH: number,
+  paletteUint32: Uint32Array,
+  target32: Uint32Array,
+  dstX: number,
+  dstY: number,
+  dstW: number,
+  dstH: number
+) => {
+  target32.fill(0);
+  const totalSrc = pixels.length;
+  for (let ty = 0; ty < dstH; ty++) {
+    const sy = Math.min(srcH - 1, Math.floor((ty * srcH) / dstH));
+    const srcRow = sy * srcW;
+    const dstRow = (dstY + ty) * THUMB_SIZE + dstX;
+    for (let tx = 0; tx < dstW; tx++) {
+      const sx = Math.min(srcW - 1, Math.floor((tx * srcW) / dstW));
+      const srcIdx = srcRow + sx;
+      if (srcIdx >= totalSrc) continue;
+      const val = pixels[srcIdx];
+      if (val !== 0) {
+        target32[dstRow + tx] = pixelToPackedImageData(val, paletteUint32);
+      }
     }
   }
-  PACKED_PALETTE_255_CACHE.set(palette, packed);
-  return packed;
 };
 
 interface LayerThumbnailProps {
-  pixels: (string | number | null)[] | undefined;
+  pixels: PixelGrid | undefined;
   palette: string[];
   width: number;
   height: number;
@@ -98,8 +125,7 @@ interface LayerThumbnailProps {
 
 const LayerThumbnail: React.FC<LayerThumbnailProps> = ({ pixels, palette, width, height }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const tempCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const imgDataRef = useRef<{ width: number; height: number; imageData: ImageData; data32: Uint32Array } | null>(null);
+  const thumbImgDataRef = useRef<{ imageData: ImageData; data32: Uint32Array } | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -107,62 +133,30 @@ const LayerThumbnail: React.FC<LayerThumbnailProps> = ({ pixels, palette, width,
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (!pixels) return;
-
-    if (!tempCanvasRef.current) {
-      tempCanvasRef.current = document.createElement('canvas');
+    if (!pixels || width <= 0 || height <= 0) {
+      ctx.clearRect(0, 0, THUMB_SIZE, THUMB_SIZE);
+      return;
     }
-    const tempCanvas = tempCanvasRef.current;
-    if (tempCanvas.width !== width || tempCanvas.height !== height) {
-      tempCanvas.width = width;
-      tempCanvas.height = height;
-    }
-    const tempCtx = tempCanvas.getContext('2d');
-    if (!tempCtx) return;
 
-    if (!imgDataRef.current || imgDataRef.current.width !== width || imgDataRef.current.height !== height) {
-      const imageData = tempCtx.createImageData(width, height);
-      imgDataRef.current = {
-        width,
-        height,
+    if (!thumbImgDataRef.current) {
+      const imageData = ctx.createImageData(THUMB_SIZE, THUMB_SIZE);
+      thumbImgDataRef.current = {
         imageData,
         data32: new Uint32Array(imageData.data.buffer),
       };
-    } else {
-      imgDataRef.current.data32.fill(0);
     }
 
-    const { imageData, data32 } = imgDataRef.current;
-    const palLen = palette.length;
+    const { imageData, data32 } = thumbImgDataRef.current;
     const paletteUint32 = getPackedPalette255(palette);
+    const { dstX, dstY, dstW, dstH } = computeThumbBox(width, height);
 
-    const len = Math.min(pixels.length, width * height);
-    for (let i = 0; i < len; i++) {
-      const val = pixels[i];
-      if (val === null || val === undefined) continue;
-      if (typeof val === 'number') {
-        if (val >= 0 && val < palLen) data32[i] = paletteUint32[val];
-      } else {
-        data32[i] = getPackedColor(val, 255);
-      }
-    }
-
-    tempCtx.putImageData(imageData, 0, 0);
-    ctx.imageSmoothingEnabled = false;
-
-    const scale = Math.min(canvas.width / width, canvas.height / height);
-    const w = width * scale;
-    const h = height * scale;
-    const x = (canvas.width - w) / 2;
-    const y = (canvas.height - h) / 2;
-
-    ctx.drawImage(tempCanvas, 0, 0, width, height, x, y, w, h);
+    downsamplePixelsToThumb(pixels, width, height, paletteUint32, data32, dstX, dstY, dstW, dstH);
+    ctx.putImageData(imageData, 0, 0);
   }, [pixels, palette, width, height]);
 
   return (
     <div className="checkerboard-alpha relative flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-sm border border-border">
-      <canvas ref={canvasRef} width={28} height={28} className="pixelated h-full w-full object-contain" />
+      <canvas ref={canvasRef} width={THUMB_SIZE} height={THUMB_SIZE} className="pixelated h-full w-full object-contain" />
     </div>
   );
 };
@@ -181,14 +175,13 @@ interface GroupChildSnapshot {
   id: string;
   visible: boolean;
   opacity: number;
-  pixels: (string | number | null)[] | undefined;
+  pixels: PixelGrid | undefined;
 }
 
 const GroupThumbnail: React.FC<GroupThumbnailProps> = ({ groupId, layers, activeFrame, palette, width, height, collapsed }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const tempCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const layerCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const imgDataRef = useRef<{ width: number; height: number; imageData: ImageData; data32: Uint32Array } | null>(null);
+  const imgDataRef = useRef<{ imageData: ImageData; data32: Uint32Array } | null>(null);
   const lastDrawnRef = useRef<{
     width: number;
     height: number;
@@ -241,79 +234,52 @@ const GroupThumbnail: React.FC<GroupThumbnailProps> = ({ groupId, layers, active
       })),
     };
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (children.length === 0 || !activeFrame) return;
+    ctx.globalAlpha = 1;
+    ctx.clearRect(0, 0, THUMB_SIZE, THUMB_SIZE);
+    if (children.length === 0 || !activeFrame || width <= 0 || height <= 0) return;
 
-    if (!tempCanvasRef.current) tempCanvasRef.current = document.createElement('canvas');
-    const tempCanvas = tempCanvasRef.current;
-    if (tempCanvas.width !== width || tempCanvas.height !== height) {
-      tempCanvas.width = width;
-      tempCanvas.height = height;
+    if (!layerCanvasRef.current) {
+      const c = document.createElement('canvas');
+      c.width = THUMB_SIZE;
+      c.height = THUMB_SIZE;
+      layerCanvasRef.current = c;
     }
-    const tempCtx = tempCanvas.getContext('2d');
-    if (!tempCtx) return;
-    tempCtx.clearRect(0, 0, width, height);
-
-    if (!layerCanvasRef.current) layerCanvasRef.current = document.createElement('canvas');
     const layerCanvas = layerCanvasRef.current;
-    if (layerCanvas.width !== width || layerCanvas.height !== height) {
-      layerCanvas.width = width;
-      layerCanvas.height = height;
-    }
     const lCtx = layerCanvas.getContext('2d');
     if (!lCtx) return;
 
-    if (!imgDataRef.current || imgDataRef.current.width !== width || imgDataRef.current.height !== height) {
-      const imageData = lCtx.createImageData(width, height);
+    if (!imgDataRef.current) {
+      const imageData = lCtx.createImageData(THUMB_SIZE, THUMB_SIZE);
       imgDataRef.current = {
-        width,
-        height,
         imageData,
         data32: new Uint32Array(imageData.data.buffer),
       };
     }
 
     const { imageData, data32 } = imgDataRef.current;
-    const palLen = palette.length;
     const paletteUint32 = getPackedPalette255(palette);
-    const totalPixels = width * height;
-
-    children.forEach((child) => {
-      if (!child.visible) return;
-      const pixels = activeFrame.layerData[child.id];
-      if (!pixels) return;
-
-      data32.fill(0);
-      const len = Math.min(pixels.length, totalPixels);
-      for (let i = 0; i < len; i++) {
-        const val = pixels[i];
-        if (val === null || val === undefined) continue;
-        if (typeof val === 'number') {
-          if (val >= 0 && val < palLen) data32[i] = paletteUint32[val];
-        } else {
-          data32[i] = getPackedColor(val, 255);
-        }
-      }
-
-      lCtx.putImageData(imageData, 0, 0);
-      tempCtx.globalAlpha = (child.opacity ?? 100) / 100;
-      tempCtx.drawImage(layerCanvas, 0, 0);
-    });
-    tempCtx.globalAlpha = 1;
+    const { dstX, dstY, dstW, dstH } = computeThumbBox(width, height);
 
     ctx.imageSmoothingEnabled = false;
-    const scale = Math.min(28 / width, 28 / height);
-    const w = width * scale;
-    const h = height * scale;
-    const x = (28 - w) / 2;
-    const y = (28 - h) / 2;
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+      if (!child.visible) continue;
+      const pixels = activeFrame.layerData[child.id];
+      if (!pixels) continue;
+      const opacity = child.opacity ?? 100;
+      if (opacity <= 0) continue;
 
-    ctx.drawImage(tempCanvas, 0, 0, width, height, x, y, w, h);
+      downsamplePixelsToThumb(pixels, width, height, paletteUint32, data32, dstX, dstY, dstW, dstH);
+      lCtx.putImageData(imageData, 0, 0);
+      ctx.globalAlpha = opacity / 100;
+      ctx.drawImage(layerCanvas, 0, 0);
+    }
+    ctx.globalAlpha = 1;
   }, [groupId, layers, activeFrame, palette, width, height]);
 
   return (
     <div className="checkerboard-alpha relative flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-sm border border-primary/40">
-      <canvas ref={canvasRef} width={28} height={28} className="pixelated relative z-10 h-full w-full object-contain" />
+      <canvas ref={canvasRef} width={THUMB_SIZE} height={THUMB_SIZE} className="pixelated relative z-10 h-full w-full object-contain" />
       <div className="absolute top-0 right-0 z-20 rounded-bl bg-primary/90 p-0.5 text-primary-foreground">
         {collapsed ? <Folder size={8} /> : <FolderOpen size={8} />}
       </div>

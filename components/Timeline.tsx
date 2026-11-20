@@ -234,7 +234,7 @@ const hasCelContent = (pixels: PixelGrid | undefined): boolean => {
   if (cached !== undefined) return cached;
   let found = false;
   for (let i = 0; i < pixels.length; i++) {
-    if (pixels[i] !== null && pixels[i] !== undefined) {
+    if (pixels[i] !== 0) {
       found = true;
       break;
     }

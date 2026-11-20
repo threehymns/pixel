@@ -1,5 +1,14 @@
 import { PixelGrid, PixelValue, ProjectState, ColorMode, Layer, Frame } from '../types';
-import { getIndex, getCoords, hexToRgb } from '../utils';
+import {
+  EMPTY_PIXEL,
+  clonePixelGrid,
+  createPixelGrid,
+  encodeIndexedPixel,
+  findNearestPaletteIndex,
+  getPackedColor,
+  hexToRgb,
+  pixelToHex,
+} from './pixelBuffer';
 
 export type OutlinePlacement = 'outside' | 'inside' | 'both';
 export type OutlineShapePreset = 'square' | 'circle' | 'horizontal' | 'vertical' | 'custom';
@@ -92,15 +101,6 @@ export const MATRIX_PRESETS: Record<OutlineShapePreset, OutlineMatrix> = {
 };
 
 /**
- * Checks whether two hex colors match (case-insensitive).
- */
-const colorMatches = (c1: string | null | undefined, c2: string | null | undefined): boolean => {
-  if (!c1 && !c2) return true;
-  if (!c1 || !c2) return false;
-  return c1.toLowerCase() === c2.toLowerCase();
-};
-
-/**
  * Generates kernel directional steps based on the 3x3 matrix.
  */
 export const getMatrixOffsets = (matrix: OutlineMatrix): [number, number][] => {
@@ -124,24 +124,13 @@ export const resolveOutlinePixelValue = (
   colorMode: ColorMode,
   palette: string[]
 ): PixelValue => {
-  if (colorMode === 'rgba') return colorHex;
+  if (colorMode === 'rgba') return getPackedColor(colorHex, 255);
   const lowerHex = colorHex.toLowerCase();
   const idx = palette.findIndex(c => c.toLowerCase() === lowerHex);
-  if (idx !== -1) return idx;
+  if (idx !== -1) return encodeIndexedPixel(idx);
 
-  // Find nearest color in palette
   const [r, g, b] = hexToRgb(colorHex);
-  let bestIdx = 0;
-  let bestDist = Infinity;
-  for (let i = 0; i < palette.length; i++) {
-    const [pr, pg, pb] = hexToRgb(palette[i]);
-    const dist = Math.pow(r - pr, 2) + Math.pow(g - pg, 2) + Math.pow(b - pb, 2);
-    if (dist < bestDist) {
-      bestDist = dist;
-      bestIdx = i;
-    }
-  }
-  return bestIdx;
+  return encodeIndexedPixel(findNearestPaletteIndex(r, g, b, palette));
 };
 
 /**
@@ -158,26 +147,29 @@ export const processOutlineGrid = (
   selection: Set<number> | null
 ): { resultPixels: PixelGrid; outlineOnlyPixels: PixelGrid; outlineIndices: number[] } => {
   const total = width * height;
-  const resultPixels: PixelGrid = [...sourceGrid];
-  const outlineOnlyPixels: PixelGrid = new Array(total).fill(null);
+  const resultPixels: PixelGrid = clonePixelGrid(sourceGrid);
+  const outlineOnlyPixels: PixelGrid = createPixelGrid(total);
   const outlineIndices: number[] = [];
 
   const resolvedOutlineVal = resolveOutlinePixelValue(options.outlineColor, colorMode, palette);
-  const targetBgHex = options.bgMode === 'color' && options.bgColor ? options.bgColor : null;
+  const targetBgHex = options.bgMode === 'color' && options.bgColor ? options.bgColor.toLowerCase() : null;
+  const targetBgRgb = targetBgHex ? (getPackedColor(targetBgHex, 255) & 0x00ffffff) : -1;
 
   // Helper to determine if a pixel at index is considered "background"
   const isBackground = (idx: number): boolean => {
     const val = sourceGrid[idx];
-    if (val === null || val === undefined) return true;
+    if (val === EMPTY_PIXEL) return true;
     if (targetBgHex) {
-      const hex = typeof val === 'number' ? palette[val] : val;
-      return colorMatches(hex, targetBgHex);
+      if ((val >>> 24) !== 0) {
+        return (val & 0x00ffffff) === targetBgRgb;
+      }
+      const hex = pixelToHex(val, palette);
+      return hex ? hex.toLowerCase() === targetBgHex : true;
     }
     return false;
   };
 
   // Helper to determine if a pixel is considered "foreground"
-  // If selection is present and scope is 'selection', foreground to be outlined is restricted to selection
   const isForeground = (idx: number): boolean => {
     if (isBackground(idx)) return false;
     if (options.scope === 'selection' && selection && selection.size > 0) {
@@ -187,7 +179,7 @@ export const processOutlineGrid = (
   };
 
   // Binary mask of current foreground
-  let currentFg = new Uint8Array(total);
+  const currentFg = new Uint8Array(total);
   for (let i = 0; i < total; i++) {
     if (isForeground(i)) currentFg[i] = 1;
   }
@@ -209,12 +201,10 @@ export const processOutlineGrid = (
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
           const idx = y * width + x;
-          // Must be background and not already marked
           if (!isBackground(idx) || outsideMask[idx]) continue;
 
-          // Check if any neighbor in the matrix was part of the frontier
           for (let k = 0; k < offsets.length; k++) {
-            const nx = x - offsets[k][0]; // Direction of source pixel relative to target
+            const nx = x - offsets[k][0];
             const ny = y - offsets[k][1];
             if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
               const nIdx = ny * width + nx;
@@ -241,7 +231,6 @@ export const processOutlineGrid = (
 
   // --- INSIDE OUTLINE ---
   if (options.placement === 'inside' || options.placement === 'both') {
-    // Inside outline replaces foreground boundary pixels
     let insideForeground = new Uint8Array(currentFg);
 
     for (let step = 0; step < options.thickness; step++) {
@@ -251,7 +240,6 @@ export const processOutlineGrid = (
           const idx = y * width + x;
           if (!insideForeground[idx] || insideMask[idx]) continue;
 
-          // Check if any neighbor in matrix is background or out-of-bounds
           let isBorder = false;
           for (let k = 0; k < offsets.length; k++) {
             const nx = x + offsets[k][0];
@@ -270,7 +258,7 @@ export const processOutlineGrid = (
 
           if (isBorder) {
             insideMask[idx] = 1;
-            nextFg[idx] = 0; // Removed from subsequent dilation steps
+            nextFg[idx] = 0;
           }
         }
       }
@@ -306,11 +294,10 @@ export const applyOutlineEffect = (
   const activeLayer = layers.find(l => l.id === activeLayerId);
   const activeLayerName = activeLayer?.name || 'Layer';
 
-  let newLayers = [...layers];
+  const newLayers = [...layers];
   let newActiveLayerId = activeLayerId;
   let targetLayerId = activeLayerId;
 
-  // If creating a new layer
   if (options.targetLayer === 'new') {
     const newId = `layer-outline-${Date.now()}`;
     const baseName = `${activeLayerName} Outline`;
@@ -321,8 +308,6 @@ export const applyOutlineEffect = (
     }
 
     const activeIdx = layers.findIndex(l => l.id === activeLayerId);
-    // For outside outline, inserting right behind the active layer is ideal so original artwork sits on top
-    // For inside or both, inserting above ensures outline is visible
     const insertIdx = options.placement === 'outside' ? Math.max(0, activeIdx) : activeIdx + 1;
 
     const newLayer: Layer = {
@@ -347,22 +332,21 @@ export const applyOutlineEffect = (
 
   const addedOutlineIndices = new Set<number>();
 
-  const newFrames = frames.map((frame, fIdx) => {
+  const newFrames: Frame[] = frames.map((frame, fIdx) => {
     if (!framesToProcess.includes(fIdx)) {
       if (options.targetLayer === 'new') {
-        // Initialize empty grid for new layer
         return {
           ...frame,
           layerData: {
             ...frame.layerData,
-            [targetLayerId]: new Array(width * height).fill(null)
+            [targetLayerId]: createPixelGrid(width * height)
           }
         };
       }
       return frame;
     }
 
-    const sourceGrid = frame.layerData[activeLayerId] || new Array(width * height).fill(null);
+    const sourceGrid = frame.layerData[activeLayerId] || createPixelGrid(width * height);
     const { resultPixels, outlineOnlyPixels, outlineIndices } = processOutlineGrid(
       sourceGrid,
       width,

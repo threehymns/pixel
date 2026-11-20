@@ -4,7 +4,20 @@ import {
   ColorProfile, UserData, UserPropertyMap, ExternalFile, CelExtra, 
   PixelGrid, LayerBlendMode, LayerType 
 } from '../types';
-import { hexToRgb, rgbToHex, findNearestPaletteIndex } from '../utils';
+import {
+  EMPTY_PIXEL,
+  computeInitialZoom,
+  createPixelGrid,
+  decodeIndexedPixel,
+  encodeIndexedPixel,
+  findNearestPaletteIndex,
+  getPackedPalette255,
+  hexToRgb,
+  isLittleEndian,
+  isPackedRgbaPixel,
+  packRGBA,
+  rgbToHex,
+} from './pixelBuffer';
 
 // --- Aseprite Blend Mode Mapping ---
 const ASEPRITE_BLEND_MODES: Record<number, LayerBlendMode> = {
@@ -688,7 +701,7 @@ export async function parseAseprite(buffer: ArrayBuffer, filename = 'imported'):
 
           if (targetLayerId) {
             if (!frameLayerData[frameIdx][targetLayerId]) {
-              frameLayerData[frameIdx][targetLayerId] = new Array(width * height).fill(null);
+              frameLayerData[frameIdx][targetLayerId] = createPixelGrid(width * height);
             }
             const grid = frameLayerData[frameIdx][targetLayerId];
 
@@ -698,9 +711,7 @@ export async function parseAseprite(buffer: ArrayBuffer, filename = 'imported'):
               const sourceLayerId = layerIdMap[layerIdx] || targetLayerId;
               if (linkFramePos < frameIdx && frameLayerData[linkFramePos][sourceLayerId]) {
                 const sourceGrid = frameLayerData[linkFramePos][sourceLayerId];
-                for (let i = 0; i < grid.length; i++) {
-                  grid[i] = sourceGrid[i];
-                }
+                grid.set(sourceGrid.subarray(0, Math.min(grid.length, sourceGrid.length)));
               }
             } else if (celType === 2 || celType === 0) {
               // Compressed Image (Type 2) or Raw (Type 0)
@@ -723,41 +734,46 @@ export async function parseAseprite(buffer: ArrayBuffer, filename = 'imported'):
               }
 
               if (uncompressedData.length > 0) {
+                const currentLayer = layers[layerIdx];
+                const isBg = Boolean(currentLayer?.isBackground);
                 let pixelOffset = 0;
                 const celAlphaMult = celOpacity / 255;
                 for (let cy = 0; cy < celH; cy++) {
+                  const canvasY = yPos + cy;
+                  const rowInBounds = canvasY >= 0 && canvasY < height;
+                  const rowBase = canvasY * width;
                   for (let cx = 0; cx < celW; cx++) {
                     const canvasX = xPos + cx;
-                    const canvasY = yPos + cy;
 
-                    if (canvasX >= 0 && canvasX < width && canvasY >= 0 && canvasY < height) {
-                      const gridIdx = canvasY * width + canvasX;
+                    if (rowInBounds && canvasX >= 0 && canvasX < width) {
+                      const gridIdx = rowBase + canvasX;
 
                       if (colorDepth === 32) {
                         const r = uncompressedData[pixelOffset];
                         const g = uncompressedData[pixelOffset + 1];
                         const b = uncompressedData[pixelOffset + 2];
-                        const a = Math.round(uncompressedData[pixelOffset + 3] * celAlphaMult);
+                        const rawA = uncompressedData[pixelOffset + 3];
+                        const a = celOpacity === 255 ? rawA : Math.round(rawA * celAlphaMult);
                         pixelOffset += 4;
 
                         if (a > 0) {
-                          grid[gridIdx] = rgbToHex(r, g, b);
+                          grid[gridIdx] = packRGBA(r, g, b, a);
                         }
                       } else if (colorDepth === 16) {
                         const val = uncompressedData[pixelOffset];
-                        const a = Math.round(uncompressedData[pixelOffset + 1] * celAlphaMult);
+                        const rawA = uncompressedData[pixelOffset + 1];
+                        const a = celOpacity === 255 ? rawA : Math.round(rawA * celAlphaMult);
                         pixelOffset += 2;
 
                         if (a > 0) {
-                          grid[gridIdx] = rgbToHex(val, val, val);
+                          grid[gridIdx] = packRGBA(val, val, val, a);
                         }
                       } else if (colorDepth === 8) {
                         const pIdx = uncompressedData[pixelOffset];
                         pixelOffset += 1;
 
-                        const currentLayer = layers[layerIdx];
-                        if (pIdx !== transparentIndex || currentLayer?.isBackground) {
-                          grid[gridIdx] = pIdx;
+                        if (pIdx !== transparentIndex || isBg) {
+                          grid[gridIdx] = encodeIndexedPixel(pIdx);
                         }
                       }
                     } else {
@@ -826,7 +842,7 @@ export async function parseAseprite(buffer: ArrayBuffer, filename = 'imported'):
 
                               const tPixIdx = tileStartPixelIndex + srcCy * tW + srcCx;
                               const val = tileset.pixels[tPixIdx];
-                              if (val !== null && val !== undefined) {
+                              if (val !== EMPTY_PIXEL) {
                                 grid[gIdx] = val;
                               }
                             }
@@ -1097,7 +1113,7 @@ export async function parseAseprite(buffer: ArrayBuffer, filename = 'imported'):
             try {
               const rawTiles = inflate(compBytes);
               const totalPixels = tW * tH * numTiles;
-              tPixels = new Array(totalPixels).fill(null);
+              tPixels = createPixelGrid(totalPixels);
               let pOff = 0;
               for (let i = 0; i < totalPixels; i++) {
                 if (colorDepth === 32) {
@@ -1106,10 +1122,10 @@ export async function parseAseprite(buffer: ArrayBuffer, filename = 'imported'):
                   const b = rawTiles[pOff + 2];
                   const a = rawTiles[pOff + 3];
                   pOff += 4;
-                  tPixels[i] = a > 0 ? rgbToHex(r, g, b) : null;
+                  tPixels[i] = a > 0 ? packRGBA(r, g, b, a) : EMPTY_PIXEL;
                 } else if (colorDepth === 8) {
                   const pIdx = rawTiles[pOff++];
-                  tPixels[i] = pIdx !== transparentIndex ? pIdx : null;
+                  tPixels[i] = pIdx !== transparentIndex ? encodeIndexedPixel(pIdx) : EMPTY_PIXEL;
                 }
               }
             } catch (e) {
@@ -1210,7 +1226,7 @@ export async function parseAseprite(buffer: ArrayBuffer, filename = 'imported'):
     const fData: Record<string, PixelGrid> = {};
 
     layers.forEach(layer => {
-      fData[layer.id] = frameLayerData[f][layer.id] || new Array(width * height).fill(null);
+      fData[layer.id] = frameLayerData[f][layer.id] || createPixelGrid(width * height);
     });
 
     frames.push({
@@ -1249,7 +1265,7 @@ export async function parseAseprite(buffer: ArrayBuffer, filename = 'imported'):
     pixelPerfect: false,
     ditheringEnabled: false,
     rotationAlgorithm: 'nearest',
-    zoom: Math.min(32, Math.max(1, Math.floor(512 / Math.max(width, height)))),
+    zoom: computeInitialZoom(width, height, 32),
     onionSkin: false,
     showGrid: gridWidth > 0 && gridHeight > 0,
     grid: { x: gridX, y: gridY, width: gridWidth, height: gridHeight },
@@ -1291,10 +1307,30 @@ interface CachedEncodedCel {
 
 const ENCODED_CEL_CACHE = new WeakMap<PixelGrid, CachedEncodedCel>();
 
+export type AsepriteEncodeInput = Pick<
+  ProjectState,
+  | 'width'
+  | 'height'
+  | 'colorMode'
+  | 'palette'
+  | 'paletteNames'
+  | 'layers'
+  | 'frames'
+  | 'tags'
+  | 'slices'
+  | 'tilesets'
+  | 'externalFiles'
+  | 'colorProfile'
+  | 'transparentIndex'
+  | 'grid'
+  | 'pixelRatio'
+  | 'userData'
+>;
+
 /**
  * Encodes a ProjectState object into a binary Aseprite (.ase/.aseprite) Uint8Array buffer.
  */
-export function encodeAseprite(state: ProjectState): Uint8Array {
+export function encodeAseprite(state: AsepriteEncodeInput): Uint8Array {
   const { 
     width, height, colorMode, palette = [], paletteNames, layers, frames, 
     tags = [], slices = [], tilesets = [], externalFiles = [], userData 
@@ -1502,23 +1538,38 @@ export function encodeAseprite(state: ProjectState): Uint8Array {
           const totalPixels = ts.tileWidth * ts.tileHeight * ts.tilesCount;
           const bpp = isIndexed ? 1 : 4;
           const rawTiles = new Uint8Array(totalPixels * bpp);
+          const palettePacked = getPackedPalette255(effectivePalette);
           let pOff = 0;
           for (let i = 0; i < totalPixels; i++) {
             const val = ts.pixels[i];
             if (isIndexed) {
-              rawTiles[pOff++] = typeof val === 'number' ? (val & 0xff) : effectiveTransparentIndex;
-            } else {
-              if (typeof val === 'string') {
-                const [r, g, b] = hexToRgb(val);
-                rawTiles[pOff++] = r;
-                rawTiles[pOff++] = g;
-                rawTiles[pOff++] = b;
-                rawTiles[pOff++] = 255;
+              if (val === EMPTY_PIXEL) {
+                rawTiles[pOff++] = effectiveTransparentIndex;
+              } else if (!isPackedRgbaPixel(val)) {
+                rawTiles[pOff++] = decodeIndexedPixel(val) & 0xff;
               } else {
-                rawTiles[pOff++] = 0;
-                rawTiles[pOff++] = 0;
-                rawTiles[pOff++] = 0;
-                rawTiles[pOff++] = 0;
+                rawTiles[pOff++] = findNearestPaletteIndex(
+                  val & 0xff,
+                  (val >>> 8) & 0xff,
+                  (val >>> 16) & 0xff,
+                  effectivePalette
+                );
+              }
+            } else {
+              if (val === EMPTY_PIXEL) {
+                pOff += 4;
+              } else if (isPackedRgbaPixel(val)) {
+                rawTiles[pOff++] = val & 0xff;
+                rawTiles[pOff++] = (val >>> 8) & 0xff;
+                rawTiles[pOff++] = (val >>> 16) & 0xff;
+                rawTiles[pOff++] = (val >>> 24) & 0xff;
+              } else {
+                const pIdx = decodeIndexedPixel(val);
+                const packed = pIdx >= 0 && pIdx < palettePacked.length ? palettePacked[pIdx] : 0;
+                rawTiles[pOff++] = packed & 0xff;
+                rawTiles[pOff++] = (packed >>> 8) & 0xff;
+                rawTiles[pOff++] = (packed >>> 16) & 0xff;
+                rawTiles[pOff++] = (packed >>> 24) & 0xff;
               }
             }
           }
@@ -1674,35 +1725,25 @@ export function encodeAseprite(state: ProjectState): Uint8Array {
             for (let x = 0; x < rowEnd; x++) {
               const i = rowOffset + x;
               const val = px[i];
-              if (val === null) continue;
-              if (val === undefined) {
-                hash = Math.imul(hash ^ Math.imul(i + 1, 0x9e3779b1), 16777619);
-                continue;
-              }
+              if (val === EMPTY_PIXEL) continue;
               nonNullCount++;
               if (x < minX) minX = x;
               if (x > maxX) maxX = x;
               if (y < minY) minY = y;
               if (y > maxY) maxY = y;
-              let vHash: number;
-              if (typeof val === 'number') {
-                hasIndexedValues = true;
-                vHash = (val + 1) | 0;
-              } else {
+              if ((val >>> 24) !== 0) {
                 hasStringValues = true;
-                vHash = 2166136261;
-                for (let c = 0; c < val.length; c++) {
-                  vHash = Math.imul(vHash ^ val.charCodeAt(c), 16777619);
-                }
+              } else {
+                hasIndexedValues = true;
               }
-              hash = Math.imul(hash ^ Math.imul(i + 1, 0x9e3779b1) ^ vHash, 16777619);
+              hash = Math.imul(hash ^ Math.imul(i + 1, 0x9e3779b1) ^ val, 16777619);
             }
           }
 
           for (let i = width * height; i < pxLen; i++) {
             const val = px[i];
-            if (val === null) continue;
-            hash = Math.imul(hash ^ Math.imul(i + 1, 0x9e3779b1), 16777619);
+            if (val === EMPTY_PIXEL) continue;
+            hash = Math.imul(hash ^ Math.imul(i + 1, 0x9e3779b1) ^ val, 16777619);
           }
 
           cachedAnalysis = {
@@ -1811,40 +1852,53 @@ export function encodeAseprite(state: ProjectState): Uint8Array {
             const bpp = isIndexed ? 1 : 4;
             const rawBuffer = new Uint8Array(celW * celH * bpp);
 
-            let rawOffset = 0;
-            for (let cy = 0; cy < celH; cy++) {
-              for (let cx = 0; cx < celW; cx++) {
-                const srcX = minX + cx;
-                const srcY = minY + cy;
-                const val = px[srcY * width + srcX];
+            if (!isIndexed && isLittleEndian && (!cachedAnalysis || !cachedAnalysis.hasIndexedValues)) {
+              // Fast path: direct 32-bit row copies for RGBA cels (matches ABGR byte order)
+              const raw32 = new Uint32Array(rawBuffer.buffer);
+              for (let cy = 0; cy < celH; cy++) {
+                const srcStart = (minY + cy) * width + minX;
+                raw32.set(px.subarray(srcStart, srcStart + celW), cy * celW);
+              }
+            } else {
+              const palettePacked = isIndexed ? null : getPackedPalette255(effectivePalette);
+              let rawOffset = 0;
+              for (let cy = 0; cy < celH; cy++) {
+                const rowBase = (minY + cy) * width + minX;
+                for (let cx = 0; cx < celW; cx++) {
+                  const val = px[rowBase + cx];
 
-                if (isIndexed) {
-                  if (typeof val === 'number') {
-                    rawBuffer[rawOffset++] = val & 0xff;
-                  } else if (typeof val === 'string') {
-                    const [r, g, b] = hexToRgb(val);
-                    rawBuffer[rawOffset++] = findNearestPaletteIndex(r, g, b, effectivePalette);
+                  if (isIndexed) {
+                    if (val === EMPTY_PIXEL) {
+                      rawBuffer[rawOffset++] = effectiveTransparentIndex;
+                    } else if ((val >>> 24) === 0) {
+                      rawBuffer[rawOffset++] = decodeIndexedPixel(val) & 0xff;
+                    } else {
+                      rawBuffer[rawOffset++] = findNearestPaletteIndex(
+                        val & 0xff,
+                        (val >>> 8) & 0xff,
+                        (val >>> 16) & 0xff,
+                        effectivePalette
+                      );
+                    }
                   } else {
-                    rawBuffer[rawOffset++] = effectiveTransparentIndex;
-                  }
-                } else {
-                  if (typeof val === 'string') {
-                    const [r, g, b] = hexToRgb(val);
-                    rawBuffer[rawOffset++] = r;
-                    rawBuffer[rawOffset++] = g;
-                    rawBuffer[rawOffset++] = b;
-                    rawBuffer[rawOffset++] = 255;
-                  } else if (typeof val === 'number' && effectivePalette[val]) {
-                    const [r, g, b] = hexToRgb(effectivePalette[val]);
-                    rawBuffer[rawOffset++] = r;
-                    rawBuffer[rawOffset++] = g;
-                    rawBuffer[rawOffset++] = b;
-                    rawBuffer[rawOffset++] = 255;
-                  } else {
-                    rawBuffer[rawOffset++] = 0;
-                    rawBuffer[rawOffset++] = 0;
-                    rawBuffer[rawOffset++] = 0;
-                    rawBuffer[rawOffset++] = 0;
+                    if (val === EMPTY_PIXEL) {
+                      rawOffset += 4;
+                    } else if ((val >>> 24) !== 0) {
+                      rawBuffer[rawOffset++] = val & 0xff;
+                      rawBuffer[rawOffset++] = (val >>> 8) & 0xff;
+                      rawBuffer[rawOffset++] = (val >>> 16) & 0xff;
+                      rawBuffer[rawOffset++] = (val >>> 24) & 0xff;
+                    } else {
+                      const pIdx = decodeIndexedPixel(val);
+                      const packed =
+                        palettePacked && pIdx >= 0 && pIdx < palettePacked.length
+                          ? palettePacked[pIdx]
+                          : 0;
+                      rawBuffer[rawOffset++] = packed & 0xff;
+                      rawBuffer[rawOffset++] = (packed >>> 8) & 0xff;
+                      rawBuffer[rawOffset++] = (packed >>> 16) & 0xff;
+                      rawBuffer[rawOffset++] = (packed >>> 24) & 0xff;
+                    }
                   }
                 }
               }

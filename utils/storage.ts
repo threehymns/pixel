@@ -1,5 +1,5 @@
 import { ProjectState, RecentProject } from '../types';
-import { encodeAseprite, parseAseprite } from './aseprite';
+import { encodeAsepriteAsync, parseAsepriteAsync } from './asepriteWorkerClient';
 
 const DB_NAME = 'pixelforge_db';
 const DB_VERSION = 1;
@@ -82,14 +82,11 @@ function openDB(): Promise<IDBDatabase> {
   });
 }
 
-/**
- * Saves project to IndexedDB:
- * 1. Serializes pixel data into compressed .aseprite binary (deflated cels).
- * 2. Stores binary in project_blobs store.
- * 3. Stores lightweight metadata (id, title, width, height, timestamp) in recents store.
- * 4. Trims recents list to MAX_RECENTS and purges old blobs.
- */
-export async function saveRecentProject(project: ProjectState): Promise<RecentProject> {
+// Coalesce concurrent auto-saves per project ID so rapid edits on 4K images never stack worker encodes
+const activeSaveByProject = new Map<string, Promise<RecentProject>>();
+const queuedSaveByProject = new Map<string, ProjectState>();
+
+async function performSaveRecentProject(project: ProjectState): Promise<RecentProject> {
   const metadata: RecentProject = {
     id: project.id,
     title: project.title,
@@ -99,8 +96,8 @@ export async function saveRecentProject(project: ProjectState): Promise<RecentPr
   };
 
   try {
-    // Compress to .aseprite binary
-    const asepriteBinary = encodeAseprite(project);
+    // Compress to .aseprite binary off the main thread
+    const asepriteBinary = await encodeAsepriteAsync(project);
 
     const blobRecord: StoredBlobRecord = {
       id: project.id,
@@ -168,6 +165,48 @@ export async function saveRecentProject(project: ProjectState): Promise<RecentPr
 }
 
 /**
+ * Saves project to IndexedDB:
+ * 1. Serializes pixel data into compressed .aseprite binary (deflated cels) in a Web Worker.
+ * 2. Stores binary in project_blobs store.
+ * 3. Stores lightweight metadata (id, title, width, height, timestamp) in recents store.
+ * 4. Trims recents list to MAX_RECENTS and purges old blobs.
+ * Coalesces rapid consecutive saves for the same project ID (latest wins).
+ */
+export async function saveRecentProject(project: ProjectState): Promise<RecentProject> {
+  const existing = activeSaveByProject.get(project.id);
+  if (existing) {
+    queuedSaveByProject.set(project.id, project);
+    return existing;
+  }
+
+  const runLoop = (async (): Promise<RecentProject> => {
+    let current = project;
+    let lastMeta: RecentProject = {
+      id: project.id,
+      title: project.title,
+      width: project.width,
+      height: project.height,
+      timestamp: Date.now(),
+    };
+    try {
+      while (true) {
+        lastMeta = await performSaveRecentProject(current);
+        const queued = queuedSaveByProject.get(project.id);
+        if (!queued) break;
+        queuedSaveByProject.delete(project.id);
+        current = queued;
+      }
+      return lastMeta;
+    } finally {
+      activeSaveByProject.delete(project.id);
+    }
+  })();
+
+  activeSaveByProject.set(project.id, runLoop);
+  return runLoop;
+}
+
+/**
  * Retrieves the list of recent projects metadata from IndexedDB.
  */
 export async function getRecentProjects(): Promise<RecentProject[]> {
@@ -230,8 +269,12 @@ export async function loadRecentProjectState(id: string): Promise<ProjectState |
   }
 
   try {
-    // Decompress and parse the .aseprite binary
-    const parsed = await parseAseprite(record.asepriteBinary.buffer, record.title);
+    // Decompress and parse the .aseprite binary off the main thread
+    const copiedBuffer = record.asepriteBinary.buffer.slice(
+      record.asepriteBinary.byteOffset,
+      record.asepriteBinary.byteOffset + record.asepriteBinary.byteLength
+    );
+    const parsed = await parseAsepriteAsync(copiedBuffer, record.title);
 
     // Ensure the original project ID and title are preserved
     parsed.id = record.id;

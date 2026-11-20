@@ -523,6 +523,7 @@ const MobileWorkspace: React.FC<Omit<MobileLayoutProps, 'handleFileChange'>> = (
           layers={state.layers}
           activeLayerId={state.activeLayerId}
           palette={state.palette}
+          colorMode={state.colorMode}
           width={state.width}
           height={state.height}
           zoom={state.zoom}

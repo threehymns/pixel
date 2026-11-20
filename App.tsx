@@ -14,7 +14,7 @@ import { SlicesDialog } from './components/SlicesDialog';
 import { OutlineDialog } from './components/OutlineDialog';
 import { StudioToaster, toast } from './components/ui/toast';
 import { StudioConfirmHost } from './components/ui/alert-dialog';
-import { Layer, FrameTag, ProjectState, ColorMode, Slice } from './types';
+import { Layer, FrameTag, ProjectState, ColorMode, Slice, PixelHistoryPatch, ToolType } from './types';
 import { MAX_ZOOM, MIN_ZOOM } from './constants';
 
 // Layouts
@@ -302,7 +302,7 @@ export default function App() {
 
   const updateStateWithStatus = (
     newState: ProjectStateUpdater,
-    config?: { action: string; tool?: any }
+    config?: { action: string; tool?: ToolType; patch?: PixelHistoryPatch }
   ) => {
     updateState(newState, config);
     if (config?.action) {
@@ -457,11 +457,7 @@ export default function App() {
       updateState(originalState);
       return;
     }
-    const { history: activeHistory, historyIndex: activeHistoryIdx } = getActiveHistoryInfo();
-    const entry = activeHistory[activeHistoryIdx];
-    if (entry) {
-      updateState(entry.state);
-    }
+    projectActions.restoreCurrentHistoryState();
   };
 
   const openNewProjectDialog = () => setIsNewProjectDialogOpen(true);

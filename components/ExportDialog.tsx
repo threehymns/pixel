@@ -6,7 +6,8 @@ import {
   generateGifBlob,
   downloadBlob,
 } from '../utils/exportUtils';
-import { encodeAseprite } from '../utils/aseprite';
+import { renderFrameToDownsampledCanvas } from '../utils';
+import { encodeAsepriteAsync } from '../utils/asepriteWorkerClient';
 import { ModalShell } from './ui/dialog';
 import { Input } from './ui/input';
 import { CustomSlider } from './ui/slider';
@@ -54,7 +55,9 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
     initialFormat ?? (state.frames.length > 1 ? 'gif' : 'png');
 
   const [format, setFormat] = useState<ExportFormat>(resolvedDefaultFormat);
-  const [scale, setScale] = useState<number>(8);
+  const [scale, setScale] = useState<number>(() =>
+    Math.max(state.width, state.height) >= 512 ? 1 : 8
+  );
   const [filename, setFilename] = useState<string>(state.title || 'pixel-art');
 
   const [bgType, setBgType] = useState<'transparent' | 'color'>('transparent');
@@ -85,12 +88,13 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
     const smartDefault: ExportFormat =
       initialFormat ?? (state.frames.length > 1 ? 'gif' : 'png');
     setFormat(smartDefault);
+    setScale(Math.max(state.width, state.height) >= 512 ? 1 : 8);
     setFilename(state.title || 'pixel-art');
     setPngFrameIndex(state.activeFrameIndex);
     setPreviewFrame(0);
     setIsExporting(false);
     setExportProgress(0);
-  }, [isOpen, initialFormat, state.title, state.activeFrameIndex, state.frames.length]);
+  }, [isOpen, initialFormat, state.title, state.activeFrameIndex, state.frames.length, state.width, state.height]);
 
   const targetFrames = useMemo(() => {
     if (frameRange === 'current') {
@@ -132,43 +136,50 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
     if (!ctx) return;
 
     const currentBg = format === 'aseprite' || bgType === 'transparent' ? null : bgColor;
+    const MAX_EXPORT_PREVIEW_DIM = 384;
+
+    const drawDownsampledSingle = (frameIdx: number, bg: string | null) => {
+      const rendered = renderFrameToDownsampledCanvas(state, frameIdx, MAX_EXPORT_PREVIEW_DIM);
+      canvas.width = rendered.width;
+      canvas.height = rendered.height;
+      ctx.imageSmoothingEnabled = false;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (bg && bg !== 'transparent') {
+        ctx.fillStyle = bg;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+      ctx.drawImage(rendered, 0, 0);
+    };
 
     if (format === 'png') {
-      const rendered = renderScaledFrameCanvas(state, pngFrameIndex, 1, currentBg);
-      canvas.width = rendered.width;
-      canvas.height = rendered.height;
-      ctx.imageSmoothingEnabled = false;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(rendered, 0, 0);
+      drawDownsampledSingle(pngFrameIndex, currentBg);
     } else if (format === 'gif') {
       const activeIdx = targetFrames[previewFrame] ?? state.activeFrameIndex;
-      const rendered = renderScaledFrameCanvas(state, activeIdx, 1, currentBg);
-      canvas.width = rendered.width;
-      canvas.height = rendered.height;
-      ctx.imageSmoothingEnabled = false;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(rendered, 0, 0);
+      drawDownsampledSingle(activeIdx, currentBg);
     } else if (format === 'spritesheet') {
-      const cols = columns > 0 ? columns : targetFrames.length;
-      const sheetCanvas = renderCustomSpriteSheetCanvas({
-        state,
-        scale: 1,
-        columns: cols,
-        frameIndices: targetFrames,
-        backgroundColor: currentBg,
-      });
-      canvas.width = sheetCanvas.width;
-      canvas.height = sheetCanvas.height;
+      const cols = Math.max(1, columns > 0 ? columns : targetFrames.length);
+      const rows = Math.max(1, Math.ceil(targetFrames.length / cols));
+      const maxTileDim = Math.max(16, Math.floor(MAX_EXPORT_PREVIEW_DIM / Math.max(cols, rows)));
+      const sampleScale = Math.min(1, maxTileDim / Math.max(1, state.width, state.height));
+      const tileW = Math.max(1, Math.round(state.width * sampleScale));
+      const tileH = Math.max(1, Math.round(state.height * sampleScale));
+
+      canvas.width = cols * tileW;
+      canvas.height = rows * tileH;
       ctx.imageSmoothingEnabled = false;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(sheetCanvas, 0, 0);
+      if (currentBg && currentBg !== 'transparent') {
+        ctx.fillStyle = currentBg;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+      for (let i = 0; i < targetFrames.length; i++) {
+        const tileCanvas = renderFrameToDownsampledCanvas(state, targetFrames[i], maxTileDim);
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        ctx.drawImage(tileCanvas, 0, 0, tileCanvas.width, tileCanvas.height, col * tileW, row * tileH, tileW, tileH);
+      }
     } else if (format === 'aseprite') {
-      const rendered = renderScaledFrameCanvas(state, state.activeFrameIndex, 1, null);
-      canvas.width = rendered.width;
-      canvas.height = rendered.height;
-      ctx.imageSmoothingEnabled = false;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(rendered, 0, 0);
+      drawDownsampledSingle(state.activeFrameIndex, null);
     }
   }, [
     isOpen,
@@ -261,8 +272,8 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
         setIsExporting(false);
         onClose();
       } else if (format === 'aseprite') {
-        const aseBytes = encodeAseprite(state);
-        const blob = new Blob([aseBytes.buffer], { type: 'image/x-aseprite' });
+        const aseBytes = await encodeAsepriteAsync(state);
+        const blob = new Blob([aseBytes.buffer as ArrayBuffer], { type: 'image/x-aseprite' });
         const outName = `${cleanFilename}.aseprite`;
         downloadBlob(blob, outName);
         toast.success('Exported Aseprite File', { description: outName });

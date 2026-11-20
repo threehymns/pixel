@@ -1,7 +1,33 @@
 
 import { useRef, useLayoutEffect, useCallback } from 'react';
-import { ProjectState, PixelGrid, Position, ToolType, Modifiers, PixelValue } from '../types';
-import { bresenhamLine, pixelPerfectFilter, getIndex, floodFill, getCoords, bresenhamEllipse, getFilledEllipse, rotateSelectionPixels, rotateSelectionMask, applyConvolution, hexToRgb, findNearestPaletteIndex, rgbToHex, scaleSelectionPixels, scaleSelectionMask, isLayerVisible } from '../utils';
+import { ProjectState, PixelGrid, Position, ToolType, Modifiers, PixelValue, PixelHistoryPatch, PixelLayerPatch } from '../types';
+import {
+  EMPTY_PIXEL,
+  createPixelGrid,
+  clonePixelGrid,
+  packRGBA,
+  encodeIndexedPixel,
+  pixelToHex,
+  pixelToRgb,
+  resolveColorToPixel,
+  buildLayerPatch,
+  getSelectionBoundingBox,
+  bresenhamLine,
+  pixelPerfectFilter,
+  getIndex,
+  floodFill,
+  getCoords,
+  bresenhamEllipse,
+  getFilledEllipse,
+  rotateSelectionPixels,
+  rotateSelectionMask,
+  applyConvolution,
+  hexToRgb,
+  findNearestPaletteIndex,
+  scaleSelectionPixels,
+  scaleSelectionMask,
+  isLayerVisible,
+} from '../utils';
 import { publishLiveStroke, clearLiveStroke } from './useLiveStrokeStore';
 
 const BLUR_KERNEL = [
@@ -50,12 +76,13 @@ function distributeDitherError(
 
 export function useCanvasTools(
   state: ProjectState,
-  updateState: (s: ProjectState, historyConfig?: { action: string, tool?: ToolType }) => void
+  updateState: (s: ProjectState, historyConfig?: { action: string; tool?: ToolType; patch?: PixelHistoryPatch }) => void
 ) {
   const strokeStartDataRef = useRef<PixelGrid | null>(null);
   const activeStrokePixelsRef = useRef<PixelGrid | null>(null);
   const strokeMetaRef = useRef<{ projectId: string; frameIndex: number; layerId: string } | null>(null);
   const strokeDirtyRef = useRef<boolean>(false);
+  const strokeBoundsRef = useRef<{ minX: number; minY: number; maxX: number; maxY: number } | null>(null);
   const lastReplayIndicesRef = useRef<number[]>([]);
   const wasUsingStartBufferRef = useRef<boolean>(false);
   const strokePathRef = useRef<Position[]>([]);
@@ -70,18 +97,17 @@ export function useCanvasTools(
     updateStateRef.current = updateState;
   });
 
-  const resolvePixelValue = (hex: string): string | number => {
-    if (stateRef.current.colorMode === 'rgba') return hex;
-    const idx = stateRef.current.palette.findIndex(c => c.toLowerCase() === hex.toLowerCase());
-    return idx === -1 ? 0 : idx;
+  const resolvePixelValue = (hex: string): PixelValue => {
+    const { colorMode, palette } = stateRef.current;
+    return resolveColorToPixel(hex, colorMode, palette);
   };
 
   const getShadedValue = (currentVal: PixelValue, moveForward: boolean): PixelValue => {
-    if (currentVal === null) return null;
+    if (currentVal === EMPTY_PIXEL) return EMPTY_PIXEL;
     const { shades, palette, colorMode } = stateRef.current;
     if (shades.length < 2) return currentVal;
 
-    const currentHex = typeof currentVal === 'number' ? palette[currentVal] : currentVal;
+    const currentHex = pixelToHex(currentVal, palette);
     if (!currentHex) return currentVal;
 
     const lowerHex = currentHex.toLowerCase();
@@ -96,21 +122,23 @@ export function useCanvasTools(
     const nextHex = shades[nextIndex];
     if (colorMode === 'indexed') {
         const pIdx = palette.findIndex(p => p.toLowerCase() === nextHex.toLowerCase());
-        return pIdx === -1 ? currentVal : pIdx;
+        return pIdx === -1 ? currentVal : encodeIndexedPixel(pIdx);
     }
-    return nextHex;
+    return resolveColorToPixel(nextHex, 'rgba', palette);
   };
 
-  const handleDrawStart = useCallback((pos: Position, modifiers: Modifiers) => {
+  const handleDrawStart = useCallback((pos: Position, _modifiers: Modifiers) => {
     const { id, activeFrameIndex, activeLayerId, frames, width, height, tool, brushSize, brushShape } = stateRef.current;
     const currentFrame = frames[activeFrameIndex];
     if (!currentFrame) return;
-    const layerData = currentFrame.layerData[activeLayerId];
-    const startCopy = layerData ? layerData.slice() : new Array(width * height).fill(null);
-    strokeStartDataRef.current = startCopy;
-    activeStrokePixelsRef.current = startCopy.slice();
+    // Store immutable reference to the starting layer grid (zero full-canvas copy on pointerdown).
+    // The working stroke buffer is cloned lazily on the first actual pixel write.
+    const basePixels = currentFrame.layerData[activeLayerId] ?? createPixelGrid(width * height);
+    strokeStartDataRef.current = basePixels;
+    activeStrokePixelsRef.current = null;
     strokeMetaRef.current = { projectId: id, frameIndex: activeFrameIndex, layerId: activeLayerId };
     strokeDirtyRef.current = false;
+    strokeBoundsRef.current = null;
     lastReplayIndicesRef.current.length = 0;
     wasUsingStartBufferRef.current = false;
     strokePathRef.current = [];
@@ -130,8 +158,8 @@ export function useCanvasTools(
           const sampleY = pos.y + ry;
           if (sampleX >= 0 && sampleX < width && sampleY >= 0 && sampleY < height) {
             const idx = getIndex(sampleX, sampleY, width);
-            const val = startCopy[idx];
-            if (val !== null && val !== undefined) {
+            const val = basePixels[idx];
+            if (val !== EMPTY_PIXEL) {
               smudgeReservoirRef.current.set(`${rx},${ry}`, val);
             }
           }
@@ -148,12 +176,13 @@ export function useCanvasTools(
     const isPicking = tool === 'eyedropper' || (tool === 'pencil' && modifiers.alt);
     if (isPicking) {
         let pickedHex: string | null = null;
+        const sampleIdx = getIndex(x, y, width);
         for (let i = stateRef.current.layers.length - 1; i >= 0; i--) {
             const l = stateRef.current.layers[i];
             if (!isLayerVisible(l, stateRef.current.layers)) continue;
-            const pxVal = currentFrame.layerData[l.id]?.[getIndex(x, y, width)];
-            if (pxVal !== null && pxVal !== undefined) {
-                pickedHex = typeof pxVal === 'number' ? palette[pxVal] : pxVal;
+            const pxVal = currentFrame.layerData[l.id]?.[sampleIdx];
+            if (pxVal !== undefined && pxVal !== EMPTY_PIXEL) {
+                pickedHex = pixelToHex(pxVal, palette);
                 if (pickedHex) break;
             }
         }
@@ -167,22 +196,69 @@ export function useCanvasTools(
         return;
     }
 
+    if (tool === 'bucket') {
+      const basePixels = currentFrame.layerData[activeLayerId] ?? createPixelGrid(width * height);
+      const activeColorHex = primaryColor;
+      const activeVal = resolvePixelValue(activeColorHex);
+      const isContiguous = modifiers.shift ? false : stateRef.current.fillContiguous;
+      
+      const variants = [{ x, y }];
+      if (symmetry.x) variants.push({ x: width - 1 - x, y: y });
+      if (symmetry.y) variants.push({ x: x, y: height - 1 - y });
+      if (symmetry.x && symmetry.y) variants.push({ x: width - 1 - x, y: height - 1 - y });
+
+      let currentGrid: PixelGrid = basePixels;
+      variants.forEach(v => {
+          let filled: PixelGrid;
+          if (inkType === 'shading') {
+              const startVal = currentGrid[getIndex(v.x, v.y, width)];
+              if (startVal === EMPTY_PIXEL) return;
+              const nextVal = getShadedValue(startVal, !modifiers.ctrl);
+              if (nextVal === startVal) return;
+              filled = floodFill(currentGrid, v.x, v.y, nextVal, width, height, isContiguous);
+          } else {
+              filled = floodFill(currentGrid, v.x, v.y, activeVal, width, height, isContiguous);
+          }
+          
+          if (selection) {
+              for (let i = 0; i < filled.length; i++) {
+                if (!selection.has(i)) filled[i] = currentGrid[i];
+              }
+          }
+          currentGrid = filled;
+      });
+
+      const layerPatch = buildLayerPatch(activeLayerId, basePixels, currentGrid, width, height);
+      if (!layerPatch) return;
+
+      const newFrames = frames.map((f, i) => i !== activeFrameIndex ? f : { ...f, layerData: { ...f.layerData, [activeLayerId]: currentGrid } });
+      const nextState = { ...stateRef.current, frames: newFrames };
+      stateRef.current = nextState;
+      updateStateRef.current(nextState, {
+        action: inkType === 'shading' ? 'Shading Fill' : 'Bucket Fill',
+        tool: 'bucket',
+        patch: { frameIndex: activeFrameIndex, layers: [layerPatch] },
+      }); 
+      return; 
+    }
+
     const isShapeTool = ['line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse'].includes(tool);
     const isPixelPerfectPencil = stateRef.current.pixelPerfect && stateRef.current.brushSize === 1 && !modifiers.shift && tool === 'pencil';
     const isFullStrokeReplay = modifiers.shift || isShapeTool || isPixelPerfectPencil;
 
     const useStartBuffer = isFullStrokeReplay && ['pencil', 'eraser', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'blur', 'sharpen'].includes(tool);
     
-    // Ensure activeStrokePixelsRef and strokeStartDataRef are initialized
-    if (!activeStrokePixelsRef.current || !strokeStartDataRef.current) {
-      const layerData = currentFrame.layerData[activeLayerId];
-      const startCopy = layerData ? layerData.slice() : new Array(width * height).fill(null);
-      strokeStartDataRef.current = startCopy;
-      activeStrokePixelsRef.current = startCopy.slice();
+    // Lazily allocate a single working Uint32Array copy on the first write
+    if (!strokeStartDataRef.current) {
+      strokeStartDataRef.current = currentFrame.layerData[activeLayerId] ?? createPixelGrid(width * height);
       strokeMetaRef.current = { projectId: id, frameIndex: activeFrameIndex, layerId: activeLayerId };
       strokeDirtyRef.current = false;
+      strokeBoundsRef.current = null;
       lastReplayIndicesRef.current.length = 0;
       wasUsingStartBufferRef.current = false;
+    }
+    if (!activeStrokePixelsRef.current) {
+      activeStrokePixelsRef.current = clonePixelGrid(strokeStartDataRef.current);
     }
 
     const layerPixels = activeStrokePixelsRef.current;
@@ -276,9 +352,7 @@ export function useCanvasTools(
       if (useStartBuffer && strokeStartDataRef.current) {
         const startBuf = strokeStartDataRef.current;
         if (!wasUsingStartBufferRef.current && strokeDirtyRef.current) {
-          for (let i = 0; i < startBuf.length; i++) {
-            layerPixels[i] = startBuf[i];
-          }
+          layerPixels.set(startBuf);
           fullRedraw = true;
           lastReplayIndicesRef.current.length = 0;
         } else {
@@ -377,10 +451,10 @@ export function useCanvasTools(
                               if (sx >= 0 && sx < width && sy >= 0 && sy < height) {
                                   const srcIdx = getIndex(sx, sy, width);
                                   const srcVal = layerPixels[srcIdx];
-                                  if (srcVal !== null && srcVal !== undefined) {
+                                  if (srcVal !== EMPTY_PIXEL) {
                                       layerPixels[idx] = srcVal;
                                       if (size === 1 || (Math.abs(relX - dx_vec) > r || Math.abs(relY - dy_vec) > r)) {
-                                          layerPixels[srcIdx] = null;
+                                          layerPixels[srcIdx] = EMPTY_PIXEL;
                                           if (sx < dirtyMinX) dirtyMinX = sx;
                                           if (sx > dirtyMaxX) dirtyMaxX = sx;
                                           if (sy < dirtyMinY) dirtyMinY = sy;
@@ -392,27 +466,27 @@ export function useCanvasTools(
                       } else {
                           // Smart Blend mode
                           const key = `${relX},${relY}`;
-                          let carriedVal = smudgeReservoirRef.current.get(key) ?? null;
+                          let carriedVal = smudgeReservoirRef.current.get(key) ?? EMPTY_PIXEL;
                           const canvasVal = layerPixels[idx];
 
-                          if (carriedVal === null) {
-                              if (canvasVal !== null && canvasVal !== undefined) {
+                          if (carriedVal === EMPTY_PIXEL) {
+                              if (canvasVal !== EMPTY_PIXEL) {
                                   smudgeReservoirRef.current.set(key, canvasVal);
                                   carriedVal = canvasVal;
                               }
                           }
 
-                          if (carriedVal !== null) {
-                              if (canvasVal === null || canvasVal === undefined) {
+                          if (carriedVal !== EMPTY_PIXEL) {
+                              if (canvasVal === EMPTY_PIXEL) {
                                   // Dragging paint into empty space: deposit carried paint smoothly
                                   layerPixels[idx] = carriedVal;
                               } else {
                                   // Both carried color and canvas color are present -> Smart Color Blend
-                                  const hex1 = typeof carriedVal === 'number' ? palette[carriedVal] : carriedVal;
-                                  const hex2 = typeof canvasVal === 'number' ? palette[canvasVal] : canvasVal;
-                                  if (hex1 && hex2) {
-                                      const [r1, g1, b1] = hexToRgb(hex1);
-                                      const [r2, g2, b2] = hexToRgb(hex2);
+                                  const rgb1 = pixelToRgb(carriedVal, palette);
+                                  const rgb2 = pixelToRgb(canvasVal, palette);
+                                  if (rgb1 && rgb2) {
+                                      const [r1, g1, b1] = rgb1;
+                                      const [r2, g2, b2] = rgb2;
 
                                       let falloff = 1.0;
                                       if (size > 1) {
@@ -426,12 +500,9 @@ export function useCanvasTools(
                                       const mixedG = Math.round(g2 * (1 - blendFactor) + g1 * blendFactor);
                                       const mixedB = Math.round(b2 * (1 - blendFactor) + b1 * blendFactor);
 
-                                      let mixedVal: PixelValue;
-                                      if (colorMode === 'rgba') {
-                                          mixedVal = rgbToHex(mixedR, mixedG, mixedB);
-                                      } else {
-                                          mixedVal = findNearestPaletteIndex(mixedR, mixedG, mixedB, palette);
-                                      }
+                                      const mixedVal: PixelValue = colorMode === 'rgba'
+                                          ? packRGBA(mixedR, mixedG, mixedB, 255)
+                                          : encodeIndexedPixel(findNearestPaletteIndex(mixedR, mixedG, mixedB, palette));
                                       layerPixels[idx] = mixedVal;
 
                                       // Reservoir color pickup: brush absorbs some canvas color as it travels
@@ -440,16 +511,16 @@ export function useCanvasTools(
                                       const carriedG = Math.round(g1 * (1 - pickupRate) + g2 * pickupRate);
                                       const carriedB = Math.round(b1 * (1 - pickupRate) + b2 * pickupRate);
 
-                                      const nextCarriedVal = colorMode === 'rgba'
-                                          ? rgbToHex(carriedR, carriedG, carriedB)
-                                          : findNearestPaletteIndex(carriedR, carriedG, carriedB, palette);
+                                      const nextCarriedVal: PixelValue = colorMode === 'rgba'
+                                          ? packRGBA(carriedR, carriedG, carriedB, 255)
+                                          : encodeIndexedPixel(findNearestPaletteIndex(carriedR, carriedG, carriedB, palette));
                                       smudgeReservoirRef.current.set(key, nextCarriedVal);
                                   }
                               }
                           }
                       }
                   } else if (tool === 'eraser') {
-                      layerPixels[idx] = null;
+                      layerPixels[idx] = EMPTY_PIXEL;
                   } else if ((tool === 'blur' || tool === 'sharpen') && colorMode === 'indexed' && ditheringEnabled) {
                       if (!errorBufferR || !errorBufferG || !errorBufferB) {
                           errorBufferR = new Float32Array(width * height);
@@ -467,14 +538,15 @@ export function useCanvasTools(
                               const ny = drawY + ky - kHalf;
                               if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
                                   const val = layerPixels[getIndex(nx, ny, width)];
-                                  if (val !== null) {
-                                      const hex = typeof val === 'number' ? palette[val] : val;
-                                      const [pr, pg, pb] = hexToRgb(hex);
-                                      const kw = kernel[ky][kx];
-                                      r_conv += pr * kw;
-                                      g_conv += pg * kw;
-                                      b_conv += pb * kw;
-                                      weight += kw;
+                                  if (val !== EMPTY_PIXEL) {
+                                      const rgb = pixelToRgb(val, palette);
+                                      if (rgb) {
+                                          const kw = kernel[ky][kx];
+                                          r_conv += rgb[0] * kw;
+                                          g_conv += rgb[1] * kw;
+                                          b_conv += rgb[2] * kw;
+                                          weight += kw;
+                                      }
                                   }
                               }
                           }
@@ -485,7 +557,7 @@ export function useCanvasTools(
                           const targetB = b_conv / weight + errorBufferB[idx];
                           
                           const paletteIndex = findNearestPaletteIndex(targetR, targetG, targetB, palette);
-                          layerPixels[idx] = paletteIndex;
+                          layerPixels[idx] = encodeIndexedPixel(paletteIndex);
                           
                           const [pr, pg, pb] = hexToRgb(palette[paletteIndex]);
                           const errR = targetR - pr;
@@ -508,40 +580,6 @@ export function useCanvasTools(
         });
       });
       changed = true; 
-    } else if (tool === 'bucket') {
-      const activeColorHex = primaryColor;
-      const activeVal = resolvePixelValue(activeColorHex);
-      const isContiguous = modifiers.shift ? false : stateRef.current.fillContiguous;
-      
-      const variants = [{ x, y }];
-      if (symmetry.x) variants.push({ x: width - 1 - x, y: y });
-      if (symmetry.y) variants.push({ x: x, y: height - 1 - y });
-      if (symmetry.x && symmetry.y) variants.push({ x: width - 1 - x, y: height - 1 - y });
-
-      let currentGrid = [...layerPixels];
-      variants.forEach(v => {
-          let filled;
-          if (inkType === 'shading') {
-              const startVal = currentGrid[getIndex(v.x, v.y, width)];
-              if (startVal === null) return;
-              const nextVal = getShadedValue(startVal, !modifiers.ctrl);
-              if (nextVal === startVal) return;
-              filled = floodFill(currentGrid, v.x, v.y, nextVal, width, height, isContiguous);
-          } else {
-              filled = floodFill(currentGrid, v.x, v.y, activeVal, width, height, isContiguous);
-          }
-          
-          if (selection) {
-              for(let i=0; i<filled.length; i++) { if (!selection.has(i)) filled[i] = currentGrid[i]; }
-          }
-          currentGrid = filled;
-      });
-
-      const newFrames = frames.map((f, i) => i !== activeFrameIndex ? f : { ...f, layerData: { ...f.layerData, [activeLayerId]: currentGrid } });
-      const nextState = { ...stateRef.current, frames: newFrames };
-      stateRef.current = nextState;
-      updateStateRef.current(nextState, { action: inkType === 'shading' ? 'Shading Fill' : 'Bucket Fill', tool: 'bucket' }); 
-      return; 
     }
 
     if (changed) {
@@ -550,6 +588,21 @@ export function useCanvasTools(
       const dirtyRect = dirtyMaxX >= dirtyMinX && dirtyMaxY >= dirtyMinY
         ? { minX: dirtyMinX, minY: dirtyMinY, maxX: dirtyMaxX, maxY: dirtyMaxY }
         : null;
+
+      if (fullRedraw) {
+        strokeBoundsRef.current = { minX: 0, minY: 0, maxX: width - 1, maxY: height - 1 };
+      } else if (dirtyRect) {
+        const prevBounds = strokeBoundsRef.current;
+        if (!prevBounds) {
+          strokeBoundsRef.current = { ...dirtyRect };
+        } else {
+          if (dirtyRect.minX < prevBounds.minX) prevBounds.minX = dirtyRect.minX;
+          if (dirtyRect.minY < prevBounds.minY) prevBounds.minY = dirtyRect.minY;
+          if (dirtyRect.maxX > prevBounds.maxX) prevBounds.maxX = dirtyRect.maxX;
+          if (dirtyRect.maxY > prevBounds.maxY) prevBounds.maxY = dirtyRect.maxY;
+        }
+      }
+
       publishLiveStroke({
         projectId: id,
         frameIndex: activeFrameIndex,
@@ -563,7 +616,9 @@ export function useCanvasTools(
 
   const handleDrawEnd = useCallback(() => {
     const meta = strokeMetaRef.current;
+    const basePixels = strokeStartDataRef.current;
     const finalPixels = activeStrokePixelsRef.current;
+    const bounds = strokeBoundsRef.current;
     const isDirty = strokeDirtyRef.current;
 
     // Reset refs immediately so duplicate pointerUp calls are strictly idempotent
@@ -573,6 +628,7 @@ export function useCanvasTools(
     activeStrokePixelsRef.current = null;
     strokeMetaRef.current = null;
     strokeDirtyRef.current = false;
+    strokeBoundsRef.current = null;
     lastReplayIndicesRef.current.length = 0;
     wasUsingStartBufferRef.current = false;
     const hadStroke = strokePathRef.current.length > 0 || originRef.current !== null;
@@ -585,6 +641,13 @@ export function useCanvasTools(
         const curState = stateRef.current;
         const targetFrameIdx = meta && meta.projectId === curState.id ? meta.frameIndex : curState.activeFrameIndex;
         const targetLayerId = meta && meta.projectId === curState.id ? meta.layerId : curState.activeLayerId;
+
+        const layerPatch = basePixels
+          ? buildLayerPatch(targetLayerId, basePixels, finalPixels, curState.width, curState.height, bounds)
+          : null;
+        if (basePixels && !layerPatch) {
+          return;
+        }
 
         let actionName = 'Draw';
         const isShading = curState.inkType === 'shading';
@@ -606,28 +669,42 @@ export function useCanvasTools(
         );
         const nextState = { ...curState, frames: newFrames };
         stateRef.current = nextState;
-        updateStateRef.current(nextState, { action: actionName, tool: curState.tool });
+        updateStateRef.current(nextState, {
+          action: actionName,
+          tool: curState.tool,
+          patch: layerPatch ? { frameIndex: targetFrameIdx, layers: [layerPatch] } : undefined,
+        });
     }
   }, []);
 
   const handleMovePixels = useCallback((selection: Set<number>, offset: Position) => {
     const { activeFrameIndex, selectedLayerIds, frames, width, height } = stateRef.current;
+    const oldBox = selection.size > 0 ? getSelectionBoundingBox(selection, width) : null;
+    const bounds = oldBox ? {
+      minX: Math.max(0, Math.min(oldBox.x, oldBox.x + offset.x)),
+      minY: Math.max(0, Math.min(oldBox.y, oldBox.y + offset.y)),
+      maxX: Math.min(width - 1, Math.max(oldBox.x + oldBox.w - 1, oldBox.x + oldBox.w - 1 + offset.x)),
+      maxY: Math.min(height - 1, Math.max(oldBox.y + oldBox.h - 1, oldBox.y + oldBox.h - 1 + offset.y)),
+    } : undefined;
+    const layerPatches: PixelLayerPatch[] = [];
     
     const newFrames = frames.map((f, i) => {
       if (i !== activeFrameIndex) return f;
       const newLayerData = { ...f.layerData };
       selectedLayerIds.forEach(layerId => {
-        const layerPixels = [...(f.layerData[layerId] || new Array(width * height).fill(null))];
-        const updatedPixels = [...layerPixels];
-        selection.forEach(idx => updatedPixels[idx] = null);
+        const basePixels = f.layerData[layerId] ?? createPixelGrid(width * height);
+        const updatedPixels = clonePixelGrid(basePixels);
+        selection.forEach(idx => { updatedPixels[idx] = EMPTY_PIXEL; });
         selection.forEach(idx => {
           const { x, y } = getCoords(idx, width);
           const nx = x + offset.x; const ny = y + offset.y;
           if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-            updatedPixels[getIndex(nx, ny, width)] = layerPixels[idx];
+            updatedPixels[getIndex(nx, ny, width)] = basePixels[idx];
           }
         });
         newLayerData[layerId] = updatedPixels;
+        const patch = buildLayerPatch(layerId, basePixels, updatedPixels, width, height, bounds);
+        if (patch) layerPatches.push(patch);
       });
       return { ...f, layerData: newLayerData };
     });
@@ -638,58 +715,104 @@ export function useCanvasTools(
       const nx = x + offset.x; const ny = y + offset.y;
       if (nx >= 0 && nx < width && ny >= 0 && ny < height) newSelection.add(getIndex(nx, ny, width));
     });
+    const finalSelection = newSelection.size > 0 ? newSelection : null;
 
     updateStateRef.current(
-      { ...stateRef.current, frames: newFrames, selection: newSelection }, 
-      { action: `Move Pixels on ${selectedLayerIds.length} Layers`, tool: 'move' }
+      { ...stateRef.current, frames: newFrames, selection: finalSelection }, 
+      {
+        action: `Move Pixels on ${selectedLayerIds.length} Layers`,
+        tool: 'move',
+        patch: layerPatches.length > 0 ? {
+          frameIndex: activeFrameIndex,
+          layers: layerPatches,
+          selectionBefore: selection,
+          selectionAfter: finalSelection,
+        } : undefined,
+      }
     );
   }, []);
 
   const handleRotatePixels = useCallback((selection: Set<number>, angle: number, pivot: Position) => {
       const { activeFrameIndex, selectedLayerIds, frames, width, height, rotationAlgorithm } = stateRef.current;
       const newSelection = rotateSelectionMask(selection, angle, pivot, width, height);
+      const finalSelection = newSelection.size > 0 ? newSelection : null;
+      const layerPatches: PixelLayerPatch[] = [];
+
       const newFrames = frames.map((f, i) => {
           if (i !== activeFrameIndex) return f;
           const newLayerData = { ...f.layerData };
           selectedLayerIds.forEach(layerId => {
-              const layerPixels = [...(f.layerData[layerId] || new Array(width * height).fill(null))];
-              const rotatedPixels = rotateSelectionPixels(selection, layerPixels, angle, pivot, width, height, rotationAlgorithm);
-              const updatedPixels = [...layerPixels];
-              selection.forEach(idx => updatedPixels[idx] = null);
+              const basePixels = f.layerData[layerId] ?? createPixelGrid(width * height);
+              const rotatedPixels = rotateSelectionPixels(selection, basePixels, angle, pivot, width, height, rotationAlgorithm);
+              const updatedPixels = clonePixelGrid(basePixels);
+              selection.forEach(idx => { updatedPixels[idx] = EMPTY_PIXEL; });
               for (let j = 0; j < rotatedPixels.length; j++) {
-                  if (rotatedPixels[j] !== null) updatedPixels[j] = rotatedPixels[j]!;
+                  const rv = rotatedPixels[j];
+                  if (rv !== EMPTY_PIXEL) updatedPixels[j] = rv;
               }
               newLayerData[layerId] = updatedPixels;
+              const patch = buildLayerPatch(layerId, basePixels, updatedPixels, width, height);
+              if (patch) layerPatches.push(patch);
           });
           return { ...f, layerData: newLayerData };
       });
       updateStateRef.current(
-          { ...stateRef.current, frames: newFrames, selection: newSelection.size > 0 ? newSelection : null },
-          { action: `Rotate Selection on ${selectedLayerIds.length} Layers`, tool: 'move' }
+          { ...stateRef.current, frames: newFrames, selection: finalSelection },
+          {
+            action: `Rotate Selection on ${selectedLayerIds.length} Layers`,
+            tool: 'move',
+            patch: layerPatches.length > 0 ? {
+              frameIndex: activeFrameIndex,
+              layers: layerPatches,
+              selectionBefore: selection,
+              selectionAfter: finalSelection,
+            } : undefined,
+          }
       );
   }, []);
 
   const handleScalePixels = useCallback((selection: Set<number>, srcBox: any, destBox: any) => {
     const { activeFrameIndex, selectedLayerIds, frames, width, height } = stateRef.current;
     const newSelection = scaleSelectionMask(selection, srcBox, destBox, width, height);
+    const finalSelection = newSelection.size > 0 ? newSelection : null;
+    const bounds = {
+      minX: Math.max(0, Math.floor(Math.min(srcBox.x, destBox.x))),
+      minY: Math.max(0, Math.floor(Math.min(srcBox.y, destBox.y))),
+      maxX: Math.min(width - 1, Math.ceil(Math.max(srcBox.x + srcBox.w, destBox.x + destBox.w))),
+      maxY: Math.min(height - 1, Math.ceil(Math.max(srcBox.y + srcBox.h, destBox.y + destBox.h))),
+    };
+    const layerPatches: PixelLayerPatch[] = [];
+
     const newFrames = frames.map((f, i) => {
       if (i !== activeFrameIndex) return f;
       const newLayerData = { ...f.layerData };
       selectedLayerIds.forEach(layerId => {
-        const layerPixels = [...(f.layerData[layerId] || new Array(width * height).fill(null))];
-        const scaledPixels = scaleSelectionPixels(selection, layerPixels, srcBox, destBox, width, height);
-        const updatedPixels = [...layerPixels];
-        selection.forEach(idx => updatedPixels[idx] = null);
+        const basePixels = f.layerData[layerId] ?? createPixelGrid(width * height);
+        const scaledPixels = scaleSelectionPixels(selection, basePixels, srcBox, destBox, width, height);
+        const updatedPixels = clonePixelGrid(basePixels);
+        selection.forEach(idx => { updatedPixels[idx] = EMPTY_PIXEL; });
         for (let j = 0; j < scaledPixels.length; j++) {
-          if (scaledPixels[j] !== null) updatedPixels[j] = scaledPixels[j]!;
+          const sv = scaledPixels[j];
+          if (sv !== EMPTY_PIXEL) updatedPixels[j] = sv;
         }
         newLayerData[layerId] = updatedPixels;
+        const patch = buildLayerPatch(layerId, basePixels, updatedPixels, width, height, bounds);
+        if (patch) layerPatches.push(patch);
       });
       return { ...f, layerData: newLayerData };
     });
     updateStateRef.current(
-      { ...stateRef.current, frames: newFrames, selection: newSelection.size > 0 ? newSelection : null },
-      { action: `Scale Selection on ${selectedLayerIds.length} Layers`, tool: 'move' }
+      { ...stateRef.current, frames: newFrames, selection: finalSelection },
+      {
+        action: `Scale Selection on ${selectedLayerIds.length} Layers`,
+        tool: 'move',
+        patch: layerPatches.length > 0 ? {
+          frameIndex: activeFrameIndex,
+          layers: layerPatches,
+          selectionBefore: selection,
+          selectionAfter: finalSelection,
+        } : undefined,
+      }
     );
   }, []);
 

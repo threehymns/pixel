@@ -11,8 +11,8 @@ export interface Modifiers {
   meta: boolean;
 }
 
-export type PixelValue = string | number | null;
-export type PixelGrid = PixelValue[]; // Flat array of hex colors (RGBA), indices (Indexed), or null (transparent)
+export type PixelValue = number;
+export type PixelGrid = Uint32Array; // Flat packed Uint32Array: 0 = transparent, (val >>> 24) !== 0 = ABGR RGBA, else (val - 1) = palette index
 
 export type LayerBlendMode = 'normal' | 'multiply' | 'screen' | 'overlay' | 'darken' | 'lighten' | 'color-dodge' | 'color-burn' | 'hard-light' | 'soft-light' | 'difference' | 'exclusion' | 'hue' | 'saturation' | 'color' | 'luminosity' | 'addition' | 'subtract' | 'divide';
 
@@ -215,8 +215,27 @@ export interface RecentProject {
   data?: ProjectState;
 }
 
+export interface PixelLayerPatch {
+  layerId: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  before: Uint32Array;
+  after: Uint32Array;
+}
+
+export interface PixelHistoryPatch {
+  frameIndex: number;
+  layers: PixelLayerPatch[];
+  selectionBefore?: Set<number> | null;
+  selectionAfter?: Set<number> | null;
+}
+
 export interface HistoryEntry {
-  state: ProjectState;
+  kind: 'snapshot' | 'pixel-patch';
+  state?: ProjectState;
+  patch?: PixelHistoryPatch;
   action: string;
   tool?: ToolType;
   timestamp: number;

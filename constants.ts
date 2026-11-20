@@ -53,7 +53,7 @@ export const INITIAL_STATE: ProjectState = {
   layers: [{ id: INITIAL_LAYER_ID, name: 'Layer 1', visible: true, locked: false, opacity: 100, blendMode: 'normal' }],
   frames: [{ 
     id: INITIAL_FRAME_ID, 
-    layerData: { [INITIAL_LAYER_ID]: new Array(CANVAS_SIZE * CANVAS_SIZE).fill(null) } 
+    layerData: { [INITIAL_LAYER_ID]: new Uint32Array(CANVAS_SIZE * CANVAS_SIZE) } 
   }],
   activeLayerId: INITIAL_LAYER_ID,
   selectedLayerIds: [INITIAL_LAYER_ID],
@@ -99,7 +99,7 @@ export const SELECTION_TOOLS: ToolType[] = [
 export const MIN_BRUSH_SIZE = 1;
 export const MAX_BRUSH_SIZE = 64;
 export const MIN_CANVAS_DIM = 1;
-export const MAX_CANVAS_DIM = 2048;
+export const MAX_CANVAS_DIM = 8192;
 export const MIN_ZOOM = 0.1;
 export const MAX_ZOOM = 64;
 
