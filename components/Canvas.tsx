@@ -118,6 +118,64 @@ interface CanvasProps {
   onMousePosUpdate?: (pos: Position | null) => void;
 }
 
+const TILE_OFFSETS = [
+  { tx: -1, ty: -1 },
+  { tx: 0, ty: -1 },
+  { tx: 1, ty: -1 },
+  { tx: -1, ty: 0 },
+  { tx: 1, ty: 0 },
+  { tx: -1, ty: 1 },
+  { tx: 0, ty: 1 },
+  { tx: 1, ty: 1 },
+] as const;
+
+interface TiledCanvasTileProps {
+  tx: number;
+  ty: number;
+  width: number;
+  height: number;
+  localZoom: number;
+  panX: number;
+  panY: number;
+  onRegisterTileCanvas: (key: string, el: HTMLCanvasElement | null) => void;
+}
+
+const TiledCanvasTile: React.FC<TiledCanvasTileProps> = ({
+  tx,
+  ty,
+  width,
+  height,
+  localZoom,
+  panX,
+  panY,
+  onRegisterTileCanvas,
+}) => {
+  const tileKey = `${tx}_${ty}`;
+  const handleCanvasRef = (el: HTMLCanvasElement | null) => {
+    onRegisterTileCanvas(tileKey, el);
+  };
+
+  return (
+    <div
+      className="absolute top-0 left-0 pointer-events-none opacity-40 grayscale-[0.2]"
+      style={{
+        width: `${width * localZoom}px`,
+        height: `${height * localZoom}px`,
+        transform: `translate(${panX + tx * width * localZoom}px, ${panY + ty * height * localZoom}px)`,
+        transformOrigin: 'top left',
+      }}
+    >
+      <canvas
+        ref={handleCanvasRef}
+        width={width}
+        height={height}
+        className="w-full h-full block"
+        style={{ imageRendering: 'pixelated' }}
+      />
+    </div>
+  );
+};
+
 export const Canvas: React.FC<CanvasProps> = ({ 
   projectId,
   frames,
@@ -262,6 +320,15 @@ export const Canvas: React.FC<CanvasProps> = ({
   const tileCanvasesRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   const paletteCacheRef = useRef<Map<number, { palette: string[]; buf: Uint32Array }>>(new Map());
   const zoomCommitTimerRef = useRef<number | null>(null);
+  const wheelRafIdRef = useRef<number | null>(null);
+  const pendingWheelRef = useRef<{
+    panDx: number;
+    panDy: number;
+    zoomDelta: number;
+    clientX: number;
+    clientY: number;
+    hasZoom: boolean;
+  }>({ panDx: 0, panDy: 0, zoomDelta: 0, clientX: 0, clientY: 0, hasZoom: false });
   const lastCommittedZoomRef = useRef<number>(zoom);
   const prevProjectIdRef = useRef<string>(projectId);
   const onZoomRef = useRef(onZoom);
@@ -278,6 +345,23 @@ export const Canvas: React.FC<CanvasProps> = ({
     };
     onZoomRef.current = onZoom;
   });
+
+  const handleRegisterTileCanvas = (key: string, el: HTMLCanvasElement | null) => {
+    if (el) {
+      const prevEl = tileCanvasesRef.current.get(key);
+      tileCanvasesRef.current.set(key, el);
+      if (prevEl !== el && artCanvasRef.current) {
+        const ctx = el.getContext('2d');
+        if (ctx) {
+          const { width: w, height: h } = liveStateRef.current;
+          ctx.clearRect(0, 0, w, h);
+          ctx.drawImage(artCanvasRef.current, 0, 0);
+        }
+      }
+    } else {
+      tileCanvasesRef.current.delete(key);
+    }
+  };
   
   useEffect(() => {
     panRef.current = pan;
@@ -310,6 +394,10 @@ export const Canvas: React.FC<CanvasProps> = ({
       if (zoomCommitTimerRef.current !== null) {
         window.clearTimeout(zoomCommitTimerRef.current);
         zoomCommitTimerRef.current = null;
+      }
+      if (wheelRafIdRef.current !== null) {
+        cancelAnimationFrame(wheelRafIdRef.current);
+        wheelRafIdRef.current = null;
       }
       setLiveZoom(null);
     };
@@ -699,38 +787,61 @@ export const Canvas: React.FC<CanvasProps> = ({
     e.preventDefault();
     const container = containerRef.current;
     if (!container) return;
-    
-    requestAnimationFrame(() => {
+
+    const pending = pendingWheelRef.current;
+    const scale = e.deltaMode === 1 ? 33 : 1;
+    if (e.ctrlKey) {
+      pending.hasZoom = true;
+      pending.zoomDelta += e.deltaY * scale;
+      pending.clientX = e.clientX;
+      pending.clientY = e.clientY;
+    } else {
+      pending.panDx += e.deltaX * scale;
+      pending.panDy += e.deltaY * scale;
+    }
+
+    if (wheelRafIdRef.current !== null) return;
+
+    wheelRafIdRef.current = requestAnimationFrame(() => {
+      wheelRafIdRef.current = null;
+      const curContainer = containerRef.current;
+      if (!curContainer) return;
+
+      const batch = pendingWheelRef.current;
+      const panDx = batch.panDx;
+      const panDy = batch.panDy;
+      const hasZoom = batch.hasZoom;
+      const zoomDelta = batch.zoomDelta;
+      const clientX = batch.clientX;
+      const clientY = batch.clientY;
+      batch.panDx = 0;
+      batch.panDy = 0;
+      batch.zoomDelta = 0;
+      batch.hasZoom = false;
+
+      if (hasZoom) {
         const currentPan = panRef.current;
         const currentZoom = zoomRef.current;
-        
-        // Zoom logic (Ctrl + Wheel)
-        if (e.ctrlKey) {
-            const rect = containerRectRef.current || container.getBoundingClientRect();
-            const mx = e.clientX - rect.left;
-            const my = e.clientY - rect.top;
-            const cx = mx - currentPan.x;
-            const cy = my - currentPan.y;
-            let delta = e.deltaY;
-            if (e.deltaMode === 1) delta *= 33;
-            const ZOOM_SPEED = 0.006;
-            const newZoom = Math.min(Math.max(currentZoom * Math.exp(-delta * ZOOM_SPEED), 0.1), 128);
-            let newPanX = mx - (cx / currentZoom) * newZoom;
-            let newPanY = my - (cy / currentZoom) * newZoom;
-            const newPan = { x: newPanX, y: newPanY };
-            panRef.current = newPan;
-            setPan(newPan);
-            scheduleZoomCommit(newZoom);
-        } else {
-            // Pan logic
-            const dX = e.deltaX * (e.deltaMode === 1 ? 33 : 1);
-            const dY = e.deltaY * (e.deltaMode === 1 ? 33 : 1);
-            setPan(prev => {
-              const next = { x: prev.x - dX, y: prev.y - dY };
-              panRef.current = next;
-              return next;
-            });
-        }
+        const rect = containerRectRef.current || curContainer.getBoundingClientRect();
+        const mx = clientX - rect.left;
+        const my = clientY - rect.top;
+        const cx = mx - currentPan.x;
+        const cy = my - currentPan.y;
+        const ZOOM_SPEED = 0.006;
+        const newZoom = Math.min(Math.max(currentZoom * Math.exp(-zoomDelta * ZOOM_SPEED), 0.1), 128);
+        const newPanX = mx - (cx / currentZoom) * newZoom - panDx;
+        const newPanY = my - (cy / currentZoom) * newZoom - panDy;
+        const newPan = { x: newPanX, y: newPanY };
+        panRef.current = newPan;
+        setPan(newPan);
+        scheduleZoomCommit(newZoom);
+      } else if (panDx !== 0 || panDy !== 0) {
+        setPan(prev => {
+          const next = { x: prev.x - panDx, y: prev.y - panDy };
+          panRef.current = next;
+          return next;
+        });
+      }
     });
   }, [scheduleZoomCommit]);
 
@@ -1603,44 +1714,19 @@ export const Canvas: React.FC<CanvasProps> = ({
       )}
 
       {/* Tiled Mode Overlays - Rendered below main art */}
-      {tiled && [-1, 0, 1].map(ty => [-1, 0, 1].map(tx => {
-        if (tx === 0 && ty === 0) return null;
-        return (
-          <div 
-            key={`tile-${tx}-${ty}`}
-            className="absolute top-0 left-0 pointer-events-none opacity-40 grayscale-[0.2]"
-            style={{ 
-              width: `${width * localZoom}px`, 
-              height: `${height * localZoom}px`,
-              transform: `translate(${pan.x + tx * width * localZoom}px, ${pan.y + ty * height * localZoom}px)`, 
-              transformOrigin: 'top left',
-            }}
-          >
-            <canvas
-              width={width}
-              height={height}
-              className="w-full h-full block"
-              style={{ imageRendering: 'pixelated' }}
-              ref={(el) => {
-                  const key = `${tx}_${ty}`;
-                  if (el) {
-                    const prevEl = tileCanvasesRef.current.get(key);
-                    tileCanvasesRef.current.set(key, el);
-                    if (prevEl !== el && artCanvasRef.current) {
-                      const ctx = el.getContext('2d');
-                      if (ctx) {
-                        ctx.clearRect(0, 0, width, height);
-                        ctx.drawImage(artCanvasRef.current, 0, 0);
-                      }
-                    }
-                  } else {
-                    tileCanvasesRef.current.delete(key);
-                  }
-              }}
-            />
-          </div>
-        );
-      }))}
+      {tiled && TILE_OFFSETS.map(({ tx, ty }) => (
+        <TiledCanvasTile
+          key={`tile-${tx}-${ty}`}
+          tx={tx}
+          ty={ty}
+          width={width}
+          height={height}
+          localZoom={localZoom}
+          panX={pan.x}
+          panY={pan.y}
+          onRegisterTileCanvas={handleRegisterTileCanvas}
+        />
+      ))}
 
       {/* Art Layer Wrapper */}
       <div 

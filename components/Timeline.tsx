@@ -1593,22 +1593,22 @@ export const Timeline: React.FC<TimelineProps> = ({
       )}
 
       {/* Single Shared Popover for Tag Properties */}
-      <Popover
-        open={!!(tagPopover?.isOpen && activeEditingTag && tagPopoverAnchor)}
-        onOpenChange={(open) => {
-          if (!open) handleCloseTagPopover();
-        }}
-      >
-        <PopoverContent
-          anchor={tagPopoverAnchor}
-          align="end"
-          side="bottom"
-          sideOffset={8}
-          collisionPadding={16}
-          initialFocus="none"
-          className="w-auto p-3.5"
+      {activeEditingTag && (
+        <Popover
+          open={!!(tagPopover?.isOpen && tagPopoverAnchor)}
+          onOpenChange={(open) => {
+            if (!open) handleCloseTagPopover();
+          }}
         >
-          {activeEditingTag && (
+          <PopoverContent
+            anchor={tagPopoverAnchor}
+            align="end"
+            side="bottom"
+            sideOffset={8}
+            collisionPadding={16}
+            initialFocus="none"
+            className="w-auto p-3.5"
+          >
             <AnimationTagPopover
               isOpen={true}
               tag={activeEditingTag}
@@ -1632,9 +1632,9 @@ export const Timeline: React.FC<TimelineProps> = ({
                   : undefined
               }
             />
-          )}
-        </PopoverContent>
-      </Popover>
+          </PopoverContent>
+        </Popover>
+      )}
 
       <div className="flex h-full w-full flex-1 flex-col overflow-hidden bg-card select-none">
         {/* Top Header Row */}
@@ -1893,8 +1893,9 @@ export const Timeline: React.FC<TimelineProps> = ({
             key={isMobile ? 'mobile' : 'desktop'}
             defaultSizes={[sidebarWidth, 1000]}
             onChange={(sizes) => {
-              if (sizes && sizes[0] && Math.abs(sizes[0] - sidebarWidth) > 0.5) {
-                setSidebarWidth(sizes[0]);
+              const nextWidth = sizes?.[0];
+              if (nextWidth) {
+                setSidebarWidth((prev) => (Math.abs(nextWidth - prev) > 0.5 ? nextWidth : prev));
               }
             }}
             className="h-full w-full"
@@ -1980,6 +1981,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                       <div className="relative flex min-w-max flex-col">
                         {reversedLayers.map((layer) => {
                           if (collapsedLayerIds.has(layer.id)) return null;
+                          const isActiveLayer = activeLayerId === layer.id;
 
                           return (
                             <TimelineCelRow
@@ -1988,8 +1990,8 @@ export const Timeline: React.FC<TimelineProps> = ({
                               totalWidth={totalWidth}
                               columns={columns}
                               frames={frames}
-                              activeFrameIndex={activeFrameIndex}
-                              isActiveLayer={activeLayerId === layer.id}
+                              activeFrameIndex={isActiveLayer ? activeFrameIndex : -1}
+                              isActiveLayer={isActiveLayer}
                               selectedFrameSet={selectedFrameSet}
                               isLayerSelected={selectedLayerSet.has(layer.id)}
                               onToggleCollapseTag={toggleCollapseTag}

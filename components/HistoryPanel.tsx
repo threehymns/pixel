@@ -35,6 +35,104 @@ interface HistoryPanelProps {
   className?: string;
 }
 
+const getHistoryIcon = (action: string, tool?: ToolType, isActive?: boolean) => {
+  const cls = isActive
+    ? 'text-primary'
+    : 'text-muted-foreground group-hover:text-foreground transition-colors';
+
+  if (tool) {
+    switch (tool) {
+      case 'pencil':
+        return <Pencil size={12} className={cls} />;
+      case 'eraser':
+        return <Eraser size={12} className={cls} />;
+      case 'bucket':
+        return <PaintBucket size={12} className={cls} />;
+      case 'move':
+        return <MousePointer2 size={12} className={cls} />;
+      case 'smudge':
+        return <Hand size={12} className={cls} />;
+      case 'rect-select':
+        return <BoxSelect size={12} className={cls} />;
+      case 'ellipse-select':
+        return <Circle size={12} className={cls} />;
+      case 'lasso-select':
+        return <Lasso size={12} className={cls} />;
+      case 'poly-lasso-select':
+        return <Scissors size={12} className={cls} />;
+      case 'magic-wand':
+        return <Wand2 size={12} className={cls} />;
+      default:
+        break;
+    }
+  }
+
+  const lower = action.toLowerCase();
+  if (lower.includes('layer')) return <Layers size={12} className={cls} />;
+  if (lower.includes('rename')) return <Edit2 size={12} className={cls} />;
+  if (lower.includes('frame')) return <Plus size={12} className={cls} />;
+  if (lower.includes('delete')) return <Trash2 size={12} className={cls} />;
+  if (lower.includes('duplicate')) return <Copy size={12} className={cls} />;
+  if (lower.includes('project')) return <File size={12} className={cls} />;
+  if (lower.includes('reorder')) return <ArrowRightLeft size={12} className={cls} />;
+  if (lower.includes('import')) return <FilePlus size={12} className={cls} />;
+  if (lower.includes('selection')) return <BoxSelect size={12} className={cls} />;
+
+  return <Square size={12} className={cls} />;
+};
+
+interface HistoryRowProps {
+  action: string;
+  tool?: ToolType;
+  index: number;
+  isActive: boolean;
+  isFuture: boolean;
+  activeItemRef: React.RefObject<HTMLButtonElement | null> | null;
+  onJumpToHistory: (index: number) => void;
+}
+
+const HistoryRow: React.FC<HistoryRowProps> = ({
+  action,
+  tool,
+  index,
+  isActive,
+  isFuture,
+  activeItemRef,
+  onJumpToHistory,
+}) => {
+  return (
+    <button
+      ref={activeItemRef}
+      type="button"
+      onClick={() => onJumpToHistory(index)}
+      className={`group relative flex h-7 w-full items-center gap-2 rounded-sm px-2 text-left transition-colors ${
+        isActive
+          ? 'border border-primary/40 bg-primary/15 text-foreground'
+          : isFuture
+            ? 'border border-transparent text-muted-foreground opacity-55 hover:bg-accent/50 hover:opacity-90'
+            : 'border border-transparent text-foreground/85 hover:bg-accent/60'
+      }`}
+      aria-current={isActive ? 'step' : undefined}
+    >
+      <div className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+        {getHistoryIcon(action, tool, isActive)}
+      </div>
+
+      <span
+        className={`min-w-0 flex-1 truncate text-[11px] ${
+          isActive ? 'font-semibold text-foreground' : 'font-normal'
+        }`}
+      >
+        {action}
+      </span>
+
+      <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70 tabular-nums">
+        #{index + 1}
+      </span>
+    </button>
+  );
+};
+
 export const HistoryPanel: React.FC<HistoryPanelProps> = ({
   history,
   historyIndex,
@@ -51,60 +149,14 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
     }
   }, [historyIndex]);
 
-  const getIcon = (action: string, tool?: ToolType, isActive?: boolean) => {
-    const cls = isActive
-      ? 'text-primary'
-      : 'text-muted-foreground group-hover:text-foreground transition-colors';
-
-    if (tool) {
-      switch (tool) {
-        case 'pencil':
-          return <Pencil size={12} className={cls} />;
-        case 'eraser':
-          return <Eraser size={12} className={cls} />;
-        case 'bucket':
-          return <PaintBucket size={12} className={cls} />;
-        case 'move':
-          return <MousePointer2 size={12} className={cls} />;
-        case 'smudge':
-          return <Hand size={12} className={cls} />;
-        case 'rect-select':
-          return <BoxSelect size={12} className={cls} />;
-        case 'ellipse-select':
-          return <Circle size={12} className={cls} />;
-        case 'lasso-select':
-          return <Lasso size={12} className={cls} />;
-        case 'poly-lasso-select':
-          return <Scissors size={12} className={cls} />;
-        case 'magic-wand':
-          return <Wand2 size={12} className={cls} />;
-        default:
-          break;
-      }
-    }
-
-    const lower = action.toLowerCase();
-    if (lower.includes('layer')) return <Layers size={12} className={cls} />;
-    if (lower.includes('rename')) return <Edit2 size={12} className={cls} />;
-    if (lower.includes('frame')) return <Plus size={12} className={cls} />;
-    if (lower.includes('delete')) return <Trash2 size={12} className={cls} />;
-    if (lower.includes('duplicate')) return <Copy size={12} className={cls} />;
-    if (lower.includes('project')) return <File size={12} className={cls} />;
-    if (lower.includes('reorder')) return <ArrowRightLeft size={12} className={cls} />;
-    if (lower.includes('import')) return <FilePlus size={12} className={cls} />;
-    if (lower.includes('selection')) return <BoxSelect size={12} className={cls} />;
-
-    return <Square size={12} className={cls} />;
-  };
-
+  const trimmedQuery = searchQuery.trim().toLowerCase();
   const filteredHistory = history
     .map((entry, index) => ({ entry, index }))
     .filter(({ entry }) => {
-      if (!searchQuery.trim()) return true;
-      const query = searchQuery.toLowerCase();
+      if (!trimmedQuery) return true;
       return (
-        entry.action.toLowerCase().includes(query) ||
-        (entry.tool && entry.tool.toLowerCase().includes(query))
+        entry.action.toLowerCase().includes(trimmedQuery) ||
+        (entry.tool && entry.tool.toLowerCase().includes(trimmedQuery))
       );
     });
 
@@ -123,8 +175,10 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
                   type="button"
                   aria-label="Filter History"
                   onClick={() => {
-                    setShowSearch(!showSearch);
-                    if (showSearch) setSearchQuery('');
+                    setShowSearch((prev) => {
+                      if (prev) setSearchQuery('');
+                      return !prev;
+                    });
                   }}
                   className={`flex h-6 w-6 items-center justify-center rounded-sm transition-colors ${
                     showSearch
@@ -209,36 +263,16 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
             const isFuture = index > historyIndex;
 
             return (
-              <button
+              <HistoryRow
                 key={`history-step-${index}`}
-                ref={isActive ? activeItemRef : null}
-                type="button"
-                onClick={() => onJumpToHistory(index)}
-                className={`group relative flex h-7 w-full items-center gap-2 rounded-sm px-2 text-left transition-colors ${
-                  isActive
-                    ? 'border border-primary/40 bg-primary/15 text-foreground'
-                    : isFuture
-                      ? 'border border-transparent text-muted-foreground opacity-55 hover:bg-accent/50 hover:opacity-90'
-                      : 'border border-transparent text-foreground/85 hover:bg-accent/60'
-                }`}
-                aria-current={isActive ? 'step' : undefined}
-              >
-                <div className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
-                  {getIcon(entry.action, entry.tool, isActive)}
-                </div>
-
-                <span
-                  className={`min-w-0 flex-1 truncate text-[11px] ${
-                    isActive ? 'font-semibold text-foreground' : 'font-normal'
-                  }`}
-                >
-                  {entry.action}
-                </span>
-
-                <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70 tabular-nums">
-                  #{index + 1}
-                </span>
-              </button>
+                action={entry.action}
+                tool={entry.tool}
+                index={index}
+                isActive={isActive}
+                isFuture={isFuture}
+                activeItemRef={isActive ? activeItemRef : null}
+                onJumpToHistory={onJumpToHistory}
+              />
             );
           })
         )}

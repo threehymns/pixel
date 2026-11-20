@@ -161,12 +161,11 @@ const MOBILE_SELECTION_MODES = [
 
 const NOOP = () => {};
 
-export const MobileLayout: React.FC<MobileLayoutProps> = ({
+const MobileWorkspace: React.FC<Omit<MobileLayoutProps, 'activeProjectId' | 'handleFileChange'>> = ({
   state,
   updateState,
   commands,
   projectActions,
-  activeProjectId,
   recentProjects,
   history,
   historyIndex,
@@ -174,7 +173,6 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
   canRedo,
   canvasTools,
   fileInputRef,
-  handleFileChange,
   setMousePos,
   setDragStartPos,
   activeTagPopover,
@@ -788,32 +786,8 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
     updateState((prev) => ({ ...prev, zoom: z }));
   };
 
-  const isHome = activeProjectId === 'home';
-
   return (
-    <div
-      className={`relative flex h-dvh flex-col overflow-hidden bg-background ${
-        isHome ? '' : 'overscroll-none'
-      }`}
-    >
-      <input
-        type="file"
-        ref={fileInputRef}
-        className="hidden"
-        accept=".aseprite,.ase,.png,.jpg,.jpeg,.gif,.json,.pxa"
-        onChange={handleFileChange}
-      />
-
-      {isHome ? (
-        <Home
-          onCreateProject={projectActions.createProject}
-          onImportProject={() => fileInputRef.current?.click()}
-          recentProjects={recentProjects}
-          onOpenRecent={projectActions.loadRecentProject}
-          onClearRecent={projectActions.clearRecents}
-        />
-      ) : (
-        <>
+    <>
           {/* Docked Top Studio Header */}
           <header className="z-20 flex h-12 shrink-0 items-center justify-between gap-1 border-b border-border bg-card px-1.5 safe-top">
             <div className="flex items-center gap-0.5">
@@ -828,7 +802,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
 
               <button
                 type="button"
-                onClick={() => commands.find((c) => c.id === 'edit.undo')?.perform()}
+                onClick={projectActions.undo}
                 disabled={!canUndo}
                 aria-label="Undo"
                 className="flex h-11 w-11 items-center justify-center rounded-md text-foreground transition-colors hover:bg-accent active:bg-accent disabled:opacity-35"
@@ -838,7 +812,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
 
               <button
                 type="button"
-                onClick={() => commands.find((c) => c.id === 'edit.redo')?.perform()}
+                onClick={projectActions.redo}
                 disabled={!canRedo}
                 aria-label="Redo"
                 className="flex h-11 w-11 items-center justify-center rounded-md text-foreground transition-colors hover:bg-accent active:bg-accent disabled:opacity-35"
@@ -1895,7 +1869,82 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
               />
             </DialogSheetContent>
           </Dialog>
-        </>
+    </>
+  );
+};
+
+export const MobileLayout: React.FC<MobileLayoutProps> = ({
+  state,
+  updateState,
+  commands,
+  projectActions,
+  activeProjectId,
+  recentProjects,
+  history,
+  historyIndex,
+  canUndo,
+  canRedo,
+  canvasTools,
+  fileInputRef,
+  handleFileChange,
+  selectionSize,
+  setMousePos,
+  setDragStartPos,
+  activeTagPopover,
+  onCloseTagPopover,
+  layerPropertiesState,
+  onCloseLayerProperties,
+  onScalePixels,
+}) => {
+  const isHome = activeProjectId === 'home';
+  const handleImportProject = () => {
+    fileInputRef.current?.click();
+  };
+
+  return (
+    <div
+      className={`relative flex h-dvh flex-col overflow-hidden bg-background ${
+        isHome ? '' : 'overscroll-none'
+      }`}
+    >
+      <input
+        type="file"
+        ref={fileInputRef}
+        className="hidden"
+        accept=".aseprite,.ase,.png,.jpg,.jpeg,.gif,.json,.pxa"
+        onChange={handleFileChange}
+      />
+
+      {isHome ? (
+        <Home
+          onCreateProject={projectActions.createProject}
+          onImportProject={handleImportProject}
+          recentProjects={recentProjects}
+          onOpenRecent={projectActions.loadRecentProject}
+          onClearRecent={projectActions.clearRecents}
+        />
+      ) : (
+        <MobileWorkspace
+          state={state}
+          updateState={updateState}
+          commands={commands}
+          projectActions={projectActions}
+          recentProjects={recentProjects}
+          history={history}
+          historyIndex={historyIndex}
+          canUndo={canUndo}
+          canRedo={canRedo}
+          canvasTools={canvasTools}
+          fileInputRef={fileInputRef}
+          selectionSize={selectionSize}
+          setMousePos={setMousePos}
+          setDragStartPos={setDragStartPos}
+          activeTagPopover={activeTagPopover}
+          onCloseTagPopover={onCloseTagPopover}
+          layerPropertiesState={layerPropertiesState}
+          onCloseLayerProperties={onCloseLayerProperties}
+          onScalePixels={onScalePixels}
+        />
       )}
     </div>
   );

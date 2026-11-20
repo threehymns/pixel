@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Allotment } from 'allotment';
 import { ProjectState, ToolType } from '../types';
 import { SELECTION_TOOLS } from '../constants';
@@ -142,6 +142,9 @@ interface DesktopLayoutProps {
   recentProjects: any[];
   history: any[];
   historyIndex: number;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  onOpenCommandPalette?: () => void;
   canvasTools: any;
   fileSystem: any;
   handleFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
@@ -597,7 +600,8 @@ interface ToolOptionsBarProps {
   showGrid: boolean;
   onionSkin: boolean;
   isPreviewVisible: boolean;
-  commands: any[];
+  onUndo: () => void;
+  onRedo: () => void;
   updateState: (s: ProjectStateUpdater, config?: any) => void;
   togglePaneVisibility: (paneId: string) => void;
 }
@@ -619,7 +623,8 @@ const ToolOptionsBar: React.FC<ToolOptionsBarProps> = ({
   showGrid,
   onionSkin,
   isPreviewVisible,
-  commands,
+  onUndo,
+  onRedo,
   updateState,
   togglePaneVisibility,
 }) => {
@@ -642,7 +647,7 @@ const ToolOptionsBar: React.FC<ToolOptionsBarProps> = ({
       <div className="flex shrink-0 items-center gap-1 border-r border-border pr-2">
         <ToolButton
           active={false}
-          onClick={() => commands.find((c) => c.id === 'edit.undo')?.perform()}
+          onClick={onUndo}
           icon={<Undo size={15} />}
           label="Undo"
           shortcut="Ctrl+Z"
@@ -650,7 +655,7 @@ const ToolOptionsBar: React.FC<ToolOptionsBarProps> = ({
         />
         <ToolButton
           active={false}
-          onClick={() => commands.find((c) => c.id === 'edit.redo')?.perform()}
+          onClick={onRedo}
           icon={<Redo size={15} />}
           label="Redo"
           shortcut="Ctrl+Y"
@@ -990,171 +995,6 @@ const ToolOptionsBar: React.FC<ToolOptionsBarProps> = ({
   );
 };
 
-interface DockPaneContentProps {
-  paneId: string;
-  state: ProjectState;
-  projectActions: any;
-  history: any[];
-  historyIndex: number;
-  fileSystem: any;
-  layerPropertiesState?: { isOpen: boolean; layer: any };
-  onCloseLayerProperties?: () => void;
-  activeTagPopover?: any;
-  onCloseTagPopover?: () => void;
-  onPaletteColorSelect: (c: string, isPrimary: boolean) => void;
-  onPaletteAddColor: (c: string) => void;
-  onPaletteColorsSelected: (selectedColors: string[]) => void;
-  onSelectLayers: (ids: string[], active: string) => void;
-  onSelectFrames: (indices: number[], active: number, layerId?: string) => void;
-  onTimelineSelectLayer: (id: string) => void;
-  onTimelineToggleLayerVisibility: (id: string) => void;
-  onTimelineToggleLayerLock: (id: string) => void;
-  onClosePreview: () => void;
-  isFloating?: boolean;
-}
-
-const DockPaneContent: React.FC<DockPaneContentProps> = ({
-  paneId,
-  state,
-  projectActions,
-  history,
-  historyIndex,
-  fileSystem,
-  layerPropertiesState,
-  onCloseLayerProperties,
-  activeTagPopover,
-  onCloseTagPopover,
-  onPaletteColorSelect,
-  onPaletteAddColor,
-  onPaletteColorsSelected,
-  onSelectLayers,
-  onSelectFrames,
-  onTimelineSelectLayer,
-  onTimelineToggleLayerVisibility,
-  onTimelineToggleLayerLock,
-  onClosePreview,
-  isFloating = false,
-}) => {
-  switch (paneId) {
-    case 'file-tree':
-      return (
-        <FileTree
-          rootHandle={fileSystem.rootHandle}
-          onOpenFolder={fileSystem.openFolder}
-          onFileOpen={projectActions.loadProjectFromFile}
-          onResizeStart={NOOP}
-          width={0}
-        />
-      );
-    case 'palette':
-      return (
-        <Palette
-          width={0}
-          colors={state.palette}
-          palettes={state.paletteLibrary}
-          activePaletteId={state.activePaletteId}
-          primaryColor={state.primaryColor}
-          secondaryColor={state.secondaryColor}
-          onColorSelect={onPaletteColorSelect}
-          onAddColor={onPaletteAddColor}
-          onSelectPalette={projectActions.selectPalette}
-          onImportPalette={projectActions.importPalette}
-          onResizeStart={NOOP}
-          onColorsSelected={onPaletteColorsSelected}
-        />
-      );
-    case 'layers':
-      return (
-        <LayersPanel
-          layers={state.layers}
-          activeFrame={state.frames[state.activeFrameIndex]}
-          activeLayerId={state.activeLayerId}
-          selectedLayerIds={state.selectedLayerIds}
-          palette={state.palette}
-          width={state.width}
-          height={state.height}
-          onSelectLayers={onSelectLayers}
-          onUpdateLayer={projectActions.updateLayer}
-          onAddLayer={projectActions.addLayer}
-          onAddGroupLayer={projectActions.addGroupLayer}
-          onGroupSelectedLayers={projectActions.groupSelectedLayers}
-          onUngroupSelectedLayers={projectActions.ungroupSelectedLayers}
-          onAddLayerToGroup={projectActions.addLayerToGroup}
-          onToggleCollapseAllGroups={projectActions.toggleCollapseAllGroups}
-          onDuplicateLayer={projectActions.duplicateLayer}
-          onDeleteLayer={projectActions.deleteLayer}
-          onDuplicateSelectedLayers={projectActions.duplicateSelectedLayers}
-          onDeleteSelectedLayers={projectActions.deleteSelectedLayers}
-          onReorderLayers={projectActions.reorderLayers}
-          onOpenLayerProperties={projectActions.openLayerPropertiesDialog}
-          layerPropertiesState={layerPropertiesState}
-          onCloseLayerProperties={onCloseLayerProperties}
-          className="h-full w-full flex-1"
-        />
-      );
-    case 'history':
-      return (
-        <HistoryPanel
-          history={history}
-          historyIndex={historyIndex}
-          onJumpToHistory={projectActions.jumpToHistory}
-          className="h-full w-full flex-1"
-        />
-      );
-    case 'timeline':
-      return (
-        <Timeline
-          layers={state.layers}
-          frames={state.frames}
-          activeFrameIndex={state.activeFrameIndex}
-          activeLayerId={state.activeLayerId}
-          selectedFrameIndices={state.selectedFrameIndices}
-          selectedLayerIds={state.selectedLayerIds}
-          tags={state.tags}
-          onSelectFrames={onSelectFrames}
-          onAddFrame={projectActions.addFrame}
-          onDuplicateFrame={projectActions.duplicateFrame}
-          onDeleteFrame={projectActions.deleteFrame}
-          onDuplicateSelectedFrames={projectActions.duplicateSelectedFrames}
-          onDeleteSelectedFrames={projectActions.deleteSelectedFrames}
-          onInsertFrame={projectActions.insertFrame}
-          onTweenFrames={projectActions.tweenFrames}
-          onSetFrameDuration={projectActions.setFrameDuration}
-          onAddTag={projectActions.addTag}
-          onSaveTag={projectActions.saveTag}
-          onDeleteTag={projectActions.deleteTag}
-          onOpenTagProperties={projectActions.openTagPropertiesDialog}
-          activeTagPopover={activeTagPopover}
-          onCloseTagPopover={onCloseTagPopover}
-          onSelectLayer={onTimelineSelectLayer}
-          onAddLayer={projectActions.addLayer}
-          onAddGroupLayer={projectActions.addGroupLayer}
-          onUpdateLayer={projectActions.updateLayer}
-          onToggleLayerVisibility={onTimelineToggleLayerVisibility}
-          onToggleLayerLock={onTimelineToggleLayerLock}
-          onReorderLayers={projectActions.reorderLayers}
-          onReorderFrames={projectActions.reorderFrames}
-        />
-      );
-    case 'preview':
-      return (
-        <Preview
-          width={0}
-          frames={state.frames}
-          layers={state.layers}
-          palette={state.palette}
-          spriteWidth={state.width}
-          spriteHeight={state.height}
-          activeFrameIndex={state.activeFrameIndex}
-          onClose={onClosePreview}
-          isFloating={isFloating}
-        />
-      );
-    default:
-      return null;
-  }
-};
-
 interface DockGroupContainerProps {
   slotId: 'left' | 'right' | 'bottom';
   group: { id: string; panes: string[]; activePaneId: string };
@@ -1166,24 +1006,7 @@ interface DockGroupContainerProps {
   layoutActions: any;
   tabMenu: ReturnType<typeof createMenuController<TabMenuPayload>>;
   onRegisterTabListRef: (key: string, el: HTMLDivElement | null) => void;
-  state: ProjectState;
-  projectActions: any;
-  history: any[];
-  historyIndex: number;
-  fileSystem: any;
-  layerPropertiesState?: { isOpen: boolean; layer: any };
-  onCloseLayerProperties?: () => void;
-  activeTagPopover?: any;
-  onCloseTagPopover?: () => void;
-  onPaletteColorSelect: (c: string, isPrimary: boolean) => void;
-  onPaletteAddColor: (c: string) => void;
-  onPaletteColorsSelected: (selectedColors: string[]) => void;
-  onSelectLayers: (ids: string[], active: string) => void;
-  onSelectFrames: (indices: number[], active: number, layerId?: string) => void;
-  onTimelineSelectLayer: (id: string) => void;
-  onTimelineToggleLayerVisibility: (id: string) => void;
-  onTimelineToggleLayerLock: (id: string) => void;
-  onClosePreview: () => void;
+  paneContent: React.ReactNode;
 }
 
 const DockGroupContainer: React.FC<DockGroupContainerProps> = ({
@@ -1197,24 +1020,7 @@ const DockGroupContainer: React.FC<DockGroupContainerProps> = ({
   layoutActions,
   tabMenu,
   onRegisterTabListRef,
-  state,
-  projectActions,
-  history,
-  historyIndex,
-  fileSystem,
-  layerPropertiesState,
-  onCloseLayerProperties,
-  activeTagPopover,
-  onCloseTagPopover,
-  onPaletteColorSelect,
-  onPaletteAddColor,
-  onPaletteColorsSelected,
-  onSelectLayers,
-  onSelectFrames,
-  onTimelineSelectLayer,
-  onTimelineToggleLayerVisibility,
-  onTimelineToggleLayerLock,
-  onClosePreview,
+  paneContent,
 }) => {
   const isBodyTopHover = hoverPosition === 'body-top';
   const isBodyBottomHover = hoverPosition === 'body-bottom';
@@ -1408,27 +1214,7 @@ const DockGroupContainer: React.FC<DockGroupContainerProps> = ({
       </div>
 
       <div className="relative min-h-0 flex-1 overflow-hidden bg-card">
-        <DockPaneContent
-          paneId={group.activePaneId}
-          state={state}
-          projectActions={projectActions}
-          history={history}
-          historyIndex={historyIndex}
-          fileSystem={fileSystem}
-          layerPropertiesState={layerPropertiesState}
-          onCloseLayerProperties={onCloseLayerProperties}
-          activeTagPopover={activeTagPopover}
-          onCloseTagPopover={onCloseTagPopover}
-          onPaletteColorSelect={onPaletteColorSelect}
-          onPaletteAddColor={onPaletteAddColor}
-          onPaletteColorsSelected={onPaletteColorsSelected}
-          onSelectLayers={onSelectLayers}
-          onSelectFrames={onSelectFrames}
-          onTimelineSelectLayer={onTimelineSelectLayer}
-          onTimelineToggleLayerVisibility={onTimelineToggleLayerVisibility}
-          onTimelineToggleLayerLock={onTimelineToggleLayerLock}
-          onClosePreview={onClosePreview}
-        />
+        {paneContent}
 
         {isBodyTopHover && (
           <div className="pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-center gap-1.5 border-2 border-dashed border-primary/80 bg-primary/10 select-none">
@@ -1477,24 +1263,9 @@ interface DockSlotContainerProps {
   layoutActions: any;
   tabMenu: ReturnType<typeof createMenuController<TabMenuPayload>>;
   onRegisterTabListRef: (key: string, el: HTMLDivElement | null) => void;
-  state: ProjectState;
-  projectActions: any;
-  history: any[];
-  historyIndex: number;
-  fileSystem: any;
-  layerPropertiesState?: { isOpen: boolean; layer: any };
-  onCloseLayerProperties?: () => void;
-  activeTagPopover?: any;
-  onCloseTagPopover?: () => void;
-  onPaletteColorSelect: (c: string, isPrimary: boolean) => void;
-  onPaletteAddColor: (c: string) => void;
-  onPaletteColorsSelected: (selectedColors: string[]) => void;
-  onSelectLayers: (ids: string[], active: string) => void;
-  onSelectFrames: (indices: number[], active: number, layerId?: string) => void;
-  onTimelineSelectLayer: (id: string) => void;
-  onTimelineToggleLayerVisibility: (id: string) => void;
-  onTimelineToggleLayerLock: (id: string) => void;
-  onClosePreview: () => void;
+  primaryPaneContent: React.ReactNode;
+  secondaryPaneContent?: React.ReactNode;
+  extraPaneContents?: React.ReactNode[] | null;
 }
 
 const DockSlotContainer: React.FC<DockSlotContainerProps> = ({
@@ -1508,24 +1279,9 @@ const DockSlotContainer: React.FC<DockSlotContainerProps> = ({
   layoutActions,
   tabMenu,
   onRegisterTabListRef,
-  state,
-  projectActions,
-  history,
-  historyIndex,
-  fileSystem,
-  layerPropertiesState,
-  onCloseLayerProperties,
-  activeTagPopover,
-  onCloseTagPopover,
-  onPaletteColorSelect,
-  onPaletteAddColor,
-  onPaletteColorsSelected,
-  onSelectLayers,
-  onSelectFrames,
-  onTimelineSelectLayer,
-  onTimelineToggleLayerVisibility,
-  onTimelineToggleLayerLock,
-  onClosePreview,
+  primaryPaneContent,
+  secondaryPaneContent,
+  extraPaneContents,
 }) => {
   if (!slot || !slot.visible || slot.groups.length === 0) return null;
 
@@ -1551,36 +1307,25 @@ const DockSlotContainer: React.FC<DockSlotContainerProps> = ({
         layoutActions={layoutActions}
         tabMenu={tabMenu}
         onRegisterTabListRef={onRegisterTabListRef}
-        state={state}
-        projectActions={projectActions}
-        history={history}
-        historyIndex={historyIndex}
-        fileSystem={fileSystem}
-        layerPropertiesState={layerPropertiesState}
-        onCloseLayerProperties={onCloseLayerProperties}
-        activeTagPopover={activeTagPopover}
-        onCloseTagPopover={onCloseTagPopover}
-        onPaletteColorSelect={onPaletteColorSelect}
-        onPaletteAddColor={onPaletteAddColor}
-        onPaletteColorsSelected={onPaletteColorsSelected}
-        onSelectLayers={onSelectLayers}
-        onSelectFrames={onSelectFrames}
-        onTimelineSelectLayer={onTimelineSelectLayer}
-        onTimelineToggleLayerVisibility={onTimelineToggleLayerVisibility}
-        onTimelineToggleLayerLock={onTimelineToggleLayerLock}
-        onClosePreview={onClosePreview}
+        paneContent={primaryPaneContent}
       />
     );
   }
 
   return (
     <Allotment vertical={slot.splitDirection === 'vertical'} className="h-full w-full">
-      {slot.groups.map((group: any) => {
+      {slot.groups.map((group: any, idx: number) => {
         const hoverPosition =
           isDragOverSlot && dragOverZone?.groupId === group.id ? dragOverZone.position : null;
         const indicatorKey = `${slotId}-${group.id}`;
         const indicatorLeft =
           tabDropIndicator && tabDropIndicator.key === indicatorKey ? tabDropIndicator.left : null;
+        const paneContent =
+          idx === 0
+            ? primaryPaneContent
+            : idx === 1
+              ? secondaryPaneContent
+              : extraPaneContents?.[idx - 2] ?? null;
 
         return (
           <Allotment.Pane key={group.id} minSize={80}>
@@ -1595,24 +1340,7 @@ const DockSlotContainer: React.FC<DockSlotContainerProps> = ({
               layoutActions={layoutActions}
               tabMenu={tabMenu}
               onRegisterTabListRef={onRegisterTabListRef}
-              state={state}
-              projectActions={projectActions}
-              history={history}
-              historyIndex={historyIndex}
-              fileSystem={fileSystem}
-              layerPropertiesState={layerPropertiesState}
-              onCloseLayerProperties={onCloseLayerProperties}
-              activeTagPopover={activeTagPopover}
-              onCloseTagPopover={onCloseTagPopover}
-              onPaletteColorSelect={onPaletteColorSelect}
-              onPaletteAddColor={onPaletteAddColor}
-              onPaletteColorsSelected={onPaletteColorsSelected}
-              onSelectLayers={onSelectLayers}
-              onSelectFrames={onSelectFrames}
-              onTimelineSelectLayer={onTimelineSelectLayer}
-              onTimelineToggleLayerVisibility={onTimelineToggleLayerVisibility}
-              onTimelineToggleLayerLock={onTimelineToggleLayerLock}
-              onClosePreview={onClosePreview}
+              paneContent={paneContent}
             />
           </Allotment.Pane>
         );
@@ -1714,24 +1442,69 @@ const FloatingWindow: React.FC<{
   );
 };
 
-export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
+interface DesktopWorkspaceProps {
+  state: ProjectState;
+  updateState: (s: ProjectStateUpdater, config?: any) => void;
+  projectActions: any;
+  history: any[];
+  historyIndex: number;
+  canvasTools: any;
+  fileSystem: any;
+  setMousePos: (pos: any) => void;
+  setDragStartPos: (pos: any) => void;
+  onScalePixels: (selection: Set<number>, srcBox: any, destBox: any) => void;
+  layoutActions: any;
+  slots: any;
+  floatingPanes: any[];
+  draggedPane: { paneId: string; sourceSlot: string; sourceGroupId?: string } | null;
+  dragOverSlot: string | null;
+  dragOverIndex: { slotId: string; groupId?: string; index: number } | null;
+  dragOverZone: { slotId: string; groupId?: string; position: DragZonePosition } | null;
+  activeTagPopover?: any;
+  onCloseTagPopover?: () => void;
+  layerPropertiesState?: { isOpen: boolean; layer: any };
+  onCloseLayerProperties?: () => void;
+  tabMenu: ReturnType<typeof createMenuController<TabMenuPayload>>;
+}
+
+const resolvePaneElement = (
+  paneId: string | undefined,
+  fileTreeEl: React.ReactNode,
+  paletteEl: React.ReactNode,
+  layersEl: React.ReactNode,
+  historyEl: React.ReactNode,
+  timelineEl: React.ReactNode,
+  previewEl: React.ReactNode
+): React.ReactNode => {
+  switch (paneId) {
+    case 'file-tree':
+      return fileTreeEl;
+    case 'palette':
+      return paletteEl;
+    case 'layers':
+      return layersEl;
+    case 'history':
+      return historyEl;
+    case 'timeline':
+      return timelineEl;
+    case 'preview':
+      return previewEl;
+    default:
+      return null;
+  }
+};
+
+const DesktopWorkspace: React.FC<DesktopWorkspaceProps> = ({
   state,
   updateState,
-  commands,
   projectActions,
-  activeProjectId,
-  tabs,
-  recentProjects,
   history,
   historyIndex,
   canvasTools,
   fileSystem,
-  handleFileChange,
-  fileInputRef,
   setMousePos,
   setDragStartPos,
   onScalePixels,
-  selectionSize,
   layoutActions,
   slots,
   floatingPanes,
@@ -1743,9 +1516,8 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
   onCloseTagPopover,
   layerPropertiesState,
   onCloseLayerProperties,
+  tabMenu,
 }) => {
-  const tabMenu = useMemo(() => createMenuController<TabMenuPayload>(), []);
-
   const isPreviewDocked = Object.values(slots).some(
     (s: any) => s.visible && s.groups.some((g: any) => g.panes.includes('preview'))
   );
@@ -1854,18 +1626,6 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
     updateState((prev) => ({ ...prev, zoom: z }));
   };
 
-  const handleExportClick = () => {
-    if (projectActions.openExportDialog) {
-      projectActions.openExportDialog('gif');
-    } else {
-      projectActions.downloadImage();
-    }
-  };
-
-  const handleImportProject = () => {
-    fileInputRef.current?.click();
-  };
-
   const slotTabListRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
   const handleRegisterTabListRef = (key: string, el: HTMLDivElement | null) => {
     slotTabListRefs.current[key] = el;
@@ -1904,9 +1664,259 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
     setTabDropIndicator({ key, left });
   }, [dragOverIndex, dragOverZone, slots]);
 
-  const isHome = activeProjectId === 'home';
-  const activeLayerName = state.layers.find((l) => l.id === state.activeLayerId)?.name;
   const hasDraggedPane = draggedPane !== null;
+  const activeFrame = state.frames[state.activeFrameIndex];
+
+  // Each panel JSX element is constructed at top-level with narrow props so React Compiler
+  // memoizes each panel independently on ONLY the exact state fields it consumes.
+  const fileTreeElement = (
+    <FileTree
+      rootHandle={fileSystem.rootHandle}
+      onOpenFolder={fileSystem.openFolder}
+      onFileOpen={projectActions.loadProjectFromFile}
+      onResizeStart={NOOP}
+      width={0}
+    />
+  );
+
+  const paletteElement = (
+    <Palette
+      width={0}
+      colors={state.palette}
+      palettes={state.paletteLibrary}
+      activePaletteId={state.activePaletteId}
+      primaryColor={state.primaryColor}
+      secondaryColor={state.secondaryColor}
+      onColorSelect={handlePaletteColorSelect}
+      onAddColor={handlePaletteAddColor}
+      onSelectPalette={projectActions.selectPalette}
+      onImportPalette={projectActions.importPalette}
+      onResizeStart={NOOP}
+      onColorsSelected={handlePaletteColorsSelected}
+    />
+  );
+
+  const layersElement = (
+    <LayersPanel
+      layers={state.layers}
+      activeFrame={activeFrame}
+      activeLayerId={state.activeLayerId}
+      selectedLayerIds={state.selectedLayerIds}
+      palette={state.palette}
+      width={state.width}
+      height={state.height}
+      onSelectLayers={handleSelectLayers}
+      onUpdateLayer={projectActions.updateLayer}
+      onAddLayer={projectActions.addLayer}
+      onAddGroupLayer={projectActions.addGroupLayer}
+      onGroupSelectedLayers={projectActions.groupSelectedLayers}
+      onUngroupSelectedLayers={projectActions.ungroupSelectedLayers}
+      onAddLayerToGroup={projectActions.addLayerToGroup}
+      onToggleCollapseAllGroups={projectActions.toggleCollapseAllGroups}
+      onDuplicateLayer={projectActions.duplicateLayer}
+      onDeleteLayer={projectActions.deleteLayer}
+      onDuplicateSelectedLayers={projectActions.duplicateSelectedLayers}
+      onDeleteSelectedLayers={projectActions.deleteSelectedLayers}
+      onReorderLayers={projectActions.reorderLayers}
+      onOpenLayerProperties={projectActions.openLayerPropertiesDialog}
+      layerPropertiesState={layerPropertiesState}
+      onCloseLayerProperties={onCloseLayerProperties}
+      className="h-full w-full flex-1"
+    />
+  );
+
+  const historyElement = (
+    <HistoryPanel
+      history={history}
+      historyIndex={historyIndex}
+      onJumpToHistory={projectActions.jumpToHistory}
+      className="h-full w-full flex-1"
+    />
+  );
+
+  const timelineElement = (
+    <Timeline
+      layers={state.layers}
+      frames={state.frames}
+      activeFrameIndex={state.activeFrameIndex}
+      activeLayerId={state.activeLayerId}
+      selectedFrameIndices={state.selectedFrameIndices}
+      selectedLayerIds={state.selectedLayerIds}
+      tags={state.tags}
+      onSelectFrames={handleSelectFrames}
+      onAddFrame={projectActions.addFrame}
+      onDuplicateFrame={projectActions.duplicateFrame}
+      onDeleteFrame={projectActions.deleteFrame}
+      onDuplicateSelectedFrames={projectActions.duplicateSelectedFrames}
+      onDeleteSelectedFrames={projectActions.deleteSelectedFrames}
+      onInsertFrame={projectActions.insertFrame}
+      onTweenFrames={projectActions.tweenFrames}
+      onSetFrameDuration={projectActions.setFrameDuration}
+      onAddTag={projectActions.addTag}
+      onSaveTag={projectActions.saveTag}
+      onDeleteTag={projectActions.deleteTag}
+      onOpenTagProperties={projectActions.openTagPropertiesDialog}
+      activeTagPopover={activeTagPopover}
+      onCloseTagPopover={onCloseTagPopover}
+      onSelectLayer={handleTimelineSelectLayer}
+      onAddLayer={projectActions.addLayer}
+      onAddGroupLayer={projectActions.addGroupLayer}
+      onUpdateLayer={projectActions.updateLayer}
+      onToggleLayerVisibility={handleTimelineToggleLayerVisibility}
+      onToggleLayerLock={handleTimelineToggleLayerLock}
+      onReorderLayers={projectActions.reorderLayers}
+      onReorderFrames={projectActions.reorderFrames}
+    />
+  );
+
+  const previewElement = (
+    <Preview
+      width={0}
+      frames={state.frames}
+      layers={state.layers}
+      palette={state.palette}
+      spriteWidth={state.width}
+      spriteHeight={state.height}
+      activeFrameIndex={state.activeFrameIndex}
+      onClose={handleClosePreview}
+      isFloating={false}
+    />
+  );
+
+  const floatingPreviewElement = (
+    <Preview
+      width={0}
+      frames={state.frames}
+      layers={state.layers}
+      palette={state.palette}
+      spriteWidth={state.width}
+      spriteHeight={state.height}
+      activeFrameIndex={state.activeFrameIndex}
+      onClose={handleClosePreview}
+      isFloating={true}
+    />
+  );
+
+  const leftPrimaryPane = resolvePaneElement(
+    slots.left.groups[0]?.activePaneId,
+    fileTreeElement,
+    paletteElement,
+    layersElement,
+    historyElement,
+    timelineElement,
+    previewElement
+  );
+  const leftSecondaryPane =
+    slots.left.groups.length > 1
+      ? resolvePaneElement(
+          slots.left.groups[1]?.activePaneId,
+          fileTreeElement,
+          paletteElement,
+          layersElement,
+          historyElement,
+          timelineElement,
+          previewElement
+        )
+      : undefined;
+  const leftExtraPanes =
+    slots.left.groups.length > 2
+      ? slots.left.groups
+          .slice(2)
+          .map((g: any) =>
+            resolvePaneElement(
+              g.activePaneId,
+              fileTreeElement,
+              paletteElement,
+              layersElement,
+              historyElement,
+              timelineElement,
+              previewElement
+            )
+          )
+      : null;
+
+  const rightPrimaryPane = resolvePaneElement(
+    slots.right.groups[0]?.activePaneId,
+    fileTreeElement,
+    paletteElement,
+    layersElement,
+    historyElement,
+    timelineElement,
+    previewElement
+  );
+  const rightSecondaryPane =
+    slots.right.groups.length > 1
+      ? resolvePaneElement(
+          slots.right.groups[1]?.activePaneId,
+          fileTreeElement,
+          paletteElement,
+          layersElement,
+          historyElement,
+          timelineElement,
+          previewElement
+        )
+      : undefined;
+  const rightExtraPanes =
+    slots.right.groups.length > 2
+      ? slots.right.groups
+          .slice(2)
+          .map((g: any) =>
+            resolvePaneElement(
+              g.activePaneId,
+              fileTreeElement,
+              paletteElement,
+              layersElement,
+              historyElement,
+              timelineElement,
+              previewElement
+            )
+          )
+      : null;
+
+  const bottomPrimaryPane = resolvePaneElement(
+    slots.bottom.groups[0]?.activePaneId,
+    fileTreeElement,
+    paletteElement,
+    layersElement,
+    historyElement,
+    timelineElement,
+    previewElement
+  );
+  const bottomSecondaryPane =
+    slots.bottom.groups.length > 1
+      ? resolvePaneElement(
+          slots.bottom.groups[1]?.activePaneId,
+          fileTreeElement,
+          paletteElement,
+          layersElement,
+          historyElement,
+          timelineElement,
+          previewElement
+        )
+      : undefined;
+  const bottomExtraPanes =
+    slots.bottom.groups.length > 2
+      ? slots.bottom.groups
+          .slice(2)
+          .map((g: any) =>
+            resolvePaneElement(
+              g.activePaneId,
+              fileTreeElement,
+              paletteElement,
+              layersElement,
+              historyElement,
+              timelineElement,
+              previewElement
+            )
+          )
+      : null;
+
+  const leftTabDropIndicator =
+    tabDropIndicator && tabDropIndicator.key.startsWith('left-') ? tabDropIndicator : null;
+  const rightTabDropIndicator =
+    tabDropIndicator && tabDropIndicator.key.startsWith('right-') ? tabDropIndicator : null;
+  const bottomTabDropIndicator =
+    tabDropIndicator && tabDropIndicator.key.startsWith('bottom-') ? tabDropIndicator : null;
 
   const toolRailElement = (
     <ToolRail
@@ -1957,6 +1967,234 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
   );
 
   return (
+    <>
+      <ToolOptionsBar
+        tool={state.tool}
+        inkType={state.inkType}
+        shades={state.shades}
+        primaryColor={state.inkType === 'shading' ? state.primaryColor : ''}
+        symmetryX={state.symmetry.x}
+        symmetryY={state.symmetry.y}
+        brushSize={state.brushSize}
+        brushShape={state.brushShape}
+        pixelPerfect={state.pixelPerfect}
+        smudgeMode={state.smudgeMode}
+        smudgeStrength={state.smudgeStrength}
+        fillContiguous={state.fillContiguous}
+        rotationAlgorithm={state.rotationAlgorithm}
+        showGrid={state.showGrid}
+        onionSkin={state.onionSkin}
+        isPreviewVisible={isPreviewVisible}
+        onUndo={projectActions.undo}
+        onRedo={projectActions.redo}
+        updateState={updateState}
+        togglePaneVisibility={layoutActions.togglePaneVisibility}
+      />
+
+      {/* Main Workspace Grid */}
+      <div
+        className="relative min-h-0 flex-1"
+        onDragOver={(e) => {
+          e.preventDefault();
+          if (draggedPane && (dragOverSlot !== null || dragOverZone !== null)) {
+            layoutActions.clearDragOverState();
+          }
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          if (!draggedPane) return;
+          const rect = e.currentTarget.getBoundingClientRect();
+          const x = e.clientX - rect.left - 80;
+          const y = e.clientY - rect.top - 15;
+          layoutActions.floatPane(draggedPane.paneId, draggedPane.sourceSlot, draggedPane.sourceGroupId, x, y);
+          layoutActions.handleDragEnd();
+        }}
+      >
+        {floatingPanes.map((pane: any) => (
+          <FloatingWindow
+            key={pane.id}
+            pane={pane}
+            metadata={PANE_METADATA[pane.id] || { title: pane.id, icon: null }}
+            updateFloatingPanePosition={layoutActions.updateFloatingPanePosition}
+            handleDragStart={layoutActions.handleDragStart}
+            handleDragEnd={layoutActions.handleDragEnd}
+            handleClosePane={layoutActions.handleClosePane}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              tabMenu.open({
+                payload: { paneId: pane.id, slotId: 'floating' },
+                anchor: { x: e.clientX, y: e.clientY },
+              });
+            }}
+          >
+            {resolvePaneElement(
+              pane.id,
+              fileTreeElement,
+              paletteElement,
+              layersElement,
+              historyElement,
+              timelineElement,
+              floatingPreviewElement
+            )}
+          </FloatingWindow>
+        ))}
+
+        <Allotment vertical>
+          <Allotment.Pane>
+            <Allotment>
+              <Allotment.Pane
+                visible={
+                  slots.left.visible && slots.left.groups.some((g: any) => g.panes.length > 0)
+                }
+                preferredSize={slots.left.size || 220}
+                minSize={160}
+                priority={1 as any}
+              >
+                <DockSlotContainer
+                  slotId="left"
+                  slot={slots.left}
+                  closedPanes={closedPanes}
+                  hasDraggedPane={hasDraggedPane}
+                  isDragOverSlot={dragOverSlot === 'left'}
+                  dragOverZone={dragOverSlot === 'left' ? dragOverZone : null}
+                  tabDropIndicator={leftTabDropIndicator}
+                  layoutActions={layoutActions}
+                  tabMenu={tabMenu}
+                  onRegisterTabListRef={handleRegisterTabListRef}
+                  primaryPaneContent={leftPrimaryPane}
+                  secondaryPaneContent={leftSecondaryPane}
+                  extraPaneContents={leftExtraPanes}
+                />
+              </Allotment.Pane>
+
+              {/* Left Tool Rail (44px) */}
+              <Allotment.Pane minSize={44} maxSize={44} priority={1 as any}>
+                {toolRailElement}
+              </Allotment.Pane>
+
+              {/* Central Canvas Stage */}
+              <Allotment.Pane priority={10 as any}>
+                <div className="relative flex h-full w-full min-w-0 flex-col overflow-hidden bg-canvas">
+                  {canvasElement}
+                </div>
+              </Allotment.Pane>
+
+              <Allotment.Pane
+                visible={
+                  slots.right.visible && slots.right.groups.some((g: any) => g.panes.length > 0)
+                }
+                preferredSize={slots.right.size || 250}
+                minSize={160}
+                priority={1 as any}
+              >
+                <DockSlotContainer
+                  slotId="right"
+                  slot={slots.right}
+                  closedPanes={closedPanes}
+                  hasDraggedPane={hasDraggedPane}
+                  isDragOverSlot={dragOverSlot === 'right'}
+                  dragOverZone={dragOverSlot === 'right' ? dragOverZone : null}
+                  tabDropIndicator={rightTabDropIndicator}
+                  layoutActions={layoutActions}
+                  tabMenu={tabMenu}
+                  onRegisterTabListRef={handleRegisterTabListRef}
+                  primaryPaneContent={rightPrimaryPane}
+                  secondaryPaneContent={rightSecondaryPane}
+                  extraPaneContents={rightExtraPanes}
+                />
+              </Allotment.Pane>
+            </Allotment>
+          </Allotment.Pane>
+
+          <Allotment.Pane
+            visible={
+              slots.bottom.visible && slots.bottom.groups.some((g: any) => g.panes.length > 0)
+            }
+            preferredSize={slots.bottom.size || 200}
+            minSize={110}
+            maxSize={400}
+            priority={3 as any}
+          >
+            <DockSlotContainer
+              slotId="bottom"
+              slot={slots.bottom}
+              closedPanes={closedPanes}
+              hasDraggedPane={hasDraggedPane}
+              isDragOverSlot={dragOverSlot === 'bottom'}
+              dragOverZone={dragOverSlot === 'bottom' ? dragOverZone : null}
+              tabDropIndicator={bottomTabDropIndicator}
+              layoutActions={layoutActions}
+              tabMenu={tabMenu}
+              onRegisterTabListRef={handleRegisterTabListRef}
+              primaryPaneContent={bottomPrimaryPane}
+              secondaryPaneContent={bottomSecondaryPane}
+              extraPaneContents={bottomExtraPanes}
+            />
+          </Allotment.Pane>
+        </Allotment>
+      </div>
+    </>
+  );
+};
+
+export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
+  state,
+  updateState,
+  commands,
+  projectActions,
+  activeProjectId,
+  tabs,
+  recentProjects,
+  history,
+  historyIndex,
+  onOpenCommandPalette,
+  canvasTools,
+  fileSystem,
+  handleFileChange,
+  fileInputRef,
+  setMousePos,
+  setDragStartPos,
+  onScalePixels,
+  selectionSize,
+  layoutActions,
+  slots,
+  floatingPanes,
+  draggedPane,
+  dragOverSlot,
+  dragOverIndex,
+  dragOverZone,
+  activeTagPopover,
+  onCloseTagPopover,
+  layerPropertiesState,
+  onCloseLayerProperties,
+}) => {
+  const [tabMenu] = useState(() => createMenuController<TabMenuPayload>());
+
+  const handleExportClick = () => {
+    if (projectActions.openExportDialog) {
+      projectActions.openExportDialog('gif');
+    } else {
+      projectActions.downloadImage();
+    }
+  };
+
+  const handleImportProject = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleOpenCommandPalette = () => {
+    if (onOpenCommandPalette) {
+      onOpenCommandPalette();
+    } else {
+      commands.find((c) => c.id === 'app.commandPalette')?.perform();
+    }
+  };
+
+  const isHome = activeProjectId === 'home';
+  const activeLayerName = state.layers.find((l) => l.id === state.activeLayerId)?.name;
+
+  return (
     <div className="flex h-full flex-col bg-background">
       <input
         type="file"
@@ -1978,7 +2216,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => commands.find((c) => c.id === 'app.commandPalette')?.perform()}
+            onClick={handleOpenCommandPalette}
             className="flex h-6 items-center gap-1.5 rounded-sm border border-border bg-background px-2 text-[11px] text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <CommandIcon size={11} />
@@ -2016,231 +2254,30 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
           onClearRecent={projectActions.clearRecents}
         />
       ) : (
-        <>
-          <ToolOptionsBar
-            tool={state.tool}
-            inkType={state.inkType}
-            shades={state.shades}
-            primaryColor={state.primaryColor}
-            symmetryX={state.symmetry.x}
-            symmetryY={state.symmetry.y}
-            brushSize={state.brushSize}
-            brushShape={state.brushShape}
-            pixelPerfect={state.pixelPerfect}
-            smudgeMode={state.smudgeMode}
-            smudgeStrength={state.smudgeStrength}
-            fillContiguous={state.fillContiguous}
-            rotationAlgorithm={state.rotationAlgorithm}
-            showGrid={state.showGrid}
-            onionSkin={state.onionSkin}
-            isPreviewVisible={isPreviewVisible}
-            commands={commands}
-            updateState={updateState}
-            togglePaneVisibility={layoutActions.togglePaneVisibility}
-          />
-
-          {/* Main Workspace Grid */}
-          <div
-            className="relative min-h-0 flex-1"
-            onDragOver={(e) => {
-              e.preventDefault();
-              if (draggedPane && (dragOverSlot !== null || dragOverZone !== null)) {
-                layoutActions.clearDragOverState();
-              }
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              if (!draggedPane) return;
-              const rect = e.currentTarget.getBoundingClientRect();
-              const x = e.clientX - rect.left - 80;
-              const y = e.clientY - rect.top - 15;
-              layoutActions.floatPane(draggedPane.paneId, draggedPane.sourceSlot, draggedPane.sourceGroupId, x, y);
-              layoutActions.handleDragEnd();
-            }}
-          >
-            {floatingPanes.map((pane: any) => (
-              <FloatingWindow
-                key={pane.id}
-                pane={pane}
-                metadata={PANE_METADATA[pane.id] || { title: pane.id, icon: null }}
-                updateFloatingPanePosition={layoutActions.updateFloatingPanePosition}
-                handleDragStart={layoutActions.handleDragStart}
-                handleDragEnd={layoutActions.handleDragEnd}
-                handleClosePane={layoutActions.handleClosePane}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  tabMenu.open({
-                    payload: { paneId: pane.id, slotId: 'floating' },
-                    anchor: { x: e.clientX, y: e.clientY },
-                  });
-                }}
-              >
-                <DockPaneContent
-                  paneId={pane.id}
-                  state={state}
-                  projectActions={projectActions}
-                  history={history}
-                  historyIndex={historyIndex}
-                  fileSystem={fileSystem}
-                  layerPropertiesState={layerPropertiesState}
-                  onCloseLayerProperties={onCloseLayerProperties}
-                  activeTagPopover={activeTagPopover}
-                  onCloseTagPopover={onCloseTagPopover}
-                  onPaletteColorSelect={handlePaletteColorSelect}
-                  onPaletteAddColor={handlePaletteAddColor}
-                  onPaletteColorsSelected={handlePaletteColorsSelected}
-                  onSelectLayers={handleSelectLayers}
-                  onSelectFrames={handleSelectFrames}
-                  onTimelineSelectLayer={handleTimelineSelectLayer}
-                  onTimelineToggleLayerVisibility={handleTimelineToggleLayerVisibility}
-                  onTimelineToggleLayerLock={handleTimelineToggleLayerLock}
-                  onClosePreview={handleClosePreview}
-                  isFloating
-                />
-              </FloatingWindow>
-            ))}
-
-            <Allotment vertical>
-              <Allotment.Pane>
-                <Allotment>
-                  <Allotment.Pane
-                    visible={
-                      slots.left.visible && slots.left.groups.some((g: any) => g.panes.length > 0)
-                    }
-                    preferredSize={slots.left.size || 220}
-                    minSize={160}
-                    priority={1 as any}
-                  >
-                    <DockSlotContainer
-                      slotId="left"
-                      slot={slots.left}
-                      closedPanes={closedPanes}
-                      hasDraggedPane={hasDraggedPane}
-                      isDragOverSlot={dragOverSlot === 'left'}
-                      dragOverZone={dragOverSlot === 'left' ? dragOverZone : null}
-                      tabDropIndicator={tabDropIndicator}
-                      layoutActions={layoutActions}
-                      tabMenu={tabMenu}
-                      onRegisterTabListRef={handleRegisterTabListRef}
-                      state={state}
-                      projectActions={projectActions}
-                      history={history}
-                      historyIndex={historyIndex}
-                      fileSystem={fileSystem}
-                      layerPropertiesState={layerPropertiesState}
-                      onCloseLayerProperties={onCloseLayerProperties}
-                      activeTagPopover={activeTagPopover}
-                      onCloseTagPopover={onCloseTagPopover}
-                      onPaletteColorSelect={handlePaletteColorSelect}
-                      onPaletteAddColor={handlePaletteAddColor}
-                      onPaletteColorsSelected={handlePaletteColorsSelected}
-                      onSelectLayers={handleSelectLayers}
-                      onSelectFrames={handleSelectFrames}
-                      onTimelineSelectLayer={handleTimelineSelectLayer}
-                      onTimelineToggleLayerVisibility={handleTimelineToggleLayerVisibility}
-                      onTimelineToggleLayerLock={handleTimelineToggleLayerLock}
-                      onClosePreview={handleClosePreview}
-                    />
-                  </Allotment.Pane>
-
-                  {/* Left Tool Rail (44px) */}
-                  <Allotment.Pane minSize={44} maxSize={44} priority={1 as any}>
-                    {toolRailElement}
-                  </Allotment.Pane>
-
-                  {/* Central Canvas Stage */}
-                  <Allotment.Pane priority={10 as any}>
-                    <div className="relative flex h-full w-full min-w-0 flex-col overflow-hidden bg-canvas">
-                      {canvasElement}
-                    </div>
-                  </Allotment.Pane>
-
-                  <Allotment.Pane
-                    visible={
-                      slots.right.visible && slots.right.groups.some((g: any) => g.panes.length > 0)
-                    }
-                    preferredSize={slots.right.size || 250}
-                    minSize={160}
-                    priority={1 as any}
-                  >
-                    <DockSlotContainer
-                      slotId="right"
-                      slot={slots.right}
-                      closedPanes={closedPanes}
-                      hasDraggedPane={hasDraggedPane}
-                      isDragOverSlot={dragOverSlot === 'right'}
-                      dragOverZone={dragOverSlot === 'right' ? dragOverZone : null}
-                      tabDropIndicator={tabDropIndicator}
-                      layoutActions={layoutActions}
-                      tabMenu={tabMenu}
-                      onRegisterTabListRef={handleRegisterTabListRef}
-                      state={state}
-                      projectActions={projectActions}
-                      history={history}
-                      historyIndex={historyIndex}
-                      fileSystem={fileSystem}
-                      layerPropertiesState={layerPropertiesState}
-                      onCloseLayerProperties={onCloseLayerProperties}
-                      activeTagPopover={activeTagPopover}
-                      onCloseTagPopover={onCloseTagPopover}
-                      onPaletteColorSelect={handlePaletteColorSelect}
-                      onPaletteAddColor={handlePaletteAddColor}
-                      onPaletteColorsSelected={handlePaletteColorsSelected}
-                      onSelectLayers={handleSelectLayers}
-                      onSelectFrames={handleSelectFrames}
-                      onTimelineSelectLayer={handleTimelineSelectLayer}
-                      onTimelineToggleLayerVisibility={handleTimelineToggleLayerVisibility}
-                      onTimelineToggleLayerLock={handleTimelineToggleLayerLock}
-                      onClosePreview={handleClosePreview}
-                    />
-                  </Allotment.Pane>
-                </Allotment>
-              </Allotment.Pane>
-
-              <Allotment.Pane
-                visible={
-                  slots.bottom.visible && slots.bottom.groups.some((g: any) => g.panes.length > 0)
-                }
-                preferredSize={slots.bottom.size || 200}
-                minSize={110}
-                maxSize={400}
-                priority={3 as any}
-              >
-                <DockSlotContainer
-                  slotId="bottom"
-                  slot={slots.bottom}
-                  closedPanes={closedPanes}
-                  hasDraggedPane={hasDraggedPane}
-                  isDragOverSlot={dragOverSlot === 'bottom'}
-                  dragOverZone={dragOverSlot === 'bottom' ? dragOverZone : null}
-                  tabDropIndicator={tabDropIndicator}
-                  layoutActions={layoutActions}
-                  tabMenu={tabMenu}
-                  onRegisterTabListRef={handleRegisterTabListRef}
-                  state={state}
-                  projectActions={projectActions}
-                  history={history}
-                  historyIndex={historyIndex}
-                  fileSystem={fileSystem}
-                  layerPropertiesState={layerPropertiesState}
-                  onCloseLayerProperties={onCloseLayerProperties}
-                  activeTagPopover={activeTagPopover}
-                  onCloseTagPopover={onCloseTagPopover}
-                  onPaletteColorSelect={handlePaletteColorSelect}
-                  onPaletteAddColor={handlePaletteAddColor}
-                  onPaletteColorsSelected={handlePaletteColorsSelected}
-                  onSelectLayers={handleSelectLayers}
-                  onSelectFrames={handleSelectFrames}
-                  onTimelineSelectLayer={handleTimelineSelectLayer}
-                  onTimelineToggleLayerVisibility={handleTimelineToggleLayerVisibility}
-                  onTimelineToggleLayerLock={handleTimelineToggleLayerLock}
-                  onClosePreview={handleClosePreview}
-                />
-              </Allotment.Pane>
-            </Allotment>
-          </div>
-        </>
+        <DesktopWorkspace
+          state={state}
+          updateState={updateState}
+          projectActions={projectActions}
+          history={history}
+          historyIndex={historyIndex}
+          canvasTools={canvasTools}
+          fileSystem={fileSystem}
+          setMousePos={setMousePos}
+          setDragStartPos={setDragStartPos}
+          onScalePixels={onScalePixels}
+          layoutActions={layoutActions}
+          slots={slots}
+          floatingPanes={floatingPanes}
+          draggedPane={draggedPane}
+          dragOverSlot={dragOverSlot}
+          dragOverIndex={dragOverIndex}
+          dragOverZone={dragOverZone}
+          activeTagPopover={activeTagPopover}
+          onCloseTagPopover={onCloseTagPopover}
+          layerPropertiesState={layerPropertiesState}
+          onCloseLayerProperties={onCloseLayerProperties}
+          tabMenu={tabMenu}
+        />
       )}
 
       {/* Dock Tab Context Menu via @ui-sdk/react MenuController */}

@@ -26,6 +26,146 @@ import { setCursorMousePos, setCursorDragStartPos } from './hooks/useCursorStore
 import { setStatusMessage } from './hooks/useStatusStore';
 import { getCoords } from './utils';
 
+const EMPTY_COMMANDS: any[] = [];
+
+interface AppDialogsProps {
+  isCmdPaletteOpen: boolean;
+  onCloseCmdPalette: () => void;
+  commands: any[];
+  isNewProjectDialogOpen: boolean;
+  onCloseNewProjectDialog: () => void;
+  onCreateProject: any;
+  existingProjectCount: number;
+  isResizeCanvasDialogOpen: boolean;
+  onCloseResizeCanvasDialog: () => void;
+  onResizeCanvas: any;
+  isReferenceImageDialogOpen: boolean;
+  onCloseReferenceImageDialog: () => void;
+  onSetReferenceImage: any;
+  exportDialog: { isOpen: boolean; initialFormat: ExportFormat };
+  onCloseExportDialog: () => void;
+  isSpritePropertiesOpen: boolean;
+  onCloseSpriteProperties: () => void;
+  onUpdateSpriteProperties: any;
+  isSlicesOpen: boolean;
+  onCloseSlices: () => void;
+  onUpdateSlices: any;
+  isOutlineDialogOpen: boolean;
+  onCloseOutlineDialog: () => void;
+  onOutlinePreview: (previewState: ProjectState) => void;
+  onOutlineConfirm: (finalState: ProjectState, actionSummary: string) => void;
+  onOutlineCancel: (originalState?: ProjectState) => void;
+  dialogState: ProjectState | null;
+}
+
+const AppDialogs: React.FC<AppDialogsProps> = ({
+  isCmdPaletteOpen,
+  onCloseCmdPalette,
+  commands,
+  isNewProjectDialogOpen,
+  onCloseNewProjectDialog,
+  onCreateProject,
+  existingProjectCount,
+  isResizeCanvasDialogOpen,
+  onCloseResizeCanvasDialog,
+  onResizeCanvas,
+  isReferenceImageDialogOpen,
+  onCloseReferenceImageDialog,
+  onSetReferenceImage,
+  exportDialog,
+  onCloseExportDialog,
+  isSpritePropertiesOpen,
+  onCloseSpriteProperties,
+  onUpdateSpriteProperties,
+  isSlicesOpen,
+  onCloseSlices,
+  onUpdateSlices,
+  isOutlineDialogOpen,
+  onCloseOutlineDialog,
+  onOutlinePreview,
+  onOutlineConfirm,
+  onOutlineCancel,
+  dialogState,
+}) => {
+  return (
+    <>
+      {isCmdPaletteOpen && (
+        <CommandPalette
+          isOpen={isCmdPaletteOpen}
+          onClose={onCloseCmdPalette}
+          commands={commands}
+        />
+      )}
+
+      {isNewProjectDialogOpen && (
+        <NewProjectDialog
+          isOpen={isNewProjectDialogOpen}
+          onClose={onCloseNewProjectDialog}
+          onCreate={onCreateProject}
+          existingProjectCount={existingProjectCount}
+        />
+      )}
+
+      {isResizeCanvasDialogOpen && dialogState && (
+        <CanvasResizeDialog
+          isOpen={isResizeCanvasDialogOpen}
+          onClose={onCloseResizeCanvasDialog}
+          currentWidth={dialogState.width}
+          currentHeight={dialogState.height}
+          onResize={onResizeCanvas}
+        />
+      )}
+
+      {isReferenceImageDialogOpen && dialogState && (
+        <ReferenceImageDialog
+          isOpen={isReferenceImageDialogOpen}
+          onClose={onCloseReferenceImageDialog}
+          referenceImage={dialogState.referenceImage}
+          onUpdate={onSetReferenceImage}
+        />
+      )}
+
+      {exportDialog.isOpen && dialogState && (
+        <ExportDialog
+          isOpen={exportDialog.isOpen}
+          onClose={onCloseExportDialog}
+          state={dialogState}
+          initialFormat={exportDialog.initialFormat}
+        />
+      )}
+
+      {isSpritePropertiesOpen && dialogState && (
+        <SpritePropertiesDialog
+          isOpen={isSpritePropertiesOpen}
+          onClose={onCloseSpriteProperties}
+          state={dialogState}
+          onUpdateSpriteProperties={onUpdateSpriteProperties}
+        />
+      )}
+
+      {isSlicesOpen && dialogState && (
+        <SlicesDialog
+          isOpen={isSlicesOpen}
+          onClose={onCloseSlices}
+          state={dialogState}
+          onUpdateSlices={onUpdateSlices}
+        />
+      )}
+
+      {isOutlineDialogOpen && dialogState && (
+        <OutlineDialog
+          isOpen={isOutlineDialogOpen}
+          onClose={onCloseOutlineDialog}
+          state={dialogState}
+          onPreview={onOutlinePreview}
+          onConfirm={onOutlineConfirm}
+          onCancel={onOutlineCancel}
+        />
+      )}
+    </>
+  );
+};
+
 export default function App() {
   const [isCmdPaletteOpen, setIsCmdPaletteOpen] = useState(false);
   const [isNewProjectDialogOpen, setIsNewProjectDialogOpen] = useState(false);
@@ -133,6 +273,14 @@ export default function App() {
   });
   const closeTagPopover = () => setTagPropertiesState({ isOpen: false, tag: null });
   const closeLayerProperties = () => setLayerPropertiesState({ isOpen: false, layer: null });
+  const closeCmdPalette = () => setIsCmdPaletteOpen(false);
+  const closeNewProjectDialog = () => setIsNewProjectDialogOpen(false);
+  const closeResizeCanvasDialog = () => setIsResizeCanvasDialogOpen(false);
+  const closeReferenceImageDialog = () => setIsReferenceImageDialogOpen(false);
+  const closeExportDialog = () => setExportDialog(prev => ({ ...prev, isOpen: false }));
+  const closeSpriteProperties = () => setIsSpritePropertiesOpen(false);
+  const closeSlices = () => setIsSlicesOpen(false);
+  const closeOutlineDialog = () => setIsOutlineDialogOpen(false);
   const downloadImage = () => openExportDialog('png');
   const downloadSpriteSheet = () => openExportDialog('spritesheet');
   const downloadGif = () => openExportDialog('gif');
@@ -219,6 +367,8 @@ export default function App() {
 
   const layoutProjectActions = {
     ...projectActions,
+    undo: handleUndoWithStatus,
+    redo: handleRedoWithStatus,
     createProject: openNewProjectDialog,
     openSpritePropertiesDialog,
     openSlicesDialog,
@@ -231,81 +381,45 @@ export default function App() {
     downloadGif,
   };
 
+  const hasStateDialogOpen =
+    isResizeCanvasDialogOpen ||
+    isReferenceImageDialogOpen ||
+    exportDialog.isOpen ||
+    isSpritePropertiesOpen ||
+    isSlicesOpen ||
+    isOutlineDialogOpen;
+
   return (
     <div className="flex flex-col h-screen bg-background text-foreground select-none overflow-hidden">
-      {isCmdPaletteOpen && (
-        <CommandPalette
-          isOpen={isCmdPaletteOpen}
-          onClose={() => setIsCmdPaletteOpen(false)}
-          commands={commands}
-        />
-      )}
-
-      {isNewProjectDialogOpen && (
-        <NewProjectDialog
-          isOpen={isNewProjectDialogOpen}
-          onClose={() => setIsNewProjectDialogOpen(false)}
-          onCreate={projectActions.createProject}
-          existingProjectCount={projects.length}
-        />
-      )}
-
-      {isResizeCanvasDialogOpen && (
-        <CanvasResizeDialog
-          isOpen={isResizeCanvasDialogOpen}
-          onClose={() => setIsResizeCanvasDialogOpen(false)}
-          currentWidth={state.width}
-          currentHeight={state.height}
-          onResize={projectActions.resizeCanvas}
-        />
-      )}
-
-      {isReferenceImageDialogOpen && (
-        <ReferenceImageDialog
-          isOpen={isReferenceImageDialogOpen}
-          onClose={() => setIsReferenceImageDialogOpen(false)}
-          referenceImage={state.referenceImage}
-          onUpdate={projectActions.setReferenceImage}
-        />
-      )}
-
-      {exportDialog.isOpen && (
-        <ExportDialog
-          isOpen={exportDialog.isOpen}
-          onClose={() => setExportDialog(prev => ({ ...prev, isOpen: false }))}
-          state={state}
-          initialFormat={exportDialog.initialFormat}
-        />
-      )}
-
-      {isSpritePropertiesOpen && (
-        <SpritePropertiesDialog
-          isOpen={isSpritePropertiesOpen}
-          onClose={() => setIsSpritePropertiesOpen(false)}
-          state={state}
-          onUpdateSpriteProperties={projectActions.updateSpriteProperties}
-        />
-      )}
-
-      {isSlicesOpen && (
-        <SlicesDialog
-          isOpen={isSlicesOpen}
-          onClose={() => setIsSlicesOpen(false)}
-          state={state}
-          onUpdateSlices={projectActions.updateSlices}
-        />
-      )}
-
-      {isOutlineDialogOpen && (
-        <OutlineDialog
-          isOpen={isOutlineDialogOpen}
-          onClose={() => setIsOutlineDialogOpen(false)}
-          state={state}
-          onPreview={handleOutlinePreview}
-          onConfirm={handleOutlineConfirm}
-          onCancel={handleOutlineCancel}
-        />
-      )}
+      <AppDialogs
+        isCmdPaletteOpen={isCmdPaletteOpen}
+        onCloseCmdPalette={closeCmdPalette}
+        commands={isCmdPaletteOpen ? commands : EMPTY_COMMANDS}
+        isNewProjectDialogOpen={isNewProjectDialogOpen}
+        onCloseNewProjectDialog={closeNewProjectDialog}
+        onCreateProject={projectActions.createProject}
+        existingProjectCount={isNewProjectDialogOpen ? projects.length : 0}
+        isResizeCanvasDialogOpen={isResizeCanvasDialogOpen}
+        onCloseResizeCanvasDialog={closeResizeCanvasDialog}
+        onResizeCanvas={projectActions.resizeCanvas}
+        isReferenceImageDialogOpen={isReferenceImageDialogOpen}
+        onCloseReferenceImageDialog={closeReferenceImageDialog}
+        onSetReferenceImage={projectActions.setReferenceImage}
+        exportDialog={exportDialog}
+        onCloseExportDialog={closeExportDialog}
+        isSpritePropertiesOpen={isSpritePropertiesOpen}
+        onCloseSpriteProperties={closeSpriteProperties}
+        onUpdateSpriteProperties={projectActions.updateSpriteProperties}
+        isSlicesOpen={isSlicesOpen}
+        onCloseSlices={closeSlices}
+        onUpdateSlices={projectActions.updateSlices}
+        isOutlineDialogOpen={isOutlineDialogOpen}
+        onCloseOutlineDialog={closeOutlineDialog}
+        onOutlinePreview={handleOutlinePreview}
+        onOutlineConfirm={handleOutlineConfirm}
+        onOutlineCancel={handleOutlineCancel}
+        dialogState={hasStateDialogOpen ? state : null}
+      />
 
       {isMobile ? (
         <MobileLayout
@@ -342,6 +456,9 @@ export default function App() {
           recentProjects={recentProjects}
           history={history}
           historyIndex={historyIndex}
+          canUndo={canUndo}
+          canRedo={canRedo}
+          onOpenCommandPalette={openCmdPalette}
           activeTagPopover={tagPropertiesState}
           onCloseTagPopover={closeTagPopover}
           layerPropertiesState={layerPropertiesState}
