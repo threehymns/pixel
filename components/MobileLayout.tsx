@@ -83,7 +83,13 @@ interface MobileLayoutProps {
   state: ProjectState;
   updateState: (s: ProjectState | ((prev: ProjectState) => ProjectState), config?: any) => void;
   commands: Command[];
-  project: any;
+  projectActions: any;
+  activeProjectId: string;
+  recentProjects: any[];
+  history: any[];
+  historyIndex: number;
+  canUndo: boolean;
+  canRedo: boolean;
   canvasTools: any;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
   handleFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
@@ -110,11 +116,62 @@ const PANEL_TITLES: Record<Exclude<MobilePanel, null>, string> = {
   preview: 'Preview',
 };
 
+const MOBILE_TOOLS: { id: ToolType; icon: React.ReactNode; label: string }[] = [
+  { id: 'pencil', icon: <Pencil size={18} />, label: 'Pencil' },
+  { id: 'eraser', icon: <Eraser size={18} />, label: 'Eraser' },
+  { id: 'bucket', icon: <PaintBucket size={18} />, label: 'Fill' },
+  { id: 'eyedropper', icon: <Pipette size={18} />, label: 'Picker' },
+  { id: 'move', icon: <MousePointer2 size={18} />, label: 'Move' },
+  { id: 'rect', icon: <Square size={18} />, label: 'Rectangle' },
+  { id: 'filled-rect', icon: <Square size={18} className="fill-current" />, label: 'Filled Rect' },
+  { id: 'ellipse', icon: <Circle size={18} />, label: 'Ellipse' },
+  { id: 'filled-ellipse', icon: <Circle size={18} className="fill-current" />, label: 'Filled Ellipse' },
+  { id: 'line', icon: <Minus size={18} className="-rotate-45" />, label: 'Line' },
+  { id: 'smudge', icon: <Hand size={18} />, label: 'Smudge' },
+  { id: 'blur', icon: <Droplets size={18} />, label: 'Blur' },
+  { id: 'sharpen', icon: <Zap size={18} />, label: 'Sharpen' },
+  { id: 'color-replace', icon: <PaletteIcon size={18} />, label: 'Replace' },
+  { id: 'rect-select', icon: <BoxSelect size={18} />, label: 'Rect Select' },
+  { id: 'ellipse-select', icon: <Circle size={18} />, label: 'Ellipse Select' },
+  { id: 'lasso-select', icon: <Lasso size={18} />, label: 'Lasso Select' },
+  { id: 'poly-lasso-select', icon: <Scissors size={18} />, label: 'Poly Lasso' },
+  { id: 'magic-wand', icon: <Wand2 size={18} />, label: 'Magic Wand' },
+];
+
+const MOBILE_BRUSH_TOOLS: ToolType[] = [
+  'pencil',
+  'eraser',
+  'smudge',
+  'line',
+  'rect',
+  'filled-rect',
+  'ellipse',
+  'filled-ellipse',
+  'blur',
+  'sharpen',
+  'color-replace',
+];
+
+const MOBILE_SELECTION_MODES = [
+  { mode: 'replace', label: 'New', icon: <Square size={14} /> },
+  { mode: 'add', label: 'Add', icon: <Plus size={14} /> },
+  { mode: 'subtract', label: 'Subtract', icon: <Minus size={14} /> },
+  { mode: 'intersect', label: 'Intersect', icon: <Waves size={14} /> },
+] as const;
+
+const NOOP = () => {};
+
 export const MobileLayout: React.FC<MobileLayoutProps> = ({
   state,
   updateState,
   commands,
-  project,
+  projectActions,
+  activeProjectId,
+  recentProjects,
+  history,
+  historyIndex,
+  canUndo,
+  canRedo,
   canvasTools,
   fileInputRef,
   handleFileChange,
@@ -269,28 +326,6 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
       });
     }
   };
-
-  const tools: { id: ToolType; icon: React.ReactNode; label: string }[] = [
-    { id: 'pencil', icon: <Pencil size={18} />, label: 'Pencil' },
-    { id: 'eraser', icon: <Eraser size={18} />, label: 'Eraser' },
-    { id: 'bucket', icon: <PaintBucket size={18} />, label: 'Fill' },
-    { id: 'eyedropper', icon: <Pipette size={18} />, label: 'Picker' },
-    { id: 'move', icon: <MousePointer2 size={18} />, label: 'Move' },
-    { id: 'rect', icon: <Square size={18} />, label: 'Rectangle' },
-    { id: 'filled-rect', icon: <Square size={18} className="fill-current" />, label: 'Filled Rect' },
-    { id: 'ellipse', icon: <Circle size={18} />, label: 'Ellipse' },
-    { id: 'filled-ellipse', icon: <Circle size={18} className="fill-current" />, label: 'Filled Ellipse' },
-    { id: 'line', icon: <Minus size={18} className="-rotate-45" />, label: 'Line' },
-    { id: 'smudge', icon: <Hand size={18} />, label: 'Smudge' },
-    { id: 'blur', icon: <Droplets size={18} />, label: 'Blur' },
-    { id: 'sharpen', icon: <Zap size={18} />, label: 'Sharpen' },
-    { id: 'color-replace', icon: <PaletteIcon size={18} />, label: 'Replace' },
-    { id: 'rect-select', icon: <BoxSelect size={18} />, label: 'Rect Select' },
-    { id: 'ellipse-select', icon: <Circle size={18} />, label: 'Ellipse Select' },
-    { id: 'lasso-select', icon: <Lasso size={18} />, label: 'Lasso Select' },
-    { id: 'poly-lasso-select', icon: <Scissors size={18} />, label: 'Poly Lasso' },
-    { id: 'magic-wand', icon: <Wand2 size={18} />, label: 'Magic Wand' },
-  ];
 
   const closePanel = useCallback(() => {
     isClosingSheetRef.current = false;
@@ -681,19 +716,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
     };
   }, [activePanel, dismissPanel, sheetBackdropOpacity, sheetY, snapSheetBack]);
 
-  const isBrushTool = [
-    'pencil',
-    'eraser',
-    'smudge',
-    'line',
-    'rect',
-    'filled-rect',
-    'ellipse',
-    'filled-ellipse',
-    'blur',
-    'sharpen',
-    'color-replace',
-  ].includes(state.tool);
+  const isBrushTool = MOBILE_BRUSH_TOOLS.includes(state.tool);
   const isFillTool = state.tool === 'bucket';
   const isMagicWand = state.tool === 'magic-wand';
   const isSelectionTool = SELECTION_TOOLS.includes(state.tool);
@@ -718,9 +741,9 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
   }, [isSettingsExpanded, hasAnySettings, dragY, shouldReduceMotion]);
 
   const toggleSymmetryX = () =>
-    updateState({ ...state, symmetry: { ...state.symmetry, x: !state.symmetry.x } });
+    updateState((prev) => ({ ...prev, symmetry: { ...prev.symmetry, x: !prev.symmetry.x } }));
   const toggleSymmetryY = () =>
-    updateState({ ...state, symmetry: { ...state.symmetry, y: !state.symmetry.y } });
+    updateState((prev) => ({ ...prev, symmetry: { ...prev.symmetry, y: !prev.symmetry.y } }));
 
   const getSettingsSummary = () => {
     if (isBrushTool) return `${state.brushSize}px`;
@@ -731,17 +754,40 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
   };
 
   const handleSwapColors = () => {
-    const nextPrimary = state.secondaryColor;
-    const nextSecondary = state.primaryColor;
-    updateState({
-      ...state,
-      primaryColor: nextPrimary,
-      secondaryColor: nextSecondary,
-      ...(state.inkType === 'shading' ? { shades: [...state.shades].reverse() } : {}),
+    updateState((prev) => ({
+      ...prev,
+      primaryColor: prev.secondaryColor,
+      secondaryColor: prev.primaryColor,
+      ...(prev.inkType === 'shading' ? { shades: [...prev.shades].reverse() } : {}),
+    }));
+  };
+
+  const handleCanvasDrawStart = (pos: any) => {
+    setDragStartPos(pos);
+    canvasTools.handleDrawStart(pos, {
+      shift: false,
+      ctrl: false,
+      alt: false,
+      meta: false,
     });
   };
 
-  const { activeProjectId } = project;
+  const handleCanvasDrawEnd = () => {
+    setDragStartPos(null);
+    canvasTools.handleDrawEnd();
+  };
+
+  const handleCanvasSelectionUpdate = (sel: Set<number> | null) => {
+    updateState((prev) => ({ ...prev, selection: sel }), {
+      action: 'Select Area',
+      tool: projectActions.getActiveState().tool,
+    });
+  };
+
+  const handleCanvasZoom = (z: number) => {
+    updateState((prev) => ({ ...prev, zoom: z }));
+  };
+
   const isHome = activeProjectId === 'home';
 
   return (
@@ -760,11 +806,11 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
 
       {isHome ? (
         <Home
-          onCreateProject={project.createProject}
+          onCreateProject={projectActions.createProject}
           onImportProject={() => fileInputRef.current?.click()}
-          recentProjects={project.recentProjects}
-          onOpenRecent={project.loadRecentProject}
-          onClearRecent={project.clearRecents}
+          recentProjects={recentProjects}
+          onOpenRecent={projectActions.loadRecentProject}
+          onClearRecent={projectActions.clearRecents}
         />
       ) : (
         <>
@@ -783,7 +829,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
               <button
                 type="button"
                 onClick={() => commands.find((c) => c.id === 'edit.undo')?.perform()}
-                disabled={!project.canUndo}
+                disabled={!canUndo}
                 aria-label="Undo"
                 className="flex h-11 w-11 items-center justify-center rounded-md text-foreground transition-colors hover:bg-accent active:bg-accent disabled:opacity-35"
               >
@@ -793,7 +839,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
               <button
                 type="button"
                 onClick={() => commands.find((c) => c.id === 'edit.redo')?.perform()}
-                disabled={!project.canRedo}
+                disabled={!canRedo}
                 aria-label="Redo"
                 className="flex h-11 w-11 items-center justify-center rounded-md text-foreground transition-colors hover:bg-accent active:bg-accent disabled:opacity-35"
               >
@@ -812,7 +858,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
             <div className="flex items-center gap-0.5">
               <button
                 type="button"
-                onClick={() => updateState({ ...state, showGrid: !state.showGrid })}
+                onClick={() => updateState((prev) => ({ ...prev, showGrid: !prev.showGrid }))}
                 aria-label="Toggle Grid"
                 aria-pressed={state.showGrid}
                 className={`flex h-11 w-11 items-center justify-center rounded-md transition-colors ${
@@ -826,7 +872,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
 
               <button
                 type="button"
-                onClick={() => updateState({ ...state, onionSkin: !state.onionSkin })}
+                onClick={() => updateState((prev) => ({ ...prev, onionSkin: !prev.onionSkin }))}
                 aria-label="Toggle Onion Skin"
                 aria-pressed={state.onionSkin}
                 className={`flex h-11 w-11 items-center justify-center rounded-md transition-colors ${
@@ -850,7 +896,9 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
               <button
                 type="button"
                 onClick={() =>
-                  project.openExportDialog ? project.openExportDialog('gif') : project.downloadImage()
+                  projectActions.openExportDialog
+                    ? projectActions.openExportDialog('gif')
+                    : projectActions.downloadImage()
                 }
                 aria-label="Export"
                 className="ml-1 flex h-9 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground transition-opacity active:opacity-90"
@@ -886,30 +934,14 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
               fillContiguous={state.fillContiguous}
               rotationAlgorithm={state.rotationAlgorithm}
               referenceImage={state.referenceImage}
-              onDrawStart={(pos) => {
-                setDragStartPos(pos);
-                canvasTools.handleDrawStart(pos, {
-                  shift: false,
-                  ctrl: false,
-                  alt: false,
-                  meta: false,
-                });
-              }}
+              onDrawStart={handleCanvasDrawStart}
               onDraw={canvasTools.handleDraw}
-              onDrawEnd={() => {
-                setDragStartPos(null);
-                canvasTools.handleDrawEnd();
-              }}
-              onSelectionUpdate={(sel) =>
-                updateState((prev) => ({ ...prev, selection: sel }), {
-                  action: 'Select Area',
-                  tool: project.getActiveState().tool,
-                })
-              }
+              onDrawEnd={handleCanvasDrawEnd}
+              onSelectionUpdate={handleCanvasSelectionUpdate}
               onMovePixels={canvasTools.handleMovePixels}
               onRotatePixels={canvasTools.handleRotatePixels}
               onScalePixels={onScalePixels}
-              onZoom={(z) => updateState((prev) => ({ ...prev, zoom: z }))}
+              onZoom={handleCanvasZoom}
               onMousePosUpdate={setMousePos}
             />
 
@@ -938,7 +970,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                   <div className="flex items-center gap-1.5 rounded-lg border border-border-strong bg-card p-1 shadow-xl">
                     <button
                       type="button"
-                      onClick={() => project.openOutlineDialog && project.openOutlineDialog()}
+                      onClick={() => projectActions.openOutlineDialog && projectActions.openOutlineDialog()}
                       className="flex h-10 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground active:opacity-90"
                     >
                       <Sparkles size={14} />
@@ -946,7 +978,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => updateState({ ...state, selection: null }, { action: 'Deselect' })}
+                      onClick={() => updateState((prev) => ({ ...prev, selection: null }), { action: 'Deselect' })}
                       className="flex h-10 items-center gap-1.5 rounded-md px-3 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
                     >
                       <X size={14} />
@@ -1031,7 +1063,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                         min={1}
                         max={32}
                         value={state.brushSize}
-                        onValueChange={(val) => updateState({ ...state, brushSize: val })}
+                        onValueChange={(val) => updateState((prev) => ({ ...prev, brushSize: val }))}
                         aria-label="Brush size"
                         className="w-full"
                       />
@@ -1044,7 +1076,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                           value={state.brushShape}
                           onValueChange={(val) => {
                             if (val === 'square' || val === 'circle') {
-                              updateState({ ...state, brushShape: val });
+                              updateState((prev) => ({ ...prev, brushShape: val }));
                             }
                           }}
                         >
@@ -1097,10 +1129,10 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                       <button
                         type="button"
                         onClick={() =>
-                          updateState({
-                            ...state,
-                            inkType: state.inkType === 'shading' ? 'simple' : 'shading',
-                          })
+                          updateState((prev) => ({
+                            ...prev,
+                            inkType: prev.inkType === 'shading' ? 'simple' : 'shading',
+                          }))
                         }
                         className={`flex h-11 flex-1 items-center justify-center gap-1.5 rounded-md border text-xs font-medium transition-colors ${
                           state.inkType === 'shading'
@@ -1115,7 +1147,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                       {state.tool === 'pencil' && (
                         <button
                           type="button"
-                          onClick={() => updateState({ ...state, pixelPerfect: !state.pixelPerfect })}
+                          onClick={() => updateState((prev) => ({ ...prev, pixelPerfect: !prev.pixelPerfect }))}
                           className={`flex h-11 flex-1 items-center justify-center gap-1.5 rounded-md border text-xs font-medium transition-colors ${
                             state.pixelPerfect
                               ? 'border-primary bg-primary/15 text-primary'
@@ -1138,7 +1170,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                             value={state.smudgeMode || 'blend'}
                             onValueChange={(val) => {
                               if (val === 'blend' || val === 'push') {
-                                updateState({ ...state, smudgeMode: val });
+                                updateState((prev) => ({ ...prev, smudgeMode: val }));
                               }
                             }}
                             className="w-auto"
@@ -1168,7 +1200,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                             step={5}
                             value={Math.round((state.smudgeStrength ?? 0.7) * 100)}
                             onValueChange={(val) =>
-                              updateState({ ...state, smudgeStrength: val / 100 })
+                              updateState((prev) => ({ ...prev, smudgeStrength: val / 100 }))
                             }
                             aria-label="Smudge strength"
                             className="w-full"
@@ -1187,7 +1219,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                     <SegmentedControl
                       value={state.fillContiguous ? 'contiguous' : 'global'}
                       onValueChange={(val) =>
-                        updateState({ ...state, fillContiguous: val === 'contiguous' })
+                        updateState((prev) => ({ ...prev, fillContiguous: val === 'contiguous' }))
                       }
                     >
                       <SegmentedControlIndicator />
@@ -1210,7 +1242,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                       value={state.rotationAlgorithm}
                       onValueChange={(val) => {
                         if (val === 'nearest' || val === 'rotsprite') {
-                          updateState({ ...state, rotationAlgorithm: val });
+                          updateState((prev) => ({ ...prev, rotationAlgorithm: val }));
                         }
                       }}
                     >
@@ -1231,16 +1263,11 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                       Selection Mode
                     </span>
                     <div className="grid grid-cols-2 gap-1.5">
-                      {[
-                        { mode: 'replace', label: 'New', icon: <Square size={14} /> },
-                        { mode: 'add', label: 'Add', icon: <Plus size={14} /> },
-                        { mode: 'subtract', label: 'Subtract', icon: <Minus size={14} /> },
-                        { mode: 'intersect', label: 'Intersect', icon: <Waves size={14} /> },
-                      ].map((m) => (
+                      {MOBILE_SELECTION_MODES.map((m) => (
                         <button
                           key={m.mode}
                           type="button"
-                          onClick={() => updateState({ ...state, selectionMode: m.mode as any })}
+                          onClick={() => updateState((prev) => ({ ...prev, selectionMode: m.mode as any }))}
                           className={`flex h-11 items-center justify-center gap-1.5 rounded-md border text-xs font-medium transition-colors ${
                             state.selectionMode === m.mode
                               ? 'border-primary bg-primary text-primary-foreground'
@@ -1264,13 +1291,13 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
           <footer className="z-20 shrink-0 border-t border-border bg-card pb-safe">
             {/* Row 1: Full-Width Scrollable Tool Strip */}
             <div className="flex h-12 items-center gap-1 overflow-x-auto border-b border-border bg-background/40 px-2 no-scrollbar">
-              {tools.map((tool) => {
+              {MOBILE_TOOLS.map((tool) => {
                 const isActive = state.tool === tool.id;
                 return (
                   <button
                     key={tool.id}
                     type="button"
-                    onClick={() => updateState({ ...state, tool: tool.id })}
+                    onClick={() => updateState((prev) => ({ ...prev, tool: tool.id }))}
                     aria-label={tool.label}
                     aria-pressed={isActive}
                     className={`flex h-10 min-w-[44px] shrink-0 items-center justify-center rounded-md transition-colors ${
@@ -1311,7 +1338,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                   >
                     <ColorPicker
                       color={state.primaryColor}
-                      onChange={(c) => updateState({ ...state, primaryColor: c })}
+                      onChange={(c) => updateState((prev) => ({ ...prev, primaryColor: c }))}
                     />
                   </PopoverContent>
                 </Popover>
@@ -1335,7 +1362,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                   >
                     <ColorPicker
                       color={state.secondaryColor}
-                      onChange={(c) => updateState({ ...state, secondaryColor: c })}
+                      onChange={(c) => updateState((prev) => ({ ...prev, secondaryColor: c }))}
                     />
                   </PopoverContent>
                 </Popover>
@@ -1506,23 +1533,20 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                       primaryColor={state.primaryColor}
                       secondaryColor={state.secondaryColor}
                       onColorSelect={(c, p) =>
-                        p
-                          ? updateState({ ...state, primaryColor: c })
-                          : updateState({ ...state, secondaryColor: c })
+                        updateState((prev) => (p ? { ...prev, primaryColor: c } : { ...prev, secondaryColor: c }))
                       }
                       onAddColor={(c) => {
-                        const updatedLibrary = state.paletteLibrary.map((p) =>
-                          p.id === state.activePaletteId ? { ...p, colors: [...p.colors, c] } : p
-                        );
-                        updateState({
-                          ...state,
-                          paletteLibrary: updatedLibrary,
-                          palette: [...state.palette, c],
-                        });
+                        updateState((prev) => ({
+                          ...prev,
+                          paletteLibrary: prev.paletteLibrary.map((p) =>
+                            p.id === prev.activePaletteId ? { ...p, colors: [...p.colors, c] } : p
+                          ),
+                          palette: [...prev.palette, c],
+                        }));
                       }}
-                      onSelectPalette={project.selectPalette}
-                      onImportPalette={project.importPalette}
-                      onResizeStart={() => {}}
+                      onSelectPalette={projectActions.selectPalette}
+                      onImportPalette={projectActions.importPalette}
+                      onResizeStart={NOOP}
                       onColorsSelected={(selectedColors) => {
                         updateState((prev) => ({ ...prev, shades: selectedColors, inkType: 'shading' }));
                       }}
@@ -1543,19 +1567,19 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                       onSelectLayers={(ids, active) =>
                         updateState((prev) => ({ ...prev, selectedLayerIds: ids, activeLayerId: active }))
                       }
-                      onUpdateLayer={project.updateLayer}
-                      onAddLayer={project.addLayer}
-                      onAddGroupLayer={project.addGroupLayer}
-                      onGroupSelectedLayers={project.groupSelectedLayers}
-                      onUngroupSelectedLayers={project.ungroupSelectedLayers}
-                      onAddLayerToGroup={project.addLayerToGroup}
-                      onToggleCollapseAllGroups={project.toggleCollapseAllGroups}
-                      onDuplicateLayer={project.duplicateLayer}
-                      onDeleteLayer={project.deleteLayer}
-                      onDuplicateSelectedLayers={project.duplicateSelectedLayers}
-                      onDeleteSelectedLayers={project.deleteSelectedLayers}
-                      onReorderLayers={project.reorderLayers}
-                      onOpenLayerProperties={project.openLayerPropertiesDialog}
+                      onUpdateLayer={projectActions.updateLayer}
+                      onAddLayer={projectActions.addLayer}
+                      onAddGroupLayer={projectActions.addGroupLayer}
+                      onGroupSelectedLayers={projectActions.groupSelectedLayers}
+                      onUngroupSelectedLayers={projectActions.ungroupSelectedLayers}
+                      onAddLayerToGroup={projectActions.addLayerToGroup}
+                      onToggleCollapseAllGroups={projectActions.toggleCollapseAllGroups}
+                      onDuplicateLayer={projectActions.duplicateLayer}
+                      onDeleteLayer={projectActions.deleteLayer}
+                      onDuplicateSelectedLayers={projectActions.duplicateSelectedLayers}
+                      onDeleteSelectedLayers={projectActions.deleteSelectedLayers}
+                      onReorderLayers={projectActions.reorderLayers}
+                      onOpenLayerProperties={projectActions.openLayerPropertiesDialog}
                       layerPropertiesState={layerPropertiesState}
                       onCloseLayerProperties={onCloseLayerProperties}
                       className="h-full w-full flex-1"
@@ -1581,26 +1605,26 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                           ...(layerId ? { activeLayerId: layerId, selectedLayerIds: [layerId] } : {}),
                         }));
                       }}
-                      onAddFrame={project.addFrame}
-                      onDuplicateFrame={project.duplicateFrame}
-                      onDeleteFrame={project.deleteFrame}
-                      onDuplicateSelectedFrames={project.duplicateSelectedFrames}
-                      onDeleteSelectedFrames={project.deleteSelectedFrames}
-                      onInsertFrame={project.insertFrame}
-                      onTweenFrames={project.tweenFrames}
-                      onSetFrameDuration={project.setFrameDuration}
-                      onAddTag={project.addTag}
-                      onSaveTag={project.saveTag}
-                      onDeleteTag={project.deleteTag}
-                      onOpenTagProperties={project.openTagPropertiesDialog}
+                      onAddFrame={projectActions.addFrame}
+                      onDuplicateFrame={projectActions.duplicateFrame}
+                      onDeleteFrame={projectActions.deleteFrame}
+                      onDuplicateSelectedFrames={projectActions.duplicateSelectedFrames}
+                      onDeleteSelectedFrames={projectActions.deleteSelectedFrames}
+                      onInsertFrame={projectActions.insertFrame}
+                      onTweenFrames={projectActions.tweenFrames}
+                      onSetFrameDuration={projectActions.setFrameDuration}
+                      onAddTag={projectActions.addTag}
+                      onSaveTag={projectActions.saveTag}
+                      onDeleteTag={projectActions.deleteTag}
+                      onOpenTagProperties={projectActions.openTagPropertiesDialog}
                       activeTagPopover={activeTagPopover}
                       onCloseTagPopover={onCloseTagPopover}
                       onSelectLayer={(id) =>
                         updateState((prev) => ({ ...prev, activeLayerId: id, selectedLayerIds: [id] }))
                       }
-                      onAddLayer={project.addLayer}
-                      onAddGroupLayer={project.addGroupLayer}
-                      onUpdateLayer={project.updateLayer}
+                      onAddLayer={projectActions.addLayer}
+                      onAddGroupLayer={projectActions.addGroupLayer}
+                      onUpdateLayer={projectActions.updateLayer}
                       onToggleLayerVisibility={(id) =>
                         updateState((prev) => ({
                           ...prev,
@@ -1617,8 +1641,8 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                           ),
                         }))
                       }
-                      onReorderLayers={project.reorderLayers}
-                      onReorderFrames={project.reorderFrames}
+                      onReorderLayers={projectActions.reorderLayers}
+                      onReorderFrames={projectActions.reorderFrames}
                     />
                   </div>
                 )}
@@ -1626,9 +1650,9 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                 {activePanel === 'history' && (
                   <div className="flex h-[50dvh] min-h-[320px] flex-col">
                     <HistoryPanel
-                      history={project.history}
-                      historyIndex={project.historyIndex}
-                      onJumpToHistory={project.jumpToHistory}
+                      history={history}
+                      historyIndex={historyIndex}
+                      onJumpToHistory={projectActions.jumpToHistory}
                       className="h-full w-full flex-1"
                     />
                   </div>
@@ -1659,7 +1683,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                         <button
                           type="button"
                           onClick={() => {
-                            project.createProject();
+                            projectActions.createProject();
                             closePanel();
                           }}
                           className="flex min-h-[44px] items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2 text-left text-xs font-medium text-foreground transition-colors active:bg-accent"
@@ -1681,7 +1705,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                         <button
                           type="button"
                           onClick={() => {
-                            project.saveProject();
+                            projectActions.saveProject();
                             closePanel();
                           }}
                           className="flex min-h-[44px] items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2 text-left text-xs font-medium text-foreground transition-colors active:bg-accent"
@@ -1692,10 +1716,10 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                         <button
                           type="button"
                           onClick={() => {
-                            if (project.openExportDialog) {
-                              project.openExportDialog('gif');
+                            if (projectActions.openExportDialog) {
+                              projectActions.openExportDialog('gif');
                             } else {
-                              project.downloadImage();
+                              projectActions.downloadImage();
                             }
                             closePanel();
                           }}
@@ -1726,7 +1750,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                         <button
                           type="button"
                           onClick={() => {
-                            updateState({ ...state, tiled: !state.tiled });
+                            updateState((prev) => ({ ...prev, tiled: !prev.tiled }));
                             closePanel();
                           }}
                           className={`flex min-h-[44px] items-center gap-2.5 rounded-lg border px-3 py-2 text-left text-xs font-medium transition-colors ${
@@ -1753,7 +1777,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                           type="button"
                           onClick={() => {
                             closePanel();
-                            project.openOutlineDialog?.();
+                            projectActions.openOutlineDialog?.();
                           }}
                           className="flex min-h-[44px] items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2 text-left text-xs font-medium text-foreground transition-colors active:bg-accent"
                         >
@@ -1771,7 +1795,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                         <button
                           type="button"
                           onClick={() => {
-                            project.openSpritePropertiesDialog?.();
+                            projectActions.openSpritePropertiesDialog?.();
                             closePanel();
                           }}
                           className="flex min-h-[44px] items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2 text-left text-xs font-medium text-foreground transition-colors active:bg-accent"
@@ -1782,7 +1806,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                         <button
                           type="button"
                           onClick={() => {
-                            project.openSlicesDialog?.();
+                            projectActions.openSlicesDialog?.();
                             closePanel();
                           }}
                           className="flex min-h-[44px] items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2 text-left text-xs font-medium text-foreground transition-colors active:bg-accent"
@@ -1804,7 +1828,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                         <button
                           type="button"
                           onClick={() => {
-                            project.openLayerPropertiesDialog?.();
+                            projectActions.openLayerPropertiesDialog?.();
                             closePanel();
                           }}
                           className="flex min-h-[44px] items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2 text-left text-xs font-medium text-foreground transition-colors active:bg-accent"
@@ -1815,7 +1839,7 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                         <button
                           type="button"
                           onClick={() => {
-                            project.openTagPropertiesDialog?.();
+                            projectActions.openTagPropertiesDialog?.();
                             closePanel();
                           }}
                           className="col-span-2 flex min-h-[44px] items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2 text-left text-xs font-medium text-foreground transition-colors active:bg-accent"
@@ -1831,17 +1855,17 @@ export const MobileLayout: React.FC<MobileLayoutProps> = ({
                         Recent Projects
                       </span>
                       <div className="flex flex-col gap-1.5">
-                        {project.recentProjects.length === 0 ? (
+                        {recentProjects.length === 0 ? (
                           <div className="rounded-lg border border-dashed border-border p-5 text-center text-xs text-muted-foreground">
                             No recent projects
                           </div>
                         ) : (
-                          project.recentProjects.map((p: any) => (
+                          recentProjects.map((p: any) => (
                             <button
                               key={p.id}
                               type="button"
                               onClick={() => {
-                                project.loadRecentProject(p);
+                                projectActions.loadRecentProject(p);
                                 closePanel();
                               }}
                               className="flex min-h-[44px] w-full items-center justify-between rounded-lg border border-border bg-background px-3 py-2 text-left transition-colors active:bg-accent"

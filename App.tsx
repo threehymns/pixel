@@ -56,7 +56,20 @@ export default function App() {
   const project = useProject();
   const fileSystem = useFileSystem();
   const layout = useLayout();
-  const { state, updateState, getActiveState, getActiveHistoryInfo } = project;
+  const {
+    actions: projectActions,
+    state,
+    projects,
+    tabs,
+    activeProjectId,
+    recentProjects,
+    history,
+    historyIndex,
+    canUndo,
+    canRedo,
+  } = project;
+  const { actions: layoutActions } = layout;
+  const { updateState, getActiveState, getActiveHistoryInfo } = projectActions;
 
   const updateStateWithStatus = (newState: ProjectStateUpdater, config?: { action: string; tool?: any }) => {
     updateState(newState, config);
@@ -74,7 +87,7 @@ export default function App() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      project.loadProjectFromFile(file);
+      projectActions.loadProjectFromFile(file);
       setStatusMessage({ text: `Opened ${file.name}`, type: 'success' });
     }
     if (e.target) e.target.value = '';
@@ -94,8 +107,8 @@ export default function App() {
       updateState(originalState);
       return;
     }
-    const { history, historyIndex } = getActiveHistoryInfo();
-    const entry = history[historyIndex];
+    const { history: activeHistory, historyIndex: activeHistoryIdx } = getActiveHistoryInfo();
+    const entry = activeHistory[activeHistoryIdx];
     if (entry) {
       updateState(entry.state);
     }
@@ -126,25 +139,25 @@ export default function App() {
   const openCmdPalette = () => setIsCmdPaletteOpen(true);
 
   const handleUndoWithStatus = () => {
-    const { history, historyIndex } = getActiveHistoryInfo();
-    if (historyIndex > 0) {
-      const action = history[historyIndex].action;
-      project.undo();
+    const { history: activeHistory, historyIndex: activeHistoryIdx } = getActiveHistoryInfo();
+    if (activeHistoryIdx > 0) {
+      const action = activeHistory[activeHistoryIdx].action;
+      projectActions.undo();
       setStatusMessage({ text: `Undid ${action}`, type: 'info' });
     }
   };
 
   const handleRedoWithStatus = () => {
-    const { history, historyIndex } = getActiveHistoryInfo();
-    if (historyIndex < history.length - 1) {
-      const action = history[historyIndex + 1].action;
-      project.redo();
+    const { history: activeHistory, historyIndex: activeHistoryIdx } = getActiveHistoryInfo();
+    if (activeHistoryIdx < activeHistory.length - 1) {
+      const action = activeHistory[activeHistoryIdx + 1].action;
+      projectActions.redo();
       setStatusMessage({ text: `Redid ${action}`, type: 'info' });
     }
   };
 
   const handleSetColorModeWithStatus = (mode: ColorMode) => {
-    project.setColorMode(mode);
+    projectActions.setColorMode(mode);
     setStatusMessage({ text: `Changed to ${mode.toUpperCase()} mode`, type: 'info' });
   };
 
@@ -152,7 +165,9 @@ export default function App() {
     state,
     updateState: updateStateWithStatus,
     projectActions: {
-      ...project,
+      ...projectActions,
+      canUndo,
+      canRedo,
       undo: handleUndoWithStatus,
       redo: handleRedoWithStatus,
       setColorMode: handleSetColorModeWithStatus,
@@ -171,18 +186,18 @@ export default function App() {
     },
     fileSystemActions: fileSystem,
     uiActions: {
-      toggleFileTree: () => layout.togglePaneVisibility('file-tree'),
-      togglePalette: () => layout.togglePaneVisibility('palette'),
-      toggleTimeline: () => layout.togglePaneVisibility('timeline'),
-      toggleRightPanel: () => layout.togglePaneVisibility('layers'),
+      toggleFileTree: () => layoutActions.togglePaneVisibility('file-tree'),
+      togglePalette: () => layoutActions.togglePaneVisibility('palette'),
+      toggleTimeline: () => layoutActions.togglePaneVisibility('timeline'),
+      toggleRightPanel: () => layoutActions.togglePaneVisibility('layers'),
     },
     openCmdPalette,
     onOpenProject: handleOpenFile,
   });
 
   useKeyboard(commands, state, (newState) => updateState(newState), {
-    deleteSelectedLayers: project.deleteSelectedLayers,
-    deleteSelectedFrames: project.deleteSelectedFrames,
+    deleteSelectedLayers: projectActions.deleteSelectedLayers,
+    deleteSelectedFrames: projectActions.deleteSelectedFrames,
     handleMovePixels: canvasTools.handleMovePixels,
   });
 
@@ -202,8 +217,8 @@ export default function App() {
     }
   }
 
-  const projectForLayout = {
-    ...project,
+  const layoutProjectActions = {
+    ...projectActions,
     createProject: openNewProjectDialog,
     openSpritePropertiesDialog,
     openSlicesDialog,
@@ -230,8 +245,8 @@ export default function App() {
         <NewProjectDialog
           isOpen={isNewProjectDialogOpen}
           onClose={() => setIsNewProjectDialogOpen(false)}
-          onCreate={project.createProject}
-          existingProjectCount={project.projects.length}
+          onCreate={projectActions.createProject}
+          existingProjectCount={projects.length}
         />
       )}
 
@@ -241,7 +256,7 @@ export default function App() {
           onClose={() => setIsResizeCanvasDialogOpen(false)}
           currentWidth={state.width}
           currentHeight={state.height}
-          onResize={project.resizeCanvas}
+          onResize={projectActions.resizeCanvas}
         />
       )}
 
@@ -250,7 +265,7 @@ export default function App() {
           isOpen={isReferenceImageDialogOpen}
           onClose={() => setIsReferenceImageDialogOpen(false)}
           referenceImage={state.referenceImage}
-          onUpdate={project.setReferenceImage}
+          onUpdate={projectActions.setReferenceImage}
         />
       )}
 
@@ -268,7 +283,7 @@ export default function App() {
           isOpen={isSpritePropertiesOpen}
           onClose={() => setIsSpritePropertiesOpen(false)}
           state={state}
-          onUpdateSpriteProperties={project.updateSpriteProperties}
+          onUpdateSpriteProperties={projectActions.updateSpriteProperties}
         />
       )}
 
@@ -277,7 +292,7 @@ export default function App() {
           isOpen={isSlicesOpen}
           onClose={() => setIsSlicesOpen(false)}
           state={state}
-          onUpdateSlices={project.updateSlices}
+          onUpdateSlices={projectActions.updateSlices}
         />
       )}
 
@@ -297,7 +312,13 @@ export default function App() {
           state={state}
           updateState={updateState}
           commands={commands}
-          project={projectForLayout}
+          projectActions={layoutProjectActions}
+          activeProjectId={activeProjectId}
+          recentProjects={recentProjects}
+          history={history}
+          historyIndex={historyIndex}
+          canUndo={canUndo}
+          canRedo={canRedo}
           activeTagPopover={tagPropertiesState}
           onCloseTagPopover={closeTagPopover}
           layerPropertiesState={layerPropertiesState}
@@ -315,7 +336,12 @@ export default function App() {
           state={state}
           updateState={updateState}
           commands={commands}
-          project={projectForLayout}
+          projectActions={layoutProjectActions}
+          activeProjectId={activeProjectId}
+          tabs={tabs}
+          recentProjects={recentProjects}
+          history={history}
+          historyIndex={historyIndex}
           activeTagPopover={tagPropertiesState}
           onCloseTagPopover={closeTagPopover}
           layerPropertiesState={layerPropertiesState}
@@ -327,7 +353,13 @@ export default function App() {
           setMousePos={setCursorMousePos}
           setDragStartPos={setCursorDragStartPos}
           selectionSize={selectionSize}
-          layout={layout}
+          layoutActions={layoutActions}
+          slots={layout.slots}
+          floatingPanes={layout.floatingPanes}
+          draggedPane={layout.draggedPane}
+          dragOverSlot={layout.dragOverSlot}
+          dragOverIndex={layout.dragOverIndex}
+          dragOverZone={layout.dragOverZone}
           onScalePixels={canvasTools.handleScalePixels}
         />
       )}

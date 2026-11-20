@@ -740,7 +740,33 @@ export function useLayout() {
     setFloatingPanes([]);
   };
 
+  const actions = {
+    togglePaneVisibility,
+    handleDragStart,
+    handleDragOver,
+    handleDragOverBody,
+    handleDragOverTabBar,
+    handleDragOverTab,
+    handleDragEnd,
+    clearDragOverState,
+    handleDrop,
+    unsplitSlot,
+    splitGroup,
+    floatPane,
+    updateFloatingPanePosition,
+    handleSelectTab,
+    handleClosePane,
+    handleCloseOtherPanesInGroup,
+    handleCloseAllPanesInSlot,
+    handleAddPaneToGroup,
+    handleAddPaneToSlot,
+    setSlotVisibility,
+    setSlots,
+    resetToDefault,
+  };
+
   return {
+    actions,
     slots,
     floatingPanes,
     draggedPane,

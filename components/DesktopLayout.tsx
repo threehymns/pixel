@@ -136,7 +136,12 @@ interface DesktopLayoutProps {
   state: ProjectState;
   updateState: (s: ProjectStateUpdater, config?: any) => void;
   commands: any[];
-  project: any;
+  projectActions: any;
+  activeProjectId: string;
+  tabs: any[];
+  recentProjects: any[];
+  history: any[];
+  historyIndex: number;
   canvasTools: any;
   fileSystem: any;
   handleFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
@@ -147,7 +152,13 @@ interface DesktopLayoutProps {
   setDragStartPos: (pos: any) => void;
   onScalePixels: (selection: Set<number>, srcBox: any, destBox: any) => void;
   selectionSize: any;
-  layout: any;
+  layoutActions: any;
+  slots: any;
+  floatingPanes: any[];
+  draggedPane: { paneId: string; sourceSlot: string; sourceGroupId?: string } | null;
+  dragOverSlot: string | null;
+  dragOverIndex: { slotId: string; groupId?: string; index: number } | null;
+  dragOverZone: { slotId: string; groupId?: string; position: DragZonePosition } | null;
   activeTagPopover?: any;
   onCloseTagPopover?: () => void;
   layerPropertiesState?: { isOpen: boolean; layer: any };
@@ -569,10 +580,422 @@ const ToolRail: React.FC<ToolRailProps> = ({
   );
 };
 
+interface ToolOptionsBarProps {
+  tool: ToolType;
+  inkType: 'simple' | 'shading';
+  shades: string[];
+  primaryColor: string;
+  symmetryX: boolean;
+  symmetryY: boolean;
+  brushSize: number;
+  brushShape: 'square' | 'circle';
+  pixelPerfect: boolean;
+  smudgeMode?: 'blend' | 'push';
+  smudgeStrength?: number;
+  fillContiguous: boolean;
+  rotationAlgorithm: 'nearest' | 'rotsprite';
+  showGrid: boolean;
+  onionSkin: boolean;
+  isPreviewVisible: boolean;
+  commands: any[];
+  updateState: (s: ProjectStateUpdater, config?: any) => void;
+  togglePaneVisibility: (paneId: string) => void;
+}
+
+const ToolOptionsBar: React.FC<ToolOptionsBarProps> = ({
+  tool,
+  inkType,
+  shades,
+  primaryColor,
+  symmetryX,
+  symmetryY,
+  brushSize,
+  brushShape,
+  pixelPerfect,
+  smudgeMode,
+  smudgeStrength,
+  fillContiguous,
+  rotationAlgorithm,
+  showGrid,
+  onionSkin,
+  isPreviewVisible,
+  commands,
+  updateState,
+  togglePaneVisibility,
+}) => {
+  const removeShade = (index: number) => {
+    updateState((prev) => {
+      const newShades = [...prev.shades];
+      newShades.splice(index, 1);
+      return { ...prev, shades: newShades };
+    });
+  };
+
+  const addShade = (color: string) => {
+    updateState((prev) =>
+      prev.shades.includes(color) ? prev : { ...prev, shades: [...prev.shades, color] }
+    );
+  };
+
+  return (
+    <div className="flex h-10 shrink-0 items-center gap-2 overflow-x-auto border-b border-border bg-background/80 px-2 text-xs no-scrollbar">
+      <div className="flex shrink-0 items-center gap-1 border-r border-border pr-2">
+        <ToolButton
+          active={false}
+          onClick={() => commands.find((c) => c.id === 'edit.undo')?.perform()}
+          icon={<Undo size={15} />}
+          label="Undo"
+          shortcut="Ctrl+Z"
+          tooltipSide="bottom"
+        />
+        <ToolButton
+          active={false}
+          onClick={() => commands.find((c) => c.id === 'edit.redo')?.perform()}
+          icon={<Redo size={15} />}
+          label="Redo"
+          shortcut="Ctrl+Y"
+          tooltipSide="bottom"
+        />
+      </div>
+
+      <div className="flex min-w-max flex-1 items-center gap-3 px-1">
+        <SegmentedControl
+          value={inkType}
+          onValueChange={(val) => {
+            if (val === 'simple' || val === 'shading') {
+              updateState((prev) => ({ ...prev, inkType: val }));
+            }
+          }}
+          className="w-auto shrink-0"
+        >
+          <SegmentedControlIndicator />
+          <SegmentedControlItem value="simple" className="px-2.5 py-0.5 text-[11px]">
+            Simple
+          </SegmentedControlItem>
+          <SegmentedControlItem value="shading" className="px-2.5 py-0.5 text-[11px]">
+            <Droplets size={11} />
+            Shading
+          </SegmentedControlItem>
+        </SegmentedControl>
+
+        {inkType === 'shading' && (
+          <div className="flex items-center gap-1.5 rounded-md border border-border bg-card px-2 py-1">
+            <span className="text-[11px] font-medium text-muted-foreground">Shades</span>
+            <div className="flex h-5 min-w-[72px] items-center gap-0.5 rounded-sm border border-border bg-background p-0.5">
+              {shades.map((color, idx) => (
+                <Tooltip key={`${color}-${idx}`}>
+                  <TooltipTrigger
+                    render={
+                      <div
+                        draggable
+                        onDragStart={(e) => {
+                          e.stopPropagation();
+                          e.dataTransfer.setData('text/plain', idx.toString());
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const fromIdx = parseInt(e.dataTransfer.getData('text/plain'), 10);
+                          if (!isNaN(fromIdx) && fromIdx !== idx) {
+                            updateState((prev) => {
+                              const newShades = [...prev.shades];
+                              const [moved] = newShades.splice(fromIdx, 1);
+                              newShades.splice(idx, 0, moved);
+                              return { ...prev, shades: newShades };
+                            });
+                          }
+                        }}
+                        className="group relative h-full w-4 cursor-grab border border-border/40 active:cursor-grabbing"
+                        style={{ backgroundColor: color }}
+                      />
+                    }
+                  >
+                    <button
+                      type="button"
+                      aria-label={`Remove shade ${color}`}
+                      onClick={() => removeShade(idx)}
+                      className="absolute -top-1 -right-1 z-20 flex h-3 w-3 items-center justify-center rounded-full bg-destructive text-destructive-foreground opacity-0 transition-opacity group-hover:opacity-100"
+                    >
+                      <X size={8} />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{`Step ${idx + 1}: ${color}`}</TooltipContent>
+                </Tooltip>
+              ))}
+              {shades.length < 16 && (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        aria-label="Add primary color to shade ramp"
+                        onClick={() => addShade(primaryColor)}
+                        className="ml-0.5 flex h-full w-4 items-center justify-center rounded-xs border border-dashed border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                      />
+                    }
+                  >
+                    <Plus size={10} />
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Add Primary Color</TooltipContent>
+                </Tooltip>
+              )}
+            </div>
+            <Popover>
+              <PopoverTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label="Shade ramp options"
+                    className="flex h-5 w-5 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  />
+                }
+              >
+                <ChevronDown size={12} />
+              </PopoverTrigger>
+              <PopoverContent align="end" className="flex w-36 flex-col gap-0.5 p-1">
+                <PopoverClose
+                  render={
+                    <button
+                      type="button"
+                      onClick={() =>
+                        updateState((prev) => ({ ...prev, shades: [...prev.shades].reverse() }))
+                      }
+                      disabled={shades.length < 2}
+                      className="w-full rounded-sm px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-accent disabled:opacity-45"
+                    />
+                  }
+                >
+                  Reverse Ramp
+                </PopoverClose>
+                <PopoverClose
+                  render={
+                    <button
+                      type="button"
+                      onClick={() => updateState((prev) => ({ ...prev, shades: [] }))}
+                      className="w-full rounded-sm px-2 py-1.5 text-left text-xs text-destructive transition-colors hover:bg-destructive/15"
+                    />
+                  }
+                >
+                  Clear Ramp
+                </PopoverClose>
+              </PopoverContent>
+            </Popover>
+          </div>
+        )}
+
+        <div className="h-4 w-px bg-border" />
+
+        <div className="flex shrink-0 items-center gap-1.5">
+          <span className="text-[11px] font-medium text-muted-foreground">Symmetry</span>
+          <div className="flex items-center gap-0.5 rounded-md border border-border bg-card p-0.5">
+            <ToolButton
+              active={symmetryX}
+              onClick={() =>
+                updateState((prev) => ({
+                  ...prev,
+                  symmetry: { ...prev.symmetry, x: !prev.symmetry.x },
+                }))
+              }
+              icon={<FlipHorizontal size={14} />}
+              label="Horizontal Symmetry"
+              tooltipSide="bottom"
+            />
+            <ToolButton
+              active={symmetryY}
+              onClick={() =>
+                updateState((prev) => ({
+                  ...prev,
+                  symmetry: { ...prev.symmetry, y: !prev.symmetry.y },
+                }))
+              }
+              icon={<FlipVertical size={14} />}
+              label="Vertical Symmetry"
+              tooltipSide="bottom"
+            />
+          </div>
+        </div>
+
+        {BRUSH_OPTION_TOOLS.includes(tool) && (
+          <>
+            <div className="h-4 w-px bg-border" />
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-medium text-muted-foreground">Size</span>
+              <CustomSlider
+                min={1}
+                max={10}
+                value={brushSize}
+                onValueChange={(val) => updateState((prev) => ({ ...prev, brushSize: val }))}
+                aria-label="Brush size"
+                className="w-24"
+              />
+              <span className="w-5 text-right font-mono text-[11px] text-foreground tabular-nums">
+                {brushSize}px
+              </span>
+            </div>
+
+            <div className="flex items-center gap-0.5 rounded-md border border-border bg-card p-0.5">
+              <ToolButton
+                active={brushShape === 'square'}
+                onClick={() => updateState((prev) => ({ ...prev, brushShape: 'square' }))}
+                icon={<Square size={14} />}
+                label="Square Brush"
+                tooltipSide="bottom"
+              />
+              <ToolButton
+                active={brushShape === 'circle'}
+                onClick={() => updateState((prev) => ({ ...prev, brushShape: 'circle' }))}
+                icon={<Circle size={14} />}
+                label="Circle Brush"
+                tooltipSide="bottom"
+              />
+            </div>
+
+            {tool === 'pencil' && inkType === 'simple' && (
+              <label
+                htmlFor="pixelPerfect"
+                className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+              >
+                <CustomCheckbox
+                  id="pixelPerfect"
+                  checked={pixelPerfect}
+                  onCheckedChange={(checked) =>
+                    updateState((prev) => ({ ...prev, pixelPerfect: !!checked }))
+                  }
+                />
+                <span>Pixel Perfect</span>
+              </label>
+            )}
+
+            {tool === 'smudge' && (
+              <>
+                <div className="h-4 w-px bg-border" />
+                <SegmentedControl
+                  value={smudgeMode || 'blend'}
+                  onValueChange={(val) => {
+                    if (val === 'blend' || val === 'push') {
+                      updateState((prev) => ({ ...prev, smudgeMode: val }));
+                    }
+                  }}
+                  className="w-auto shrink-0"
+                >
+                  <SegmentedControlIndicator />
+                  <SegmentedControlItem value="blend" className="px-2 py-0.5 text-[11px]">
+                    <Droplets size={11} />
+                    Blend
+                  </SegmentedControlItem>
+                  <SegmentedControlItem value="push" className="px-2 py-0.5 text-[11px]">
+                    <Hand size={11} />
+                    Push
+                  </SegmentedControlItem>
+                </SegmentedControl>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-medium text-muted-foreground">Strength</span>
+                  <CustomSlider
+                    min={10}
+                    max={100}
+                    step={5}
+                    value={Math.round((smudgeStrength ?? 0.7) * 100)}
+                    onValueChange={(val) =>
+                      updateState((prev) => ({ ...prev, smudgeStrength: val / 100 }))
+                    }
+                    aria-label="Smudge strength"
+                    className="w-20"
+                  />
+                  <span className="w-8 font-mono text-[11px] text-foreground tabular-nums">
+                    {Math.round((smudgeStrength ?? 0.7) * 100)}%
+                  </span>
+                </div>
+              </>
+            )}
+          </>
+        )}
+
+        {(tool === 'bucket' || tool === 'magic-wand') && (
+          <>
+            <div className="h-4 w-px bg-border" />
+            <label
+              htmlFor="contiguous"
+              className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              <CustomCheckbox
+                id="contiguous"
+                checked={fillContiguous}
+                onCheckedChange={(checked) =>
+                  updateState((prev) => ({ ...prev, fillContiguous: !!checked }))
+                }
+              />
+              <span>Contiguous</span>
+            </label>
+          </>
+        )}
+
+        {tool === 'move' && (
+          <>
+            <div className="h-4 w-px bg-border" />
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-medium text-muted-foreground">Rotation</span>
+              <SegmentedControl
+                value={rotationAlgorithm}
+                onValueChange={(val) => {
+                  if (val === 'nearest' || val === 'rotsprite') {
+                    updateState((prev) => ({ ...prev, rotationAlgorithm: val }));
+                  }
+                }}
+                className="w-auto shrink-0"
+              >
+                <SegmentedControlIndicator />
+                <SegmentedControlItem value="nearest" className="px-2.5 py-0.5 text-[11px]">
+                  Nearest
+                </SegmentedControlItem>
+                <SegmentedControlItem value="rotsprite" className="px-2.5 py-0.5 text-[11px]">
+                  RotSprite
+                </SegmentedControlItem>
+              </SegmentedControl>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="flex shrink-0 items-center gap-1 border-l border-border pl-2">
+        <ToolButton
+          active={isPreviewVisible}
+          onClick={() => togglePaneVisibility('preview')}
+          icon={<PlaySquare size={15} />}
+          label="Toggle Preview"
+          tooltipSide="bottom"
+        />
+        <ToolButton
+          active={showGrid}
+          onClick={() => updateState((prev) => ({ ...prev, showGrid: !prev.showGrid }))}
+          icon={<Grid size={15} />}
+          label="Toggle Grid"
+          shortcut="Shift+G"
+          tooltipSide="bottom"
+        />
+        <ToolButton
+          active={onionSkin}
+          onClick={() => updateState((prev) => ({ ...prev, onionSkin: !prev.onionSkin }))}
+          icon={<Eye size={15} />}
+          label="Onion Skin"
+          shortcut="Alt+O"
+          tooltipSide="bottom"
+        />
+      </div>
+    </div>
+  );
+};
+
 interface DockPaneContentProps {
   paneId: string;
   state: ProjectState;
-  project: any;
+  projectActions: any;
+  history: any[];
+  historyIndex: number;
   fileSystem: any;
   layerPropertiesState?: { isOpen: boolean; layer: any };
   onCloseLayerProperties?: () => void;
@@ -593,7 +1016,9 @@ interface DockPaneContentProps {
 const DockPaneContent: React.FC<DockPaneContentProps> = ({
   paneId,
   state,
-  project,
+  projectActions,
+  history,
+  historyIndex,
   fileSystem,
   layerPropertiesState,
   onCloseLayerProperties,
@@ -616,7 +1041,7 @@ const DockPaneContent: React.FC<DockPaneContentProps> = ({
         <FileTree
           rootHandle={fileSystem.rootHandle}
           onOpenFolder={fileSystem.openFolder}
-          onFileOpen={project.loadProjectFromFile}
+          onFileOpen={projectActions.loadProjectFromFile}
           onResizeStart={NOOP}
           width={0}
         />
@@ -632,8 +1057,8 @@ const DockPaneContent: React.FC<DockPaneContentProps> = ({
           secondaryColor={state.secondaryColor}
           onColorSelect={onPaletteColorSelect}
           onAddColor={onPaletteAddColor}
-          onSelectPalette={project.selectPalette}
-          onImportPalette={project.importPalette}
+          onSelectPalette={projectActions.selectPalette}
+          onImportPalette={projectActions.importPalette}
           onResizeStart={NOOP}
           onColorsSelected={onPaletteColorsSelected}
         />
@@ -649,19 +1074,19 @@ const DockPaneContent: React.FC<DockPaneContentProps> = ({
           width={state.width}
           height={state.height}
           onSelectLayers={onSelectLayers}
-          onUpdateLayer={project.updateLayer}
-          onAddLayer={project.addLayer}
-          onAddGroupLayer={project.addGroupLayer}
-          onGroupSelectedLayers={project.groupSelectedLayers}
-          onUngroupSelectedLayers={project.ungroupSelectedLayers}
-          onAddLayerToGroup={project.addLayerToGroup}
-          onToggleCollapseAllGroups={project.toggleCollapseAllGroups}
-          onDuplicateLayer={project.duplicateLayer}
-          onDeleteLayer={project.deleteLayer}
-          onDuplicateSelectedLayers={project.duplicateSelectedLayers}
-          onDeleteSelectedLayers={project.deleteSelectedLayers}
-          onReorderLayers={project.reorderLayers}
-          onOpenLayerProperties={project.openLayerPropertiesDialog}
+          onUpdateLayer={projectActions.updateLayer}
+          onAddLayer={projectActions.addLayer}
+          onAddGroupLayer={projectActions.addGroupLayer}
+          onGroupSelectedLayers={projectActions.groupSelectedLayers}
+          onUngroupSelectedLayers={projectActions.ungroupSelectedLayers}
+          onAddLayerToGroup={projectActions.addLayerToGroup}
+          onToggleCollapseAllGroups={projectActions.toggleCollapseAllGroups}
+          onDuplicateLayer={projectActions.duplicateLayer}
+          onDeleteLayer={projectActions.deleteLayer}
+          onDuplicateSelectedLayers={projectActions.duplicateSelectedLayers}
+          onDeleteSelectedLayers={projectActions.deleteSelectedLayers}
+          onReorderLayers={projectActions.reorderLayers}
+          onOpenLayerProperties={projectActions.openLayerPropertiesDialog}
           layerPropertiesState={layerPropertiesState}
           onCloseLayerProperties={onCloseLayerProperties}
           className="h-full w-full flex-1"
@@ -670,9 +1095,9 @@ const DockPaneContent: React.FC<DockPaneContentProps> = ({
     case 'history':
       return (
         <HistoryPanel
-          history={project.history}
-          historyIndex={project.historyIndex}
-          onJumpToHistory={project.jumpToHistory}
+          history={history}
+          historyIndex={historyIndex}
+          onJumpToHistory={projectActions.jumpToHistory}
           className="h-full w-full flex-1"
         />
       );
@@ -687,28 +1112,28 @@ const DockPaneContent: React.FC<DockPaneContentProps> = ({
           selectedLayerIds={state.selectedLayerIds}
           tags={state.tags}
           onSelectFrames={onSelectFrames}
-          onAddFrame={project.addFrame}
-          onDuplicateFrame={project.duplicateFrame}
-          onDeleteFrame={project.deleteFrame}
-          onDuplicateSelectedFrames={project.duplicateSelectedFrames}
-          onDeleteSelectedFrames={project.deleteSelectedFrames}
-          onInsertFrame={project.insertFrame}
-          onTweenFrames={project.tweenFrames}
-          onSetFrameDuration={project.setFrameDuration}
-          onAddTag={project.addTag}
-          onSaveTag={project.saveTag}
-          onDeleteTag={project.deleteTag}
-          onOpenTagProperties={project.openTagPropertiesDialog}
+          onAddFrame={projectActions.addFrame}
+          onDuplicateFrame={projectActions.duplicateFrame}
+          onDeleteFrame={projectActions.deleteFrame}
+          onDuplicateSelectedFrames={projectActions.duplicateSelectedFrames}
+          onDeleteSelectedFrames={projectActions.deleteSelectedFrames}
+          onInsertFrame={projectActions.insertFrame}
+          onTweenFrames={projectActions.tweenFrames}
+          onSetFrameDuration={projectActions.setFrameDuration}
+          onAddTag={projectActions.addTag}
+          onSaveTag={projectActions.saveTag}
+          onDeleteTag={projectActions.deleteTag}
+          onOpenTagProperties={projectActions.openTagPropertiesDialog}
           activeTagPopover={activeTagPopover}
           onCloseTagPopover={onCloseTagPopover}
           onSelectLayer={onTimelineSelectLayer}
-          onAddLayer={project.addLayer}
-          onAddGroupLayer={project.addGroupLayer}
-          onUpdateLayer={project.updateLayer}
+          onAddLayer={projectActions.addLayer}
+          onAddGroupLayer={projectActions.addGroupLayer}
+          onUpdateLayer={projectActions.updateLayer}
           onToggleLayerVisibility={onTimelineToggleLayerVisibility}
           onToggleLayerLock={onTimelineToggleLayerLock}
-          onReorderLayers={project.reorderLayers}
-          onReorderFrames={project.reorderFrames}
+          onReorderLayers={projectActions.reorderLayers}
+          onReorderFrames={projectActions.reorderFrames}
         />
       );
     case 'preview':
@@ -728,6 +1153,472 @@ const DockPaneContent: React.FC<DockPaneContentProps> = ({
     default:
       return null;
   }
+};
+
+interface DockGroupContainerProps {
+  slotId: 'left' | 'right' | 'bottom';
+  group: { id: string; panes: string[]; activePaneId: string };
+  canUnsplit: boolean;
+  closedPanes: string[];
+  hasDraggedPane: boolean;
+  hoverPosition: DragZonePosition | null;
+  indicatorLeft: number | null;
+  layoutActions: any;
+  tabMenu: ReturnType<typeof createMenuController<TabMenuPayload>>;
+  onRegisterTabListRef: (key: string, el: HTMLDivElement | null) => void;
+  state: ProjectState;
+  projectActions: any;
+  history: any[];
+  historyIndex: number;
+  fileSystem: any;
+  layerPropertiesState?: { isOpen: boolean; layer: any };
+  onCloseLayerProperties?: () => void;
+  activeTagPopover?: any;
+  onCloseTagPopover?: () => void;
+  onPaletteColorSelect: (c: string, isPrimary: boolean) => void;
+  onPaletteAddColor: (c: string) => void;
+  onPaletteColorsSelected: (selectedColors: string[]) => void;
+  onSelectLayers: (ids: string[], active: string) => void;
+  onSelectFrames: (indices: number[], active: number, layerId?: string) => void;
+  onTimelineSelectLayer: (id: string) => void;
+  onTimelineToggleLayerVisibility: (id: string) => void;
+  onTimelineToggleLayerLock: (id: string) => void;
+  onClosePreview: () => void;
+}
+
+const DockGroupContainer: React.FC<DockGroupContainerProps> = ({
+  slotId,
+  group,
+  canUnsplit,
+  closedPanes,
+  hasDraggedPane,
+  hoverPosition,
+  indicatorLeft,
+  layoutActions,
+  tabMenu,
+  onRegisterTabListRef,
+  state,
+  projectActions,
+  history,
+  historyIndex,
+  fileSystem,
+  layerPropertiesState,
+  onCloseLayerProperties,
+  activeTagPopover,
+  onCloseTagPopover,
+  onPaletteColorSelect,
+  onPaletteAddColor,
+  onPaletteColorsSelected,
+  onSelectLayers,
+  onSelectFrames,
+  onTimelineSelectLayer,
+  onTimelineToggleLayerVisibility,
+  onTimelineToggleLayerLock,
+  onClosePreview,
+}) => {
+  const isBodyTopHover = hoverPosition === 'body-top';
+  const isBodyBottomHover = hoverPosition === 'body-bottom';
+  const isBodyLeftHover = hoverPosition === 'body-left';
+  const isBodyRightHover = hoverPosition === 'body-right';
+
+  return (
+    <div
+      className={`relative flex h-full w-full flex-col overflow-hidden border border-border bg-card select-none ${
+        isBodyTopHover || isBodyBottomHover || isBodyLeftHover || isBodyRightHover
+          ? 'ring-2 ring-primary ring-inset'
+          : ''
+      }`}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!hasDraggedPane) return;
+
+        const rect = e.currentTarget.getBoundingClientRect();
+        const relX = e.clientX - rect.left;
+        const relY = e.clientY - rect.top;
+
+        let pos: DragZonePosition = 'body-top';
+        if (relY > rect.height * 0.75) {
+          pos = 'body-bottom';
+        } else if (relX > rect.width * 0.75) {
+          pos = 'body-right';
+        } else if (relX < rect.width * 0.25) {
+          pos = 'body-left';
+        }
+        layoutActions.handleDragOverBody(slotId, group.id, pos);
+      }}
+      onDragLeave={(e) => {
+        if (!hasDraggedPane) return;
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+          layoutActions.clearDragOverState();
+        }
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        layoutActions.handleDrop(e, slotId, group.id);
+      }}
+    >
+      <div className="relative flex h-7 shrink-0 items-center justify-between overflow-hidden border-b border-border bg-background/60 px-1 select-none">
+        <div
+          ref={(el) => onRegisterTabListRef(`${slotId}-${group.id}`, el)}
+          className="relative flex h-full max-w-[85%] items-center gap-0.5 overflow-x-auto no-scrollbar"
+          onDragOver={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            layoutActions.handleDragOverTabBar(e, slotId, group.id);
+          }}
+        >
+          {group.panes.map((paneId: string, index: number) => {
+            const metadata = PANE_METADATA[paneId] || { title: paneId, icon: null };
+            const isActive = group.activePaneId === paneId;
+
+            return (
+              <div
+                key={paneId}
+                data-tab-id={paneId}
+                draggable
+                onDragStart={(e) => layoutActions.handleDragStart(e, paneId, slotId, group.id)}
+                onDragOver={(e) => layoutActions.handleDragOverTab(e, paneId, slotId, group.id, index)}
+                onDragEnd={layoutActions.handleDragEnd}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  tabMenu.open({
+                    payload: { paneId, slotId, groupId: group.id },
+                    anchor: { x: e.clientX, y: e.clientY },
+                  });
+                }}
+                onClick={() => layoutActions.handleSelectTab(slotId, group.id, paneId)}
+                title={`${metadata.title} (Right-click for options)`}
+                className={`group relative flex h-full cursor-default items-center gap-1.5 border-t-2 border-r border-r-border/60 px-2 text-[11px] font-medium transition-colors select-none ${
+                  isActive
+                    ? 'border-t-primary bg-card text-foreground'
+                    : 'border-t-transparent text-muted-foreground hover:bg-accent/50 hover:text-foreground'
+                }`}
+              >
+                <span className="pointer-events-none flex items-center text-muted-foreground">
+                  {metadata.icon}
+                </span>
+                <span className="pointer-events-none max-w-[95px] truncate">
+                  {metadata.title}
+                </span>
+                <button
+                  type="button"
+                  aria-label={`Close ${metadata.title}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    layoutActions.handleClosePane(paneId);
+                  }}
+                  className="ml-0.5 flex h-4 w-4 items-center justify-center rounded-sm text-muted-foreground/60 opacity-60 transition-colors hover:bg-accent hover:text-foreground hover:opacity-100"
+                >
+                  <X size={11} />
+                </button>
+              </div>
+            );
+          })}
+
+          {indicatorLeft !== null && (
+            <div
+              className="pointer-events-none absolute top-1 bottom-1 z-30 w-0.5 -translate-x-1/2 rounded-full bg-primary"
+              style={{ left: `${indicatorLeft}px` }}
+            />
+          )}
+        </div>
+
+        <div className="flex shrink-0 items-center gap-0.5 px-1">
+          {closedPanes.length > 0 && (
+            <Popover>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <PopoverTrigger
+                      render={
+                        <button
+                          type="button"
+                          aria-label="Add pane to group"
+                          className="flex h-5 w-5 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                        />
+                      }
+                    />
+                  }
+                >
+                  <Plus size={12} />
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Add Pane</TooltipContent>
+              </Tooltip>
+              <PopoverContent align="end" className="flex w-44 flex-col gap-0.5 p-1">
+                <div className="px-2 py-1 text-[11px] font-semibold text-muted-foreground">
+                  Add Pane
+                </div>
+                <div className="my-0.5 h-px bg-border" />
+                {closedPanes.map((paneId) => (
+                  <PopoverClose
+                    key={paneId}
+                    render={
+                      <button
+                        type="button"
+                        onClick={() => layoutActions.handleAddPaneToGroup(slotId, group.id, paneId)}
+                        className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-accent"
+                      />
+                    }
+                  >
+                    <span className="text-muted-foreground">{PANE_METADATA[paneId]?.icon}</span>
+                    <span>{PANE_METADATA[paneId]?.title}</span>
+                  </PopoverClose>
+                ))}
+              </PopoverContent>
+            </Popover>
+          )}
+
+          {canUnsplit && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label="Unsplit dock"
+                    onClick={() => layoutActions.unsplitSlot(slotId)}
+                    className="flex h-5 w-5 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  />
+                }
+              >
+                <ArrowRightLeft size={11} />
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Unsplit Dock</TooltipContent>
+            </Tooltip>
+          )}
+
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label="Collapse dock"
+                  onClick={() => layoutActions.setSlotVisibility(slotId, false)}
+                  className="flex h-5 w-5 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                />
+              }
+            >
+              <Minus size={11} />
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Collapse Dock</TooltipContent>
+          </Tooltip>
+        </div>
+      </div>
+
+      <div className="relative min-h-0 flex-1 overflow-hidden bg-card">
+        <DockPaneContent
+          paneId={group.activePaneId}
+          state={state}
+          projectActions={projectActions}
+          history={history}
+          historyIndex={historyIndex}
+          fileSystem={fileSystem}
+          layerPropertiesState={layerPropertiesState}
+          onCloseLayerProperties={onCloseLayerProperties}
+          activeTagPopover={activeTagPopover}
+          onCloseTagPopover={onCloseTagPopover}
+          onPaletteColorSelect={onPaletteColorSelect}
+          onPaletteAddColor={onPaletteAddColor}
+          onPaletteColorsSelected={onPaletteColorsSelected}
+          onSelectLayers={onSelectLayers}
+          onSelectFrames={onSelectFrames}
+          onTimelineSelectLayer={onTimelineSelectLayer}
+          onTimelineToggleLayerVisibility={onTimelineToggleLayerVisibility}
+          onTimelineToggleLayerLock={onTimelineToggleLayerLock}
+          onClosePreview={onClosePreview}
+        />
+
+        {isBodyTopHover && (
+          <div className="pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-center gap-1.5 border-2 border-dashed border-primary/80 bg-primary/10 select-none">
+            <span className="rounded-sm bg-card px-2.5 py-1 text-xs font-medium text-primary border border-primary/40">
+              Add as Tab
+            </span>
+          </div>
+        )}
+
+        {isBodyBottomHover && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex h-1/2 flex-col items-center justify-center gap-1.5 border-2 border-dashed border-primary bg-primary/15 select-none">
+            <span className="rounded-sm bg-card px-2.5 py-1 text-xs font-medium text-primary border border-primary/40">
+              Split Below
+            </span>
+          </div>
+        )}
+
+        {isBodyRightHover && (
+          <div className="pointer-events-none absolute inset-y-0 right-0 z-30 flex w-1/2 flex-col items-center justify-center gap-1.5 border-2 border-dashed border-primary bg-primary/15 select-none">
+            <span className="rounded-sm bg-card px-2.5 py-1 text-xs font-medium text-primary border border-primary/40">
+              Split Right
+            </span>
+          </div>
+        )}
+
+        {isBodyLeftHover && (
+          <div className="pointer-events-none absolute inset-y-0 left-0 z-30 flex w-1/2 flex-col items-center justify-center gap-1.5 border-2 border-dashed border-primary bg-primary/15 select-none">
+            <span className="rounded-sm bg-card px-2.5 py-1 text-xs font-medium text-primary border border-primary/40">
+              Split Left
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+interface DockSlotContainerProps {
+  slotId: 'left' | 'right' | 'bottom';
+  slot: any;
+  closedPanes: string[];
+  hasDraggedPane: boolean;
+  isDragOverSlot: boolean;
+  dragOverZone: { slotId: string; groupId?: string; position: DragZonePosition } | null;
+  tabDropIndicator: { key: string; left: number } | null;
+  layoutActions: any;
+  tabMenu: ReturnType<typeof createMenuController<TabMenuPayload>>;
+  onRegisterTabListRef: (key: string, el: HTMLDivElement | null) => void;
+  state: ProjectState;
+  projectActions: any;
+  history: any[];
+  historyIndex: number;
+  fileSystem: any;
+  layerPropertiesState?: { isOpen: boolean; layer: any };
+  onCloseLayerProperties?: () => void;
+  activeTagPopover?: any;
+  onCloseTagPopover?: () => void;
+  onPaletteColorSelect: (c: string, isPrimary: boolean) => void;
+  onPaletteAddColor: (c: string) => void;
+  onPaletteColorsSelected: (selectedColors: string[]) => void;
+  onSelectLayers: (ids: string[], active: string) => void;
+  onSelectFrames: (indices: number[], active: number, layerId?: string) => void;
+  onTimelineSelectLayer: (id: string) => void;
+  onTimelineToggleLayerVisibility: (id: string) => void;
+  onTimelineToggleLayerLock: (id: string) => void;
+  onClosePreview: () => void;
+}
+
+const DockSlotContainer: React.FC<DockSlotContainerProps> = ({
+  slotId,
+  slot,
+  closedPanes,
+  hasDraggedPane,
+  isDragOverSlot,
+  dragOverZone,
+  tabDropIndicator,
+  layoutActions,
+  tabMenu,
+  onRegisterTabListRef,
+  state,
+  projectActions,
+  history,
+  historyIndex,
+  fileSystem,
+  layerPropertiesState,
+  onCloseLayerProperties,
+  activeTagPopover,
+  onCloseTagPopover,
+  onPaletteColorSelect,
+  onPaletteAddColor,
+  onPaletteColorsSelected,
+  onSelectLayers,
+  onSelectFrames,
+  onTimelineSelectLayer,
+  onTimelineToggleLayerVisibility,
+  onTimelineToggleLayerLock,
+  onClosePreview,
+}) => {
+  if (!slot || !slot.visible || slot.groups.length === 0) return null;
+
+  const canUnsplit = slot.groups.length > 1;
+
+  if (slot.groups.length === 1) {
+    const group = slot.groups[0];
+    const hoverPosition =
+      isDragOverSlot && dragOverZone?.groupId === group.id ? dragOverZone.position : null;
+    const indicatorKey = `${slotId}-${group.id}`;
+    const indicatorLeft =
+      tabDropIndicator && tabDropIndicator.key === indicatorKey ? tabDropIndicator.left : null;
+
+    return (
+      <DockGroupContainer
+        slotId={slotId}
+        group={group}
+        canUnsplit={canUnsplit}
+        closedPanes={closedPanes}
+        hasDraggedPane={hasDraggedPane}
+        hoverPosition={hoverPosition}
+        indicatorLeft={indicatorLeft}
+        layoutActions={layoutActions}
+        tabMenu={tabMenu}
+        onRegisterTabListRef={onRegisterTabListRef}
+        state={state}
+        projectActions={projectActions}
+        history={history}
+        historyIndex={historyIndex}
+        fileSystem={fileSystem}
+        layerPropertiesState={layerPropertiesState}
+        onCloseLayerProperties={onCloseLayerProperties}
+        activeTagPopover={activeTagPopover}
+        onCloseTagPopover={onCloseTagPopover}
+        onPaletteColorSelect={onPaletteColorSelect}
+        onPaletteAddColor={onPaletteAddColor}
+        onPaletteColorsSelected={onPaletteColorsSelected}
+        onSelectLayers={onSelectLayers}
+        onSelectFrames={onSelectFrames}
+        onTimelineSelectLayer={onTimelineSelectLayer}
+        onTimelineToggleLayerVisibility={onTimelineToggleLayerVisibility}
+        onTimelineToggleLayerLock={onTimelineToggleLayerLock}
+        onClosePreview={onClosePreview}
+      />
+    );
+  }
+
+  return (
+    <Allotment vertical={slot.splitDirection === 'vertical'} className="h-full w-full">
+      {slot.groups.map((group: any) => {
+        const hoverPosition =
+          isDragOverSlot && dragOverZone?.groupId === group.id ? dragOverZone.position : null;
+        const indicatorKey = `${slotId}-${group.id}`;
+        const indicatorLeft =
+          tabDropIndicator && tabDropIndicator.key === indicatorKey ? tabDropIndicator.left : null;
+
+        return (
+          <Allotment.Pane key={group.id} minSize={80}>
+            <DockGroupContainer
+              slotId={slotId}
+              group={group}
+              canUnsplit={canUnsplit}
+              closedPanes={closedPanes}
+              hasDraggedPane={hasDraggedPane}
+              hoverPosition={hoverPosition}
+              indicatorLeft={indicatorLeft}
+              layoutActions={layoutActions}
+              tabMenu={tabMenu}
+              onRegisterTabListRef={onRegisterTabListRef}
+              state={state}
+              projectActions={projectActions}
+              history={history}
+              historyIndex={historyIndex}
+              fileSystem={fileSystem}
+              layerPropertiesState={layerPropertiesState}
+              onCloseLayerProperties={onCloseLayerProperties}
+              activeTagPopover={activeTagPopover}
+              onCloseTagPopover={onCloseTagPopover}
+              onPaletteColorSelect={onPaletteColorSelect}
+              onPaletteAddColor={onPaletteAddColor}
+              onPaletteColorsSelected={onPaletteColorsSelected}
+              onSelectLayers={onSelectLayers}
+              onSelectFrames={onSelectFrames}
+              onTimelineSelectLayer={onTimelineSelectLayer}
+              onTimelineToggleLayerVisibility={onTimelineToggleLayerVisibility}
+              onTimelineToggleLayerLock={onTimelineToggleLayerLock}
+              onClosePreview={onClosePreview}
+            />
+          </Allotment.Pane>
+        );
+      })}
+    </Allotment>
+  );
 };
 
 const FloatingWindow: React.FC<{
@@ -827,7 +1718,12 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
   state,
   updateState,
   commands,
-  project,
+  projectActions,
+  activeProjectId,
+  tabs,
+  recentProjects,
+  history,
+  historyIndex,
   canvasTools,
   fileSystem,
   handleFileChange,
@@ -836,7 +1732,13 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
   setDragStartPos,
   onScalePixels,
   selectionSize,
-  layout,
+  layoutActions,
+  slots,
+  floatingPanes,
+  draggedPane,
+  dragOverSlot,
+  dragOverIndex,
+  dragOverZone,
   activeTagPopover,
   onCloseTagPopover,
   layerPropertiesState,
@@ -844,39 +1746,17 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
 }) => {
   const tabMenu = useMemo(() => createMenuController<TabMenuPayload>(), []);
 
-  const {
-    slots,
-    floatingPanes,
-    draggedPane,
-    dragOverSlot,
-    dragOverIndex,
-    dragOverZone,
-    togglePaneVisibility,
-    handleDragStart,
-    handleDragOverBody,
-    handleDragOverTabBar,
-    handleDragOverTab,
-    handleDragEnd,
-    clearDragOverState,
-    handleDrop,
-    unsplitSlot,
-    splitGroup,
-    handleSelectTab,
-    handleClosePane,
-    handleCloseOtherPanesInGroup,
-    handleCloseAllPanesInSlot,
-    handleAddPaneToGroup,
-    handleAddPaneToSlot,
-    floatPane,
-    updateFloatingPanePosition,
-    setSlotVisibility,
-  } = layout;
-
   const isPreviewDocked = Object.values(slots).some(
     (s: any) => s.visible && s.groups.some((g: any) => g.panes.includes('preview'))
   );
   const isPreviewFloating = floatingPanes.some((fp: any) => fp.id === 'preview');
   const isPreviewVisible = isPreviewDocked || isPreviewFloating;
+
+  const closedPanes = Object.keys(PANE_METADATA).filter(
+    (paneId) =>
+      !Object.values(slots).some((s: any) => s.groups.some((g: any) => g.panes.includes(paneId))) &&
+      !floatingPanes.some((fp: any) => fp.id === paneId)
+  );
 
   const handleSelectTool = (tool: ToolType) => {
     updateState((prev) => ({ ...prev, tool }));
@@ -949,7 +1829,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
   };
 
   const handleClosePreview = () => {
-    handleClosePane('preview');
+    layoutActions.handleClosePane('preview');
   };
 
   const handleCanvasDrawStart = (pos: any, modifiers?: any) => {
@@ -966,7 +1846,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
   };
 
   const handleCanvasSelectionUpdate = (sel: Set<number> | null) => {
-    const currentTool = project.getActiveState().tool;
+    const currentTool = projectActions.getActiveState().tool;
     updateState((prev) => ({ ...prev, selection: sel }), { action: 'Select Area', tool: currentTool });
   };
 
@@ -974,21 +1854,22 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
     updateState((prev) => ({ ...prev, zoom: z }));
   };
 
-  const removeShade = (index: number) => {
-    updateState((prev) => {
-      const newShades = [...prev.shades];
-      newShades.splice(index, 1);
-      return { ...prev, shades: newShades };
-    });
+  const handleExportClick = () => {
+    if (projectActions.openExportDialog) {
+      projectActions.openExportDialog('gif');
+    } else {
+      projectActions.downloadImage();
+    }
   };
 
-  const addShade = (color: string) => {
-    updateState((prev) =>
-      prev.shades.includes(color) ? prev : { ...prev, shades: [...prev.shades, color] }
-    );
+  const handleImportProject = () => {
+    fileInputRef.current?.click();
   };
 
   const slotTabListRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
+  const handleRegisterTabListRef = (key: string, el: HTMLDivElement | null) => {
+    slotTabListRefs.current[key] = el;
+  };
   const [tabDropIndicator, setTabDropIndicator] = useState<{ key: string; left: number } | null>(null);
 
   useLayoutEffect(() => {
@@ -1003,315 +1884,29 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
       return;
     }
 
-    const tabs = Array.from(container.querySelectorAll('[data-tab-id]')) as HTMLElement[];
+    const tabEls = Array.from(container.querySelectorAll('[data-tab-id]')) as HTMLElement[];
     let left: number;
-    if (tabs.length === 0) {
+    if (tabEls.length === 0) {
       left = 4;
     } else {
       const idx = dragOverIndex.index;
       if (idx <= 0) {
-        left = tabs[0].offsetLeft;
-      } else if (idx >= tabs.length) {
-        const last = tabs[tabs.length - 1];
+        left = tabEls[0].offsetLeft;
+      } else if (idx >= tabEls.length) {
+        const last = tabEls[tabEls.length - 1];
         left = last.offsetLeft + last.offsetWidth;
       } else {
-        const prev = tabs[idx - 1];
-        const curr = tabs[idx];
+        const prev = tabEls[idx - 1];
+        const curr = tabEls[idx];
         left = Math.round((prev.offsetLeft + prev.offsetWidth + curr.offsetLeft) / 2);
       }
     }
     setTabDropIndicator({ key, left });
   }, [dragOverIndex, dragOverZone, slots]);
 
-  const getIndicatorLeftPos = (slotId: 'left' | 'right' | 'bottom', groupId?: string) => {
-    if (!tabDropIndicator) return null;
-    const key = `${slotId}-${groupId || ''}`;
-    return tabDropIndicator.key === key ? tabDropIndicator.left : null;
-  };
-
-  const renderSlotContainer = (slotId: 'left' | 'right' | 'bottom') => {
-    const slot = slots[slotId];
-    if (!slot || !slot.visible || slot.groups.length === 0) return null;
-
-    const closedPanes = Object.keys(PANE_METADATA).filter(
-      (paneId) =>
-        !Object.values(slots).some((s: any) => s.groups.some((g: any) => g.panes.includes(paneId))) &&
-        !floatingPanes.some((fp: any) => fp.id === paneId)
-    );
-
-    const renderGroupContainer = (group: any) => {
-      const isDragOverSlot = dragOverSlot === slotId;
-      const isGroupHover = isDragOverSlot && dragOverZone?.groupId === group.id;
-      const isBodyTopHover = isGroupHover && dragOverZone?.position === 'body-top';
-      const isBodyBottomHover = isGroupHover && dragOverZone?.position === 'body-bottom';
-      const isBodyLeftHover = isGroupHover && dragOverZone?.position === 'body-left';
-      const isBodyRightHover = isGroupHover && dragOverZone?.position === 'body-right';
-      const indicatorLeft = getIndicatorLeftPos(slotId, group.id);
-
-      return (
-        <div
-          key={group.id}
-          className={`relative flex h-full w-full flex-col overflow-hidden border border-border bg-card select-none ${
-            isBodyTopHover || isBodyBottomHover || isBodyLeftHover || isBodyRightHover
-              ? 'ring-2 ring-primary ring-inset'
-              : ''
-          }`}
-          onDragOver={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            if (!draggedPane) return;
-
-            const rect = e.currentTarget.getBoundingClientRect();
-            const relX = e.clientX - rect.left;
-            const relY = e.clientY - rect.top;
-
-            let pos: DragZonePosition = 'body-top';
-            if (relY > rect.height * 0.75) {
-              pos = 'body-bottom';
-            } else if (relX > rect.width * 0.75) {
-              pos = 'body-right';
-            } else if (relX < rect.width * 0.25) {
-              pos = 'body-left';
-            }
-            handleDragOverBody(slotId, group.id, pos);
-          }}
-          onDragLeave={(e) => {
-            if (!draggedPane) return;
-            if (!e.currentTarget.contains(e.relatedTarget as Node)) {
-              clearDragOverState();
-            }
-          }}
-          onDrop={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            handleDrop(e, slotId, group.id);
-          }}
-        >
-          <div className="relative flex h-7 shrink-0 items-center justify-between overflow-hidden border-b border-border bg-background/60 px-1 select-none">
-            <div
-              ref={(el) => {
-                slotTabListRefs.current[`${slotId}-${group.id}`] = el;
-              }}
-              className="relative flex h-full max-w-[85%] items-center gap-0.5 overflow-x-auto no-scrollbar"
-              onDragOver={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                handleDragOverTabBar(e, slotId, group.id);
-              }}
-            >
-              {group.panes.map((paneId: string, index: number) => {
-                const metadata = PANE_METADATA[paneId] || { title: paneId, icon: null };
-                const isActive = group.activePaneId === paneId;
-
-                return (
-                  <div
-                    key={paneId}
-                    data-tab-id={paneId}
-                    draggable
-                    onDragStart={(e) => handleDragStart(e, paneId, slotId, group.id)}
-                    onDragOver={(e) => handleDragOverTab(e, paneId, slotId, group.id, index)}
-                    onDragEnd={handleDragEnd}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      tabMenu.open({
-                        payload: { paneId, slotId, groupId: group.id },
-                        anchor: { x: e.clientX, y: e.clientY },
-                      });
-                    }}
-                    onClick={() => handleSelectTab(slotId, group.id, paneId)}
-                    title={`${metadata.title} (Right-click for options)`}
-                    className={`group relative flex h-full cursor-default items-center gap-1.5 border-t-2 border-r border-r-border/60 px-2 text-[11px] font-medium transition-colors select-none ${
-                      isActive
-                        ? 'border-t-primary bg-card text-foreground'
-                        : 'border-t-transparent text-muted-foreground hover:bg-accent/50 hover:text-foreground'
-                    }`}
-                  >
-                    <span className="pointer-events-none flex items-center text-muted-foreground">
-                      {metadata.icon}
-                    </span>
-                    <span className="pointer-events-none max-w-[95px] truncate">
-                      {metadata.title}
-                    </span>
-                    <button
-                      type="button"
-                      aria-label={`Close ${metadata.title}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleClosePane(paneId);
-                      }}
-                      className="ml-0.5 flex h-4 w-4 items-center justify-center rounded-sm text-muted-foreground/60 opacity-60 transition-colors hover:bg-accent hover:text-foreground hover:opacity-100"
-                    >
-                      <X size={11} />
-                    </button>
-                  </div>
-                );
-              })}
-
-              {indicatorLeft !== null && (
-                <div
-                  className="pointer-events-none absolute top-1 bottom-1 z-30 w-0.5 -translate-x-1/2 rounded-full bg-primary"
-                  style={{ left: `${indicatorLeft}px` }}
-                />
-              )}
-            </div>
-
-            <div className="flex shrink-0 items-center gap-0.5 px-1">
-              {closedPanes.length > 0 && (
-                <Popover>
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <PopoverTrigger
-                          render={
-                            <button
-                              type="button"
-                              aria-label="Add pane to group"
-                              className="flex h-5 w-5 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                            />
-                          }
-                        />
-                      }
-                    >
-                      <Plus size={12} />
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">Add Pane</TooltipContent>
-                  </Tooltip>
-                  <PopoverContent align="end" className="flex w-44 flex-col gap-0.5 p-1">
-                    <div className="px-2 py-1 text-[11px] font-semibold text-muted-foreground">
-                      Add Pane
-                    </div>
-                    <div className="my-0.5 h-px bg-border" />
-                    {closedPanes.map((paneId) => (
-                      <PopoverClose
-                        key={paneId}
-                        render={
-                          <button
-                            type="button"
-                            onClick={() => handleAddPaneToGroup(slotId, group.id, paneId)}
-                            className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-accent"
-                          />
-                        }
-                      >
-                        <span className="text-muted-foreground">{PANE_METADATA[paneId]?.icon}</span>
-                        <span>{PANE_METADATA[paneId]?.title}</span>
-                      </PopoverClose>
-                    ))}
-                  </PopoverContent>
-                </Popover>
-              )}
-
-              {slot.groups.length > 1 && (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <button
-                        type="button"
-                        aria-label="Unsplit dock"
-                        onClick={() => unsplitSlot(slotId)}
-                        className="flex h-5 w-5 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                      />
-                    }
-                  >
-                    <ArrowRightLeft size={11} />
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Unsplit Dock</TooltipContent>
-                </Tooltip>
-              )}
-
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      aria-label="Collapse dock"
-                      onClick={() => setSlotVisibility(slotId, false)}
-                      className="flex h-5 w-5 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                    />
-                  }
-                >
-                  <Minus size={11} />
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Collapse Dock</TooltipContent>
-              </Tooltip>
-            </div>
-          </div>
-
-          <div className="relative min-h-0 flex-1 overflow-hidden bg-card">
-            <DockPaneContent
-              paneId={group.activePaneId}
-              state={state}
-              project={project}
-              fileSystem={fileSystem}
-              layerPropertiesState={layerPropertiesState}
-              onCloseLayerProperties={onCloseLayerProperties}
-              activeTagPopover={activeTagPopover}
-              onCloseTagPopover={onCloseTagPopover}
-              onPaletteColorSelect={handlePaletteColorSelect}
-              onPaletteAddColor={handlePaletteAddColor}
-              onPaletteColorsSelected={handlePaletteColorsSelected}
-              onSelectLayers={handleSelectLayers}
-              onSelectFrames={handleSelectFrames}
-              onTimelineSelectLayer={handleTimelineSelectLayer}
-              onTimelineToggleLayerVisibility={handleTimelineToggleLayerVisibility}
-              onTimelineToggleLayerLock={handleTimelineToggleLayerLock}
-              onClosePreview={handleClosePreview}
-            />
-
-            {isBodyTopHover && (
-              <div className="pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-center gap-1.5 border-2 border-dashed border-primary/80 bg-primary/10 select-none">
-                <span className="rounded-sm bg-card px-2.5 py-1 text-xs font-medium text-primary border border-primary/40">
-                  Add as Tab
-                </span>
-              </div>
-            )}
-
-            {isBodyBottomHover && (
-              <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex h-1/2 flex-col items-center justify-center gap-1.5 border-2 border-dashed border-primary bg-primary/15 select-none">
-                <span className="rounded-sm bg-card px-2.5 py-1 text-xs font-medium text-primary border border-primary/40">
-                  Split Below
-                </span>
-              </div>
-            )}
-
-            {isBodyRightHover && (
-              <div className="pointer-events-none absolute inset-y-0 right-0 z-30 flex w-1/2 flex-col items-center justify-center gap-1.5 border-2 border-dashed border-primary bg-primary/15 select-none">
-                <span className="rounded-sm bg-card px-2.5 py-1 text-xs font-medium text-primary border border-primary/40">
-                  Split Right
-                </span>
-              </div>
-            )}
-
-            {isBodyLeftHover && (
-              <div className="pointer-events-none absolute inset-y-0 left-0 z-30 flex w-1/2 flex-col items-center justify-center gap-1.5 border-2 border-dashed border-primary bg-primary/15 select-none">
-                <span className="rounded-sm bg-card px-2.5 py-1 text-xs font-medium text-primary border border-primary/40">
-                  Split Left
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
-      );
-    };
-
-    if (slot.groups.length === 1) {
-      return renderGroupContainer(slot.groups[0]);
-    }
-
-    return (
-      <Allotment vertical={slot.splitDirection === 'vertical'} className="h-full w-full">
-        {slot.groups.map((group: any) => (
-          <Allotment.Pane key={group.id} minSize={80}>
-            {renderGroupContainer(group)}
-          </Allotment.Pane>
-        ))}
-      </Allotment>
-    );
-  };
-
-  const { activeProjectId } = project;
   const isHome = activeProjectId === 'home';
   const activeLayerName = state.layers.find((l) => l.id === state.activeLayerId)?.name;
+  const hasDraggedPane = draggedPane !== null;
 
   const toolRailElement = (
     <ToolRail
@@ -1375,9 +1970,9 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
       <div className="z-50 flex h-8 shrink-0 items-center justify-between border-b border-border bg-card px-2 text-xs">
         <Menubar
           commands={commands}
-          recentProjects={project.recentProjects}
-          onOpenRecent={project.loadRecentProject}
-          onClearRecent={project.clearRecents}
+          recentProjects={recentProjects}
+          onOpenRecent={projectActions.loadRecentProject}
+          onClearRecent={projectActions.clearRecents}
         />
 
         <div className="flex items-center gap-2">
@@ -1394,9 +1989,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
           {!isHome && (
             <button
               type="button"
-              onClick={() =>
-                project.openExportDialog ? project.openExportDialog('gif') : project.downloadImage()
-              }
+              onClick={handleExportClick}
               className="flex h-6 items-center gap-1.5 rounded-sm bg-primary px-2.5 text-[11px] font-medium text-primary-foreground transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <Download size={12} />
@@ -1407,373 +2000,44 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
       </div>
 
       <TabStrip
-        tabs={project.tabs}
-        activeProjectId={project.activeProjectId}
-        onSelectProject={project.setActiveProjectId}
-        onCloseProject={project.closeProject}
-        onNewProject={project.createProject}
+        tabs={tabs}
+        activeProjectId={activeProjectId}
+        onSelectProject={projectActions.setActiveProjectId}
+        onCloseProject={projectActions.closeProject}
+        onNewProject={projectActions.createProject}
       />
 
       {isHome ? (
         <Home
-          onCreateProject={project.createProject}
-          onImportProject={() => fileInputRef.current?.click()}
-          recentProjects={project.recentProjects}
-          onOpenRecent={project.loadRecentProject}
-          onClearRecent={project.clearRecents}
+          onCreateProject={projectActions.createProject}
+          onImportProject={handleImportProject}
+          recentProjects={recentProjects}
+          onOpenRecent={projectActions.loadRecentProject}
+          onClearRecent={projectActions.clearRecents}
         />
       ) : (
         <>
-          {/* Contextual Tool Options Strip */}
-          <div className="flex h-10 shrink-0 items-center gap-2 overflow-x-auto border-b border-border bg-background/80 px-2 text-xs no-scrollbar">
-            <div className="flex shrink-0 items-center gap-1 border-r border-border pr-2">
-              <ToolButton
-                active={false}
-                onClick={() => commands.find((c) => c.id === 'edit.undo')?.perform()}
-                icon={<Undo size={15} />}
-                label="Undo"
-                shortcut="Ctrl+Z"
-                tooltipSide="bottom"
-              />
-              <ToolButton
-                active={false}
-                onClick={() => commands.find((c) => c.id === 'edit.redo')?.perform()}
-                icon={<Redo size={15} />}
-                label="Redo"
-                shortcut="Ctrl+Y"
-                tooltipSide="bottom"
-              />
-            </div>
-
-            <div className="flex min-w-max flex-1 items-center gap-3 px-1">
-              <SegmentedControl
-                value={state.inkType}
-                onValueChange={(val) => {
-                  if (val === 'simple' || val === 'shading') {
-                    updateState((prev) => ({ ...prev, inkType: val }));
-                  }
-                }}
-                className="w-auto shrink-0"
-              >
-                <SegmentedControlIndicator />
-                <SegmentedControlItem value="simple" className="px-2.5 py-0.5 text-[11px]">
-                  Simple
-                </SegmentedControlItem>
-                <SegmentedControlItem value="shading" className="px-2.5 py-0.5 text-[11px]">
-                  <Droplets size={11} />
-                  Shading
-                </SegmentedControlItem>
-              </SegmentedControl>
-
-              {state.inkType === 'shading' && (
-                <div className="flex items-center gap-1.5 rounded-md border border-border bg-card px-2 py-1">
-                  <span className="text-[11px] font-medium text-muted-foreground">Shades</span>
-                  <div className="flex h-5 min-w-[72px] items-center gap-0.5 rounded-sm border border-border bg-background p-0.5">
-                    {state.shades.map((color, idx) => (
-                      <Tooltip key={`${color}-${idx}`}>
-                        <TooltipTrigger
-                          render={
-                            <div
-                              draggable
-                              onDragStart={(e) => {
-                                e.stopPropagation();
-                                e.dataTransfer.setData('text/plain', idx.toString());
-                              }}
-                              onDragOver={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                              }}
-                              onDrop={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                const fromIdx = parseInt(e.dataTransfer.getData('text/plain'), 10);
-                                if (!isNaN(fromIdx) && fromIdx !== idx) {
-                                  updateState((prev) => {
-                                    const newShades = [...prev.shades];
-                                    const [moved] = newShades.splice(fromIdx, 1);
-                                    newShades.splice(idx, 0, moved);
-                                    return { ...prev, shades: newShades };
-                                  });
-                                }
-                              }}
-                              className="group relative h-full w-4 cursor-grab border border-border/40 active:cursor-grabbing"
-                              style={{ backgroundColor: color }}
-                            />
-                          }
-                        >
-                          <button
-                            type="button"
-                            aria-label={`Remove shade ${color}`}
-                            onClick={() => removeShade(idx)}
-                            className="absolute -top-1 -right-1 z-20 flex h-3 w-3 items-center justify-center rounded-full bg-destructive text-destructive-foreground opacity-0 transition-opacity group-hover:opacity-100"
-                          >
-                            <X size={8} />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom">{`Step ${idx + 1}: ${color}`}</TooltipContent>
-                      </Tooltip>
-                    ))}
-                    {state.shades.length < 16 && (
-                      <Tooltip>
-                        <TooltipTrigger
-                          render={
-                            <button
-                              type="button"
-                              aria-label="Add primary color to shade ramp"
-                              onClick={() => addShade(state.primaryColor)}
-                              className="ml-0.5 flex h-full w-4 items-center justify-center rounded-xs border border-dashed border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                            />
-                          }
-                        >
-                          <Plus size={10} />
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom">Add Primary Color</TooltipContent>
-                      </Tooltip>
-                    )}
-                  </div>
-                  <Popover>
-                    <PopoverTrigger
-                      render={
-                        <button
-                          type="button"
-                          aria-label="Shade ramp options"
-                          className="flex h-5 w-5 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                        />
-                      }
-                    >
-                      <ChevronDown size={12} />
-                    </PopoverTrigger>
-                    <PopoverContent align="end" className="flex w-36 flex-col gap-0.5 p-1">
-                      <PopoverClose
-                        render={
-                          <button
-                            type="button"
-                            onClick={() =>
-                              updateState((prev) => ({ ...prev, shades: [...prev.shades].reverse() }))
-                            }
-                            disabled={state.shades.length < 2}
-                            className="w-full rounded-sm px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-accent disabled:opacity-45"
-                          />
-                        }
-                      >
-                        Reverse Ramp
-                      </PopoverClose>
-                      <PopoverClose
-                        render={
-                          <button
-                            type="button"
-                            onClick={() => updateState((prev) => ({ ...prev, shades: [] }))}
-                            className="w-full rounded-sm px-2 py-1.5 text-left text-xs text-destructive transition-colors hover:bg-destructive/15"
-                          />
-                        }
-                      >
-                        Clear Ramp
-                      </PopoverClose>
-                    </PopoverContent>
-                  </Popover>
-                </div>
-              )}
-
-              <div className="h-4 w-px bg-border" />
-
-              <div className="flex shrink-0 items-center gap-1.5">
-                <span className="text-[11px] font-medium text-muted-foreground">Symmetry</span>
-                <div className="flex items-center gap-0.5 rounded-md border border-border bg-card p-0.5">
-                  <ToolButton
-                    active={state.symmetry.x}
-                    onClick={() =>
-                      updateState((prev) => ({
-                        ...prev,
-                        symmetry: { ...prev.symmetry, x: !prev.symmetry.x },
-                      }))
-                    }
-                    icon={<FlipHorizontal size={14} />}
-                    label="Horizontal Symmetry"
-                    tooltipSide="bottom"
-                  />
-                  <ToolButton
-                    active={state.symmetry.y}
-                    onClick={() =>
-                      updateState((prev) => ({
-                        ...prev,
-                        symmetry: { ...prev.symmetry, y: !prev.symmetry.y },
-                      }))
-                    }
-                    icon={<FlipVertical size={14} />}
-                    label="Vertical Symmetry"
-                    tooltipSide="bottom"
-                  />
-                </div>
-              </div>
-
-              {BRUSH_OPTION_TOOLS.includes(state.tool) && (
-                <>
-                  <div className="h-4 w-px bg-border" />
-                  <div className="flex items-center gap-2">
-                    <span className="text-[11px] font-medium text-muted-foreground">Size</span>
-                    <CustomSlider
-                      min={1}
-                      max={10}
-                      value={state.brushSize}
-                      onValueChange={(val) => updateState((prev) => ({ ...prev, brushSize: val }))}
-                      aria-label="Brush size"
-                      className="w-24"
-                    />
-                    <span className="w-5 text-right font-mono text-[11px] text-foreground tabular-nums">
-                      {state.brushSize}px
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-0.5 rounded-md border border-border bg-card p-0.5">
-                    <ToolButton
-                      active={state.brushShape === 'square'}
-                      onClick={() => updateState((prev) => ({ ...prev, brushShape: 'square' }))}
-                      icon={<Square size={14} />}
-                      label="Square Brush"
-                      tooltipSide="bottom"
-                    />
-                    <ToolButton
-                      active={state.brushShape === 'circle'}
-                      onClick={() => updateState((prev) => ({ ...prev, brushShape: 'circle' }))}
-                      icon={<Circle size={14} />}
-                      label="Circle Brush"
-                      tooltipSide="bottom"
-                    />
-                  </div>
-
-                  {state.tool === 'pencil' && state.inkType === 'simple' && (
-                    <label
-                      htmlFor="pixelPerfect"
-                      className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground"
-                    >
-                      <CustomCheckbox
-                        id="pixelPerfect"
-                        checked={state.pixelPerfect}
-                        onCheckedChange={(checked) =>
-                          updateState((prev) => ({ ...prev, pixelPerfect: !!checked }))
-                        }
-                      />
-                      <span>Pixel Perfect</span>
-                    </label>
-                  )}
-
-                  {state.tool === 'smudge' && (
-                    <>
-                      <div className="h-4 w-px bg-border" />
-                      <SegmentedControl
-                        value={state.smudgeMode || 'blend'}
-                        onValueChange={(val) => {
-                          if (val === 'blend' || val === 'push') {
-                            updateState((prev) => ({ ...prev, smudgeMode: val }));
-                          }
-                        }}
-                        className="w-auto shrink-0"
-                      >
-                        <SegmentedControlIndicator />
-                        <SegmentedControlItem value="blend" className="px-2 py-0.5 text-[11px]">
-                          <Droplets size={11} />
-                          Blend
-                        </SegmentedControlItem>
-                        <SegmentedControlItem value="push" className="px-2 py-0.5 text-[11px]">
-                          <Hand size={11} />
-                          Push
-                        </SegmentedControlItem>
-                      </SegmentedControl>
-
-                      <div className="flex items-center gap-2">
-                        <span className="text-[11px] font-medium text-muted-foreground">Strength</span>
-                        <CustomSlider
-                          min={10}
-                          max={100}
-                          step={5}
-                          value={Math.round((state.smudgeStrength ?? 0.7) * 100)}
-                          onValueChange={(val) =>
-                            updateState((prev) => ({ ...prev, smudgeStrength: val / 100 }))
-                          }
-                          aria-label="Smudge strength"
-                          className="w-20"
-                        />
-                        <span className="w-8 font-mono text-[11px] text-foreground tabular-nums">
-                          {Math.round((state.smudgeStrength ?? 0.7) * 100)}%
-                        </span>
-                      </div>
-                    </>
-                  )}
-                </>
-              )}
-
-              {(state.tool === 'bucket' || state.tool === 'magic-wand') && (
-                <>
-                  <div className="h-4 w-px bg-border" />
-                  <label
-                    htmlFor="contiguous"
-                    className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground"
-                  >
-                    <CustomCheckbox
-                      id="contiguous"
-                      checked={state.fillContiguous}
-                      onCheckedChange={(checked) =>
-                        updateState((prev) => ({ ...prev, fillContiguous: !!checked }))
-                      }
-                    />
-                    <span>Contiguous</span>
-                  </label>
-                </>
-              )}
-
-              {state.tool === 'move' && (
-                <>
-                  <div className="h-4 w-px bg-border" />
-                  <div className="flex items-center gap-2">
-                    <span className="text-[11px] font-medium text-muted-foreground">Rotation</span>
-                    <SegmentedControl
-                      value={state.rotationAlgorithm}
-                      onValueChange={(val) => {
-                        if (val === 'nearest' || val === 'rotsprite') {
-                          updateState((prev) => ({ ...prev, rotationAlgorithm: val }));
-                        }
-                      }}
-                      className="w-auto shrink-0"
-                    >
-                      <SegmentedControlIndicator />
-                      <SegmentedControlItem value="nearest" className="px-2.5 py-0.5 text-[11px]">
-                        Nearest
-                      </SegmentedControlItem>
-                      <SegmentedControlItem value="rotsprite" className="px-2.5 py-0.5 text-[11px]">
-                        RotSprite
-                      </SegmentedControlItem>
-                    </SegmentedControl>
-                  </div>
-                </>
-              )}
-            </div>
-
-            <div className="flex shrink-0 items-center gap-1 border-l border-border pl-2">
-              <ToolButton
-                active={isPreviewVisible}
-                onClick={() => togglePaneVisibility('preview')}
-                icon={<PlaySquare size={15} />}
-                label="Toggle Preview"
-                tooltipSide="bottom"
-              />
-              <ToolButton
-                active={state.showGrid}
-                onClick={() => updateState((prev) => ({ ...prev, showGrid: !prev.showGrid }))}
-                icon={<Grid size={15} />}
-                label="Toggle Grid"
-                shortcut="Shift+G"
-                tooltipSide="bottom"
-              />
-              <ToolButton
-                active={state.onionSkin}
-                onClick={() => updateState((prev) => ({ ...prev, onionSkin: !prev.onionSkin }))}
-                icon={<Eye size={15} />}
-                label="Onion Skin"
-                shortcut="Alt+O"
-                tooltipSide="bottom"
-              />
-            </div>
-          </div>
+          <ToolOptionsBar
+            tool={state.tool}
+            inkType={state.inkType}
+            shades={state.shades}
+            primaryColor={state.primaryColor}
+            symmetryX={state.symmetry.x}
+            symmetryY={state.symmetry.y}
+            brushSize={state.brushSize}
+            brushShape={state.brushShape}
+            pixelPerfect={state.pixelPerfect}
+            smudgeMode={state.smudgeMode}
+            smudgeStrength={state.smudgeStrength}
+            fillContiguous={state.fillContiguous}
+            rotationAlgorithm={state.rotationAlgorithm}
+            showGrid={state.showGrid}
+            onionSkin={state.onionSkin}
+            isPreviewVisible={isPreviewVisible}
+            commands={commands}
+            updateState={updateState}
+            togglePaneVisibility={layoutActions.togglePaneVisibility}
+          />
 
           {/* Main Workspace Grid */}
           <div
@@ -1781,7 +2045,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
             onDragOver={(e) => {
               e.preventDefault();
               if (draggedPane && (dragOverSlot !== null || dragOverZone !== null)) {
-                clearDragOverState();
+                layoutActions.clearDragOverState();
               }
             }}
             onDrop={(e) => {
@@ -1790,8 +2054,8 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
               const rect = e.currentTarget.getBoundingClientRect();
               const x = e.clientX - rect.left - 80;
               const y = e.clientY - rect.top - 15;
-              floatPane(draggedPane.paneId, draggedPane.sourceSlot, draggedPane.sourceGroupId, x, y);
-              handleDragEnd();
+              layoutActions.floatPane(draggedPane.paneId, draggedPane.sourceSlot, draggedPane.sourceGroupId, x, y);
+              layoutActions.handleDragEnd();
             }}
           >
             {floatingPanes.map((pane: any) => (
@@ -1799,10 +2063,10 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                 key={pane.id}
                 pane={pane}
                 metadata={PANE_METADATA[pane.id] || { title: pane.id, icon: null }}
-                updateFloatingPanePosition={updateFloatingPanePosition}
-                handleDragStart={handleDragStart}
-                handleDragEnd={handleDragEnd}
-                handleClosePane={handleClosePane}
+                updateFloatingPanePosition={layoutActions.updateFloatingPanePosition}
+                handleDragStart={layoutActions.handleDragStart}
+                handleDragEnd={layoutActions.handleDragEnd}
+                handleClosePane={layoutActions.handleClosePane}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -1815,7 +2079,9 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                 <DockPaneContent
                   paneId={pane.id}
                   state={state}
-                  project={project}
+                  projectActions={projectActions}
+                  history={history}
+                  historyIndex={historyIndex}
                   fileSystem={fileSystem}
                   layerPropertiesState={layerPropertiesState}
                   onCloseLayerProperties={onCloseLayerProperties}
@@ -1846,7 +2112,36 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                     minSize={160}
                     priority={1 as any}
                   >
-                    {renderSlotContainer('left')}
+                    <DockSlotContainer
+                      slotId="left"
+                      slot={slots.left}
+                      closedPanes={closedPanes}
+                      hasDraggedPane={hasDraggedPane}
+                      isDragOverSlot={dragOverSlot === 'left'}
+                      dragOverZone={dragOverSlot === 'left' ? dragOverZone : null}
+                      tabDropIndicator={tabDropIndicator}
+                      layoutActions={layoutActions}
+                      tabMenu={tabMenu}
+                      onRegisterTabListRef={handleRegisterTabListRef}
+                      state={state}
+                      projectActions={projectActions}
+                      history={history}
+                      historyIndex={historyIndex}
+                      fileSystem={fileSystem}
+                      layerPropertiesState={layerPropertiesState}
+                      onCloseLayerProperties={onCloseLayerProperties}
+                      activeTagPopover={activeTagPopover}
+                      onCloseTagPopover={onCloseTagPopover}
+                      onPaletteColorSelect={handlePaletteColorSelect}
+                      onPaletteAddColor={handlePaletteAddColor}
+                      onPaletteColorsSelected={handlePaletteColorsSelected}
+                      onSelectLayers={handleSelectLayers}
+                      onSelectFrames={handleSelectFrames}
+                      onTimelineSelectLayer={handleTimelineSelectLayer}
+                      onTimelineToggleLayerVisibility={handleTimelineToggleLayerVisibility}
+                      onTimelineToggleLayerLock={handleTimelineToggleLayerLock}
+                      onClosePreview={handleClosePreview}
+                    />
                   </Allotment.Pane>
 
                   {/* Left Tool Rail (44px) */}
@@ -1869,7 +2164,36 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                     minSize={160}
                     priority={1 as any}
                   >
-                    {renderSlotContainer('right')}
+                    <DockSlotContainer
+                      slotId="right"
+                      slot={slots.right}
+                      closedPanes={closedPanes}
+                      hasDraggedPane={hasDraggedPane}
+                      isDragOverSlot={dragOverSlot === 'right'}
+                      dragOverZone={dragOverSlot === 'right' ? dragOverZone : null}
+                      tabDropIndicator={tabDropIndicator}
+                      layoutActions={layoutActions}
+                      tabMenu={tabMenu}
+                      onRegisterTabListRef={handleRegisterTabListRef}
+                      state={state}
+                      projectActions={projectActions}
+                      history={history}
+                      historyIndex={historyIndex}
+                      fileSystem={fileSystem}
+                      layerPropertiesState={layerPropertiesState}
+                      onCloseLayerProperties={onCloseLayerProperties}
+                      activeTagPopover={activeTagPopover}
+                      onCloseTagPopover={onCloseTagPopover}
+                      onPaletteColorSelect={handlePaletteColorSelect}
+                      onPaletteAddColor={handlePaletteAddColor}
+                      onPaletteColorsSelected={handlePaletteColorsSelected}
+                      onSelectLayers={handleSelectLayers}
+                      onSelectFrames={handleSelectFrames}
+                      onTimelineSelectLayer={handleTimelineSelectLayer}
+                      onTimelineToggleLayerVisibility={handleTimelineToggleLayerVisibility}
+                      onTimelineToggleLayerLock={handleTimelineToggleLayerLock}
+                      onClosePreview={handleClosePreview}
+                    />
                   </Allotment.Pane>
                 </Allotment>
               </Allotment.Pane>
@@ -1883,7 +2207,36 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                 maxSize={400}
                 priority={3 as any}
               >
-                {renderSlotContainer('bottom')}
+                <DockSlotContainer
+                  slotId="bottom"
+                  slot={slots.bottom}
+                  closedPanes={closedPanes}
+                  hasDraggedPane={hasDraggedPane}
+                  isDragOverSlot={dragOverSlot === 'bottom'}
+                  dragOverZone={dragOverSlot === 'bottom' ? dragOverZone : null}
+                  tabDropIndicator={tabDropIndicator}
+                  layoutActions={layoutActions}
+                  tabMenu={tabMenu}
+                  onRegisterTabListRef={handleRegisterTabListRef}
+                  state={state}
+                  projectActions={projectActions}
+                  history={history}
+                  historyIndex={historyIndex}
+                  fileSystem={fileSystem}
+                  layerPropertiesState={layerPropertiesState}
+                  onCloseLayerProperties={onCloseLayerProperties}
+                  activeTagPopover={activeTagPopover}
+                  onCloseTagPopover={onCloseTagPopover}
+                  onPaletteColorSelect={handlePaletteColorSelect}
+                  onPaletteAddColor={handlePaletteAddColor}
+                  onPaletteColorsSelected={handlePaletteColorsSelected}
+                  onSelectLayers={handleSelectLayers}
+                  onSelectFrames={handleSelectFrames}
+                  onTimelineSelectLayer={handleTimelineSelectLayer}
+                  onTimelineToggleLayerVisibility={handleTimelineToggleLayerVisibility}
+                  onTimelineToggleLayerLock={handleTimelineToggleLayerLock}
+                  onClosePreview={handleClosePreview}
+                />
               </Allotment.Pane>
             </Allotment>
           </div>
@@ -1902,7 +2255,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
               <>
                 <MenuGroup>
                   <MenuGroupLabel>{title}</MenuGroupLabel>
-                  <MenuItem value="close-tab" onSelect={() => handleClosePane(ctx.paneId)}>
+                  <MenuItem value="close-tab" onSelect={() => layoutActions.handleClosePane(ctx.paneId)}>
                     <MenuItemIcon>
                       <X size={13} />
                     </MenuItemIcon>
@@ -1913,7 +2266,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                     <MenuItem
                       value="close-others"
                       onSelect={() =>
-                        handleCloseOtherPanesInGroup(
+                        layoutActions.handleCloseOtherPanesInGroup(
                           ctx.slotId as 'left' | 'right' | 'bottom',
                           ctx.groupId!,
                           ctx.paneId
@@ -1932,7 +2285,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                       value="close-all-dock"
                       destructive
                       onSelect={() =>
-                        handleCloseAllPanesInSlot(ctx.slotId as 'left' | 'right' | 'bottom')
+                        layoutActions.handleCloseAllPanesInSlot(ctx.slotId as 'left' | 'right' | 'bottom')
                       }
                     >
                       <MenuItemIcon>
@@ -1952,7 +2305,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                           <MenuItem
                             value="split-down"
                             onSelect={() =>
-                              splitGroup(
+                              layoutActions.splitGroup(
                                 ctx.slotId as 'left' | 'right' | 'bottom',
                                 ctx.groupId!,
                                 ctx.paneId,
@@ -1968,7 +2321,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                           <MenuItem
                             value="split-right"
                             onSelect={() =>
-                              splitGroup(
+                              layoutActions.splitGroup(
                                 ctx.slotId as 'left' | 'right' | 'bottom',
                                 ctx.groupId!,
                                 ctx.paneId,
@@ -1985,7 +2338,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                             <MenuItem
                               value="unsplit"
                               onSelect={() =>
-                                unsplitSlot(ctx.slotId as 'left' | 'right' | 'bottom')
+                                layoutActions.unsplitSlot(ctx.slotId as 'left' | 'right' | 'bottom')
                               }
                             >
                               <MenuItemIcon>
@@ -2003,7 +2356,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                       <MenuItem
                         value="float"
                         onSelect={() =>
-                          floatPane(ctx.paneId, ctx.slotId, ctx.groupId, 160, 120)
+                          layoutActions.floatPane(ctx.paneId, ctx.slotId, ctx.groupId, 160, 120)
                         }
                       >
                         <MenuItemIcon>
@@ -2012,19 +2365,19 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                         <span>Float Window</span>
                       </MenuItem>
                       {DOCK_SLOTS.filter((s) => s !== ctx.slotId).map((targetSlot) => (
-                          <MenuItem
-                            key={targetSlot}
-                            value={`move-${targetSlot}`}
-                            onSelect={() => handleAddPaneToSlot(targetSlot, ctx.paneId)}
-                          >
-                            <MenuItemIcon>
-                              <Move size={13} />
-                            </MenuItemIcon>
-                            <span>
-                              Move to {targetSlot.charAt(0).toUpperCase() + targetSlot.slice(1)} Dock
-                            </span>
-                          </MenuItem>
-                        ))}
+                        <MenuItem
+                          key={targetSlot}
+                          value={`move-${targetSlot}`}
+                          onSelect={() => layoutActions.handleAddPaneToSlot(targetSlot, ctx.paneId)}
+                        >
+                          <MenuItemIcon>
+                            <Move size={13} />
+                          </MenuItemIcon>
+                          <span>
+                            Move to {targetSlot.charAt(0).toUpperCase() + targetSlot.slice(1)} Dock
+                          </span>
+                        </MenuItem>
+                      ))}
                     </MenuGroup>
                   </>
                 )}
@@ -2037,7 +2390,7 @@ export const DesktopLayout: React.FC<DesktopLayoutProps> = ({
                         <MenuItem
                           key={targetSlot}
                           value={`dock-${targetSlot}`}
-                          onSelect={() => handleAddPaneToSlot(targetSlot, ctx.paneId)}
+                          onSelect={() => layoutActions.handleAddPaneToSlot(targetSlot, ctx.paneId)}
                         >
                           <MenuItemIcon>
                             <Move size={13} />

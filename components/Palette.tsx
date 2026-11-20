@@ -1,8 +1,61 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useLayoutEffect } from 'react';
 import { Plus, Upload, ChevronDown, Check } from './Icons';
 import { SavedPalette } from '../types';
 import { Popover, PopoverTrigger, PopoverContent, PopoverClose } from './ui/popover';
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
+
+interface PaletteSwatchProps {
+  color: string;
+  idx: number;
+  isPrimary: boolean;
+  isSecondary: boolean;
+  inSelection: boolean;
+  isTargetActive: boolean;
+  onSwatchPointerDown: (idx: number, e: React.PointerEvent<HTMLButtonElement>) => void;
+  onSwatchPointerEnter: (idx: number, color: string, e: React.PointerEvent<HTMLButtonElement>) => void;
+}
+
+const PaletteSwatch: React.FC<PaletteSwatchProps> = ({
+  color,
+  idx,
+  isPrimary,
+  isSecondary,
+  inSelection,
+  isTargetActive,
+  onSwatchPointerDown,
+  onSwatchPointerEnter,
+}) => {
+  return (
+    <button
+      type="button"
+      aria-label={`Color ${color.toUpperCase()}`}
+      className={`group relative aspect-square overflow-hidden rounded-[2px] border border-white/10 transition-transform active:scale-95 ${
+        inSelection
+          ? 'z-20 scale-110 ring-2 ring-primary shadow-md'
+          : isPrimary || isSecondary
+            ? 'z-10 ring-1 ring-white/80 ring-inset'
+            : 'hover:z-10 hover:ring-1 hover:ring-white/50'
+      }`}
+      style={{ backgroundColor: color }}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        onSwatchPointerDown(idx, e);
+      }}
+      onPointerEnter={(e) => onSwatchPointerEnter(idx, color, e)}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      {isPrimary && (
+        <div className="absolute top-0 left-0 h-0 w-0 border-t-[8px] border-r-[8px] border-t-primary border-r-transparent" />
+      )}
+      {isSecondary && (
+        <div className="absolute right-0 bottom-0 h-0 w-0 border-b-[8px] border-l-[8px] border-b-white border-l-transparent" />
+      )}
+      {isTargetActive && (
+        <div className="absolute inset-0 m-auto h-1 w-1 rounded-full bg-white mix-blend-difference" />
+      )}
+    </button>
+  );
+};
 
 interface PaletteProps {
   width: number;
@@ -32,64 +85,109 @@ export const Palette: React.FC<PaletteProps> = ({
   onColorsSelected,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const tooltipHexRef = useRef<HTMLSpanElement>(null);
   const [target, setTarget] = useState<'primary' | 'secondary'>('primary');
 
   const [selectionStart, setSelectionStart] = useState<number | null>(null);
   const [selectionEnd, setSelectionEnd] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [hoveredSwatch, setHoveredSwatch] = useState<{ color: string; x: number; y: number } | null>(null);
+
+  const latestRef = useRef({
+    isDragging,
+    selectionStart,
+    selectionEnd,
+    colors,
+    onColorSelect,
+    onColorsSelected,
+  });
+
+  useLayoutEffect(() => {
+    latestRef.current = {
+      isDragging,
+      selectionStart,
+      selectionEnd,
+      colors,
+      onColorSelect,
+      onColorsSelected,
+    };
+  });
 
   const activePalette = palettes.find((p) => p.id === activePaletteId);
 
   useEffect(() => {
+    if (!isDragging) return;
     const handleGlobalPointerUp = () => {
-      if (isDragging) {
-        setIsDragging(false);
-        if (selectionStart !== null && selectionEnd !== null && selectionStart !== selectionEnd) {
-          const start = Math.min(selectionStart, selectionEnd);
-          const end = Math.max(selectionStart, selectionEnd);
-          if (onColorsSelected) {
-            onColorsSelected(colors.slice(start, end + 1));
-          }
+      const { selectionStart: sStart, selectionEnd: sEnd, colors: curColors, onColorsSelected: onSel } =
+        latestRef.current;
+      latestRef.current.isDragging = false;
+      setIsDragging(false);
+      if (sStart !== null && sEnd !== null && sStart !== sEnd) {
+        const start = Math.min(sStart, sEnd);
+        const end = Math.max(sStart, sEnd);
+        if (onSel) {
+          onSel(curColors.slice(start, end + 1));
         }
       }
     };
     window.addEventListener('pointerup', handleGlobalPointerUp);
     return () => window.removeEventListener('pointerup', handleGlobalPointerUp);
-  }, [isDragging, selectionStart, selectionEnd, colors, onColorsSelected]);
+  }, [isDragging]);
 
-  const handlePointerDown = (idx: number, e: React.PointerEvent) => {
+  const hideHoverTooltip = () => {
+    if (tooltipRef.current) {
+      tooltipRef.current.style.display = 'none';
+    }
+  };
+
+  const handlePointerDown = (idx: number, e: React.PointerEvent<HTMLButtonElement>) => {
+    const { selectionStart: sStart, colors: curColors, onColorSelect: onSelect, onColorsSelected: onSel } =
+      latestRef.current;
     if (e.button === 0) {
-      if (e.shiftKey && selectionStart !== null) {
+      if (e.shiftKey && sStart !== null) {
+        latestRef.current.selectionEnd = idx;
         setSelectionEnd(idx);
-        const start = Math.min(selectionStart, idx);
-        const end = Math.max(selectionStart, idx);
-        if (onColorsSelected && end > start) {
-          onColorsSelected(colors.slice(start, end + 1));
+        const start = Math.min(sStart, idx);
+        const end = Math.max(sStart, idx);
+        if (onSel && end > start) {
+          onSel(curColors.slice(start, end + 1));
         }
       } else {
+        latestRef.current.selectionStart = idx;
+        latestRef.current.selectionEnd = idx;
+        latestRef.current.isDragging = true;
         setSelectionStart(idx);
         setSelectionEnd(idx);
         setIsDragging(true);
-        onColorSelect(colors[idx], true);
+        onSelect(curColors[idx], true);
         setTarget('primary');
       }
     } else if (e.button === 2) {
-      onColorSelect(colors[idx], false);
+      onSelect(curColors[idx], false);
       setTarget('secondary');
     }
   };
 
   const handlePointerEnter = (idx: number, color: string, e: React.PointerEvent<HTMLButtonElement>) => {
-    if (isDragging && selectionStart !== null) {
+    if (latestRef.current.isDragging && latestRef.current.selectionStart !== null) {
+      latestRef.current.selectionEnd = idx;
       setSelectionEnd(idx);
     }
-    const rect = e.currentTarget.getBoundingClientRect();
-    setHoveredSwatch({
-      color,
-      x: rect.left + rect.width / 2,
-      y: rect.top - 6,
-    });
+    const tooltip = tooltipRef.current;
+    const hexEl = tooltipHexRef.current;
+    if (tooltip && hexEl) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const x = rect.left + rect.width / 2;
+      const y = rect.top - 6;
+      const clampedX = Math.max(
+        80,
+        Math.min(typeof window !== 'undefined' ? window.innerWidth - 80 : x, x)
+      );
+      hexEl.textContent = color.toUpperCase();
+      tooltip.style.left = `${clampedX}px`;
+      tooltip.style.top = `${Math.max(44, y)}px`;
+      tooltip.style.display = 'inline-flex';
+    }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -98,6 +196,17 @@ export const Palette: React.FC<PaletteProps> = ({
     }
     if (e.target.value) e.target.value = '';
   };
+
+  const primaryLower = primaryColor.toLowerCase();
+  const secondaryLower = secondaryColor.toLowerCase();
+  const selMin =
+    selectionStart !== null && selectionEnd !== null
+      ? Math.min(selectionStart, selectionEnd)
+      : -1;
+  const selMax =
+    selectionStart !== null && selectionEnd !== null
+      ? Math.max(selectionStart, selectionEnd)
+      : -1;
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-card font-sans select-none">
@@ -193,73 +302,49 @@ export const Palette: React.FC<PaletteProps> = ({
 
       <div
         className="min-h-0 flex-1 overflow-y-auto bg-canvas/40 p-1.5"
-        onPointerLeave={() => setHoveredSwatch(null)}
-        onScroll={() => setHoveredSwatch((prev) => (prev ? null : prev))}
+        onPointerLeave={hideHoverTooltip}
+        onScroll={hideHoverTooltip}
       >
         <div className="grid grid-cols-[repeat(auto-fill,minmax(20px,1fr))] content-start gap-0.5">
           {colors.map((color, idx) => {
-            const isPrimary = primaryColor.toLowerCase() === color.toLowerCase();
-            const isSecondary = secondaryColor.toLowerCase() === color.toLowerCase();
-
-            let inSelection = false;
-            if (selectionStart !== null && selectionEnd !== null) {
-              const start = Math.min(selectionStart, selectionEnd);
-              const end = Math.max(selectionStart, selectionEnd);
-              inSelection = idx >= start && idx <= end;
-            }
+            const colorLower = color.toLowerCase();
+            const isPrimary = primaryLower === colorLower;
+            const isSecondary = secondaryLower === colorLower;
+            const inSelection = selMin !== -1 && idx >= selMin && idx <= selMax;
+            const isTargetActive =
+              (target === 'primary' && isPrimary) || (target === 'secondary' && isSecondary);
 
             return (
-              <button
+              <PaletteSwatch
                 key={`${color}-${idx}`}
-                type="button"
-                aria-label={`Color ${color.toUpperCase()}`}
-                className={`group relative aspect-square overflow-hidden rounded-[2px] border border-white/10 transition-transform active:scale-95 ${
-                  inSelection
-                    ? 'z-20 scale-110 ring-2 ring-primary shadow-md'
-                    : isPrimary || isSecondary
-                      ? 'z-10 ring-1 ring-white/80 ring-inset'
-                      : 'hover:z-10 hover:ring-1 hover:ring-white/50'
-                }`}
-                style={{ backgroundColor: color }}
-                onPointerDown={(e) => {
-                  e.preventDefault();
-                  handlePointerDown(idx, e);
-                }}
-                onPointerEnter={(e) => handlePointerEnter(idx, color, e)}
-                onContextMenu={(e) => e.preventDefault()}
-              >
-                {isPrimary && (
-                  <div className="absolute top-0 left-0 h-0 w-0 border-t-[8px] border-r-[8px] border-t-primary border-r-transparent" />
-                )}
-                {isSecondary && (
-                  <div className="absolute right-0 bottom-0 h-0 w-0 border-b-[8px] border-l-[8px] border-b-white border-l-transparent" />
-                )}
-                {((target === 'primary' && isPrimary) || (target === 'secondary' && isSecondary)) && (
-                  <div className="absolute inset-0 m-auto h-1 w-1 rounded-full bg-white mix-blend-difference" />
-                )}
-              </button>
+                color={color}
+                idx={idx}
+                isPrimary={isPrimary}
+                isSecondary={isSecondary}
+                inSelection={inSelection}
+                isTargetActive={isTargetActive}
+                onSwatchPointerDown={handlePointerDown}
+                onSwatchPointerEnter={handlePointerEnter}
+              />
             );
           })}
         </div>
       </div>
 
-      {hoveredSwatch && (
-        <div
-          role="tooltip"
-          className="pointer-events-none fixed z-50 inline-flex w-max max-w-xs -translate-x-1/2 -translate-y-full flex-col items-center gap-0.5 rounded-md border border-border-strong bg-popover px-2 py-1 text-[11px] font-medium leading-tight text-popover-foreground shadow-lg select-none"
-          style={{
-            left: `${Math.max(80, Math.min(typeof window !== 'undefined' ? window.innerWidth - 80 : hoveredSwatch.x, hoveredSwatch.x))}px`,
-            top: `${Math.max(44, hoveredSwatch.y)}px`,
-          }}
-        >
-          <span className="font-mono text-[11px] font-semibold text-foreground tabular-nums">
-            {hoveredSwatch.color.toUpperCase()}
-          </span>
-          <span className="text-[11px] whitespace-nowrap text-muted-foreground">
-            L: Primary · R: Secondary
-          </span>
-        </div>
-      )}
+      <div
+        ref={tooltipRef}
+        role="tooltip"
+        style={{ display: 'none' }}
+        className="pointer-events-none fixed z-50 w-max max-w-xs -translate-x-1/2 -translate-y-full flex-col items-center gap-0.5 rounded-md border border-border-strong bg-popover px-2 py-1 text-[11px] font-medium leading-tight text-popover-foreground shadow-lg select-none"
+      >
+        <span
+          ref={tooltipHexRef}
+          className="font-mono text-[11px] font-semibold text-foreground tabular-nums"
+        />
+        <span className="text-[11px] whitespace-nowrap text-muted-foreground">
+          L: Primary · R: Secondary
+        </span>
+      </div>
     </div>
   );
 };

@@ -160,6 +160,13 @@ export const Canvas: React.FC<CanvasProps> = ({
   const layerImageDataRef = useRef<ImageData | null>(null);
   const onionSkinImageDataRef = useRef<ImageData | null>(null);
   const onionSkinValidRef = useRef<boolean>(false);
+  const onionSkinCacheKeyRef = useRef<{
+    prevFrame: Frame | null;
+    layers: Layer[] | null;
+    palette: string[] | null;
+    width: number;
+    height: number;
+  } | null>(null);
   const layerCanvasCacheRef = useRef<Map<string, CachedLayerCanvas>>(new Map());
   const rotSpriteCacheRef = useRef<RotSpritePrecomputedBuffer | null>(null);
   const cursorRef = useRef<HTMLDivElement>(null);
@@ -857,17 +864,32 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
   }, []);
 
-  // Art Rendering Effect (Double Buffered + Per-Layer Cached)
+  const currentArtFrame = frames[activeFrameIndex];
+  const prevOnionFrame =
+    onionSkin && activeFrameIndex > 0 ? (frames[activeFrameIndex - 1] ?? null) : null;
+  const isTransformActive = isMoving || isRotating || isScaling;
+  const transformActiveLayerId = isTransformActive ? activeLayerId : '';
+  const transformSelection = isTransformActive ? selection : null;
+  const transformRotationAlgorithm = isRotating ? rotationAlgorithm : 'nearest';
+  const transformFloatingPixels = isTransformActive ? floatingPixels : null;
+  const transformMoveOffset = isMoving ? moveOffset : null;
+  const transformRotationAngle = isRotating ? rotationAngle : 0;
+  const transformRotationPivot = isRotating ? rotationPivot : null;
+  const transformInitialBox = isScaling ? initialBox : null;
+  const transformCurrentBox = isScaling ? currentBox : null;
+
+  // Art Rendering Effect (Double Buffered + Per-Layer & Onion-Skin Cached)
   useEffect(() => {
     const canvas = artCanvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d', { alpha: true });
     if (!ctx) return;
-    
+
     if (!offscreenCanvasRef.current) offscreenCanvasRef.current = document.createElement('canvas');
     const offscreen = offscreenCanvasRef.current;
     if (offscreen.width !== width || offscreen.height !== height) {
-        offscreen.width = width; offscreen.height = height;
+      offscreen.width = width;
+      offscreen.height = height;
     }
     const offCtx = offscreen.getContext('2d');
     if (!offCtx) return;
@@ -875,13 +897,13 @@ export const Canvas: React.FC<CanvasProps> = ({
     if (!layerCanvasRef.current) layerCanvasRef.current = document.createElement('canvas');
     const layerCanvas = layerCanvasRef.current;
     if (layerCanvas.width !== width || layerCanvas.height !== height) {
-        layerCanvas.width = width; layerCanvas.height = height;
+      layerCanvas.width = width;
+      layerCanvas.height = height;
     }
     const layerCtx = layerCanvas.getContext('2d');
     if (!layerCtx) return;
-    
-    const currentFrame = frames[activeFrameIndex];
-    if (!currentFrame) return;
+
+    if (!currentArtFrame) return;
 
     const getReusedImageData = (ref: React.MutableRefObject<ImageData | null>) => {
       if (!ref.current || ref.current.width !== width || ref.current.height !== height) {
@@ -896,25 +918,38 @@ export const Canvas: React.FC<CanvasProps> = ({
     const palLen = palette.length;
     const parentMap = getLayerParentMap(layers);
 
-    // 1. Draw Onion Skin to offscreen
-    if (onionSkin && activeFrameIndex > 0 && frames[activeFrameIndex - 1]) {
-      const prevFrame = frames[activeFrameIndex - 1];
-      const imgData = getReusedImageData(onionSkinImageDataRef);
-      const data32 = new Uint32Array(imgData.data.buffer);
+    // 1. Draw Onion Skin to offscreen (cached across transforms & current-frame edits)
+    if (prevOnionFrame) {
+      const cacheKey = onionSkinCacheKeyRef.current;
+      const isOnionCacheHit =
+        onionSkinValidRef.current &&
+        onionSkinImageDataRef.current !== null &&
+        cacheKey !== null &&
+        cacheKey.prevFrame === prevOnionFrame &&
+        cacheKey.layers === layers &&
+        cacheKey.palette === palette &&
+        cacheKey.width === width &&
+        cacheKey.height === height;
 
-      for (let lIdx = 0; lIdx < layers.length; lIdx++) {
-        const layer = layers[lIdx];
-        if (layer.type === 'group') continue;
-        if (!isLayerVisible(layer, layers, parentMap)) continue;
-        const pixels = prevFrame.layerData[layer.id];
-        if (!pixels) continue;
-        const effOpacity = getEffectiveLayerOpacity(layer, layers, parentMap);
-        const alpha = Math.round((effOpacity / 100) * 80);
-        if (alpha <= 0) continue;
+      if (isOnionCacheHit && onionSkinImageDataRef.current) {
+        offCtx.putImageData(onionSkinImageDataRef.current, 0, 0);
+      } else {
+        const imgData = getReusedImageData(onionSkinImageDataRef);
+        const data32 = new Uint32Array(imgData.data.buffer);
 
-        const paletteUint32 = getPaletteForAlpha(palette, alpha);
-        const pxLen = Math.min(pixels.length, totalPixels);
-        for (let i = 0; i < pxLen; i++) {
+        for (let lIdx = 0; lIdx < layers.length; lIdx++) {
+          const layer = layers[lIdx];
+          if (layer.type === 'group') continue;
+          if (!isLayerVisible(layer, layers, parentMap)) continue;
+          const pixels = prevOnionFrame.layerData[layer.id];
+          if (!pixels) continue;
+          const effOpacity = getEffectiveLayerOpacity(layer, layers, parentMap);
+          const alpha = Math.round((effOpacity / 100) * 80);
+          if (alpha <= 0) continue;
+
+          const paletteUint32 = getPaletteForAlpha(palette, alpha);
+          const pxLen = Math.min(pixels.length, totalPixels);
+          for (let i = 0; i < pxLen; i++) {
             const val = pixels[i];
             if (val === null || val === undefined) continue;
             if (typeof val === 'number') {
@@ -922,13 +957,22 @@ export const Canvas: React.FC<CanvasProps> = ({
             } else {
               data32[i] = getPackedColor(val, alpha);
             }
+          }
         }
+        offCtx.putImageData(imgData, 0, 0);
+        onionSkinValidRef.current = true;
+        onionSkinCacheKeyRef.current = {
+          prevFrame: prevOnionFrame,
+          layers,
+          palette,
+          width,
+          height,
+        };
       }
-      offCtx.putImageData(imgData, 0, 0);
-      onionSkinValidRef.current = true;
     } else {
       offCtx.clearRect(0, 0, width, height);
       onionSkinValidRef.current = false;
+      onionSkinCacheKeyRef.current = null;
     }
 
     // 2. Draw Layers to offscreen with per-layer rasterization cache
@@ -939,16 +983,18 @@ export const Canvas: React.FC<CanvasProps> = ({
       if (layer.type === 'group') continue;
       if (!isLayerVisible(layer, layers, parentMap)) continue;
 
-      const useLive = activeLive &&
+      const useLive =
+        activeLive &&
         activeLive.projectId === projectId &&
         activeLive.frameIndex === activeFrameIndex &&
         activeLive.layerId === layer.id;
-      const layerPixels = useLive ? activeLive.pixels : currentFrame.layerData[layer.id];
+      const layerPixels = useLive ? activeLive.pixels : currentArtFrame.layerData[layer.id];
       if (!layerPixels) continue;
-      
-      const isTargetLayer = layer.id === activeLayerId;
-      const isFloatingActive = (isMoving || isRotating || isScaling) && isTargetLayer && Boolean(selection);
-      
+
+      const isTargetLayer = layer.id === transformActiveLayerId;
+      const isFloatingActive =
+        isTransformActive && isTargetLayer && Boolean(transformSelection);
+
       const effOpacity = getEffectiveLayerOpacity(layer, layers, parentMap);
       const alpha = Math.round((effOpacity / 100) * 255);
       if (alpha <= 0) continue;
@@ -975,7 +1021,8 @@ export const Canvas: React.FC<CanvasProps> = ({
         layerCanvasCacheRef.current.set(layer.id, layerCache);
       }
 
-      const isDirty = isFloatingActive ||
+      const isDirty =
+        isFloatingActive ||
         layerCache.lastPixels !== layerPixels ||
         layerCache.lastOpacity !== alpha ||
         layerCache.lastPalette !== palette;
@@ -987,8 +1034,8 @@ export const Canvas: React.FC<CanvasProps> = ({
         const paletteUint32 = getPaletteForAlpha(palette, alpha);
         const pxLen = Math.min(layerPixels.length, totalPixels);
 
-        if (isFloatingActive && selection) {
-          const sel = selection;
+        if (isFloatingActive && transformSelection) {
+          const sel = transformSelection;
           for (let i = 0; i < pxLen; i++) {
             if (sel.has(i)) continue;
             const val = layerPixels[i];
@@ -1022,57 +1069,78 @@ export const Canvas: React.FC<CanvasProps> = ({
       }
 
       // Composite cached layer canvas to offscreen
-      const compositeOp: GlobalCompositeOperation = layer.blendMode === 'normal' 
-        ? 'source-over' 
-        : (layer.blendMode === 'addition' ? 'lighter' : (layer.blendMode === 'subtract' || layer.blendMode === 'divide' ? 'source-over' : layer.blendMode as GlobalCompositeOperation));
-      
+      const compositeOp: GlobalCompositeOperation =
+        layer.blendMode === 'normal'
+          ? 'source-over'
+          : layer.blendMode === 'addition'
+            ? 'lighter'
+            : layer.blendMode === 'subtract' || layer.blendMode === 'divide'
+              ? 'source-over'
+              : (layer.blendMode as GlobalCompositeOperation);
+
       offCtx.globalCompositeOperation = compositeOp;
       offCtx.drawImage(layerCache.canvas, 0, 0);
       offCtx.globalCompositeOperation = 'source-over';
     }
 
     // 3. Draw Floating Pixels (Transformations)
-    if ((isScaling || isRotating || isMoving) && floatingPixels && selection) {
-        let transformedGrid: PixelGrid;
-        if (isScaling && initialBox && currentBox) {
-            const tempGrid: PixelGrid = new Array(width * height).fill(null);
-            floatingPixels.forEach((color, idx) => tempGrid[idx] = color);
-            transformedGrid = scaleSelectionPixels(selection, tempGrid, initialBox, currentBox, width, height);
-        } else if (isRotating && rotationPivot) {
-            const tempGrid: PixelGrid = new Array(width * height).fill(null);
-            floatingPixels.forEach((color, idx) => tempGrid[idx] = color);
-            transformedGrid = rotateSelectionPixels(selection, tempGrid, rotationAngle, rotationPivot, width, height, rotationAlgorithm, rotSpriteCacheRef.current);
-        } else if (isMoving) {
-            const tempGrid: PixelGrid = new Array(width * height).fill(null);
-            floatingPixels.forEach((val, idx) => {
-                const { x, y } = getCoords(idx, width);
-                const nx = x + moveOffset.x;
-                const ny = y + moveOffset.y;
-                if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-                    tempGrid[getIndex(nx, ny, width)] = val;
-                }
-            });
-            transformedGrid = tempGrid;
+    if (isTransformActive && transformFloatingPixels && transformSelection) {
+      let transformedGrid: PixelGrid;
+      if (isScaling && transformInitialBox && transformCurrentBox) {
+        const tempGrid: PixelGrid = new Array(width * height).fill(null);
+        transformFloatingPixels.forEach((color, idx) => (tempGrid[idx] = color));
+        transformedGrid = scaleSelectionPixels(
+          transformSelection,
+          tempGrid,
+          transformInitialBox,
+          transformCurrentBox,
+          width,
+          height
+        );
+      } else if (isRotating && transformRotationPivot) {
+        const tempGrid: PixelGrid = new Array(width * height).fill(null);
+        transformFloatingPixels.forEach((color, idx) => (tempGrid[idx] = color));
+        transformedGrid = rotateSelectionPixels(
+          transformSelection,
+          tempGrid,
+          transformRotationAngle,
+          transformRotationPivot,
+          width,
+          height,
+          transformRotationAlgorithm,
+          rotSpriteCacheRef.current
+        );
+      } else if (isMoving && transformMoveOffset) {
+        const tempGrid: PixelGrid = new Array(width * height).fill(null);
+        transformFloatingPixels.forEach((val, idx) => {
+          const { x, y } = getCoords(idx, width);
+          const nx = x + transformMoveOffset.x;
+          const ny = y + transformMoveOffset.y;
+          if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+            tempGrid[getIndex(nx, ny, width)] = val;
+          }
+        });
+        transformedGrid = tempGrid;
+      } else {
+        transformedGrid = new Array(width * height).fill(null);
+      }
+
+      const floatImgData = getReusedImageData(layerImageDataRef);
+      const floatData32 = new Uint32Array(floatImgData.data.buffer);
+      const floatPaletteUint32 = getPaletteForAlpha(palette, 255);
+      const floatPxLen = Math.min(transformedGrid.length, totalPixels);
+
+      for (let i = 0; i < floatPxLen; i++) {
+        const val = transformedGrid[i];
+        if (val === null || val === undefined) continue;
+        if (typeof val === 'number') {
+          if (val >= 0 && val < palLen) floatData32[i] = floatPaletteUint32[val];
         } else {
-            transformedGrid = new Array(width * height).fill(null);
+          floatData32[i] = getPackedColor(val, 255);
         }
-
-        const floatImgData = getReusedImageData(layerImageDataRef);
-        const floatData32 = new Uint32Array(floatImgData.data.buffer);
-        const floatPaletteUint32 = getPaletteForAlpha(palette, 255);
-        const floatPxLen = Math.min(transformedGrid.length, totalPixels);
-
-        for (let i = 0; i < floatPxLen; i++) {
-            const val = transformedGrid[i];
-            if (val === null || val === undefined) continue;
-            if (typeof val === 'number') {
-              if (val >= 0 && val < palLen) floatData32[i] = floatPaletteUint32[val];
-            } else {
-              floatData32[i] = getPackedColor(val, 255);
-            }
-        }
-        layerCtx.putImageData(floatImgData, 0, 0);
-        offCtx.drawImage(layerCanvas, 0, 0);
+      }
+      layerCtx.putImageData(floatImgData, 0, 0);
+      offCtx.drawImage(layerCanvas, 0, 0);
     }
 
     // Final Transfer to Art Canvas
@@ -1081,7 +1149,32 @@ export const Canvas: React.FC<CanvasProps> = ({
 
     // Synchronize Tiled Overlays if active
     syncTiledOverlays(canvas, width, height, tiled);
-  }, [projectId, frames, activeFrameIndex, layers, activeLayerId, palette, width, height, onionSkin, selection, rotationAlgorithm, isMoving, isRotating, isScaling, floatingPixels, moveOffset, rotationAngle, rotationPivot, initialBox, currentBox, tiled, getPaletteForAlpha, syncTiledOverlays]);
+  }, [
+    projectId,
+    currentArtFrame,
+    prevOnionFrame,
+    activeFrameIndex,
+    layers,
+    transformActiveLayerId,
+    palette,
+    width,
+    height,
+    transformSelection,
+    transformRotationAlgorithm,
+    isTransformActive,
+    isMoving,
+    isRotating,
+    isScaling,
+    transformFloatingPixels,
+    transformMoveOffset,
+    transformRotationAngle,
+    transformRotationPivot,
+    transformInitialBox,
+    transformCurrentBox,
+    tiled,
+    getPaletteForAlpha,
+    syncTiledOverlays,
+  ]);
 
   // Direct Live-Stroke Dirty-Rect Subscriber (zero React re-renders during brush drag)
   useEffect(() => {
