@@ -1,6 +1,6 @@
 
 import { useEffect, useLayoutEffect, useRef } from 'react';
-import { Command, ProjectState, Position, SelectionMode } from '../types';
+import { Command, ProjectState, Position, SelectionMode, SelectionMask } from '../types';
 
 export function useKeyboard(
   commands: Command[], 
@@ -9,7 +9,7 @@ export function useKeyboard(
   projectActions: {
       deleteSelectedLayers: () => void;
       deleteSelectedFrames: () => void;
-      handleMovePixels: (sel: Set<number>, offset: Position) => void;
+      handleMovePixels: (sel: SelectionMask, offset: Position) => void;
   }
 ) {
   const commandsRef = useRef(commands);

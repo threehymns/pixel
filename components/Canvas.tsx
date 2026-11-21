@@ -10,14 +10,13 @@ import {
   Position,
   Modifiers,
   PixelGrid,
-  PixelValue,
 } from '../types';
 import { 
-  getIndex, getCoords,
+  getIndex,
   getRectSelection, getEllipseSelection, getPolygonSelection, getWandSelection,
-  getPackedPalette255, pixelToPackedImageData, createPixelGrid,
-  getMergedSelectionSegments, Segment, getSelectionBoundingBox, rotateSelectionPixels, scaleSelectionPixels,
-  getLayerParentMap, isLayerVisible, getEffectiveLayerOpacity, prepareRotSpriteBuffer, RotSpritePrecomputedBuffer
+  getPackedPalette255, pixelToPackedImageData,
+  getMergedSelectionSegments, Segment, getSelectionBoundingBox,
+  getLayerParentMap, isLayerVisible, getEffectiveLayerOpacity, SelectionMask,
 } from '../utils';
 import { setLiveZoom } from '../hooks/useCursorStore';
 import { subscribeLiveStroke, getLiveStroke, LiveStrokePayload } from '../hooks/useLiveStrokeStore';
@@ -29,13 +28,26 @@ const CURSOR_URI = `data:image/svg+xml;utf8,${encodeURIComponent(CURSOR_SVG)}`;
 interface CachedLayerCanvas {
   canvas: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D;
-  imageData: ImageData;
-  data32: Uint32Array;
   lastPixels: PixelGrid | null;
   lastPalette: string[] | null;
   lastColorMode: ColorMode | null;
   lastWidth: number;
   lastHeight: number;
+}
+
+interface TransformPreviewCache {
+  layerId: string;
+  box: { x: number; y: number; w: number; h: number };
+  floatCanvas: HTMLCanvasElement;
+  bgCanvas: HTMLCanvasElement;
+}
+
+const LARGE_CANVAS_PIXELS = 1_000_000;
+
+function releaseCanvas(canvas: HTMLCanvasElement | null): void {
+  if (!canvas) return;
+  canvas.width = 0;
+  canvas.height = 0;
 }
 
 // Precomputed circle brush boundary contours for instant, allocation-free rendering
@@ -105,7 +117,7 @@ interface CanvasProps {
   tiled: boolean;
   symmetryX: boolean;
   symmetryY: boolean;
-  selection: Set<number> | null;
+  selection: SelectionMask | null;
   selectionMode: SelectionMode;
   fillContiguous: boolean;
   rotationAlgorithm: 'nearest' | 'rotsprite';
@@ -113,10 +125,10 @@ interface CanvasProps {
   onDrawStart: (pos: Position, modifiers: Modifiers) => void;
   onDraw: (x: number, y: number, modifiers: Modifiers) => void;
   onDrawEnd: () => void;
-  onSelectionUpdate: (sel: Set<number> | null) => void;
-  onMovePixels: (newSelection: Set<number>, offset: Position) => void;
-  onRotatePixels: (newSelection: Set<number>, angle: number, pivot: Position) => void;
-  onScalePixels: (newSelection: Set<number>, srcBox: any, destBox: any) => void;
+  onSelectionUpdate: (sel: SelectionMask | null) => void;
+  onMovePixels: (newSelection: SelectionMask, offset: Position) => void;
+  onRotatePixels: (newSelection: SelectionMask, angle: number, pivot: Position) => void;
+  onScalePixels: (newSelection: SelectionMask, srcBox: any, destBox: any) => void;
   onZoom: (zoom: number) => void;
   onMousePosUpdate?: (pos: Position | null) => void;
   fitTrigger?: number;
@@ -132,53 +144,6 @@ const TILE_OFFSETS = [
   { tx: 0, ty: 1 },
   { tx: 1, ty: 1 },
 ] as const;
-
-interface TiledCanvasTileProps {
-  tx: number;
-  ty: number;
-  width: number;
-  height: number;
-  localZoom: number;
-  panX: number;
-  panY: number;
-  onRegisterTileCanvas: (key: string, el: HTMLCanvasElement | null) => void;
-}
-
-const TiledCanvasTile: React.FC<TiledCanvasTileProps> = ({
-  tx,
-  ty,
-  width,
-  height,
-  localZoom,
-  panX,
-  panY,
-  onRegisterTileCanvas,
-}) => {
-  const tileKey = `${tx}_${ty}`;
-  const handleCanvasRef = (el: HTMLCanvasElement | null) => {
-    onRegisterTileCanvas(tileKey, el);
-  };
-
-  return (
-    <div
-      className="absolute top-0 left-0 pointer-events-none opacity-40 grayscale-[0.2]"
-      style={{
-        width: `${width * localZoom}px`,
-        height: `${height * localZoom}px`,
-        transform: `translate(${panX + tx * width * localZoom}px, ${panY + ty * height * localZoom}px)`,
-        transformOrigin: 'top left',
-      }}
-    >
-      <canvas
-        ref={handleCanvasRef}
-        width={width}
-        height={height}
-        className="w-full h-full block"
-        style={{ imageRendering: 'pixelated' }}
-      />
-    </div>
-  );
-};
 
 export const Canvas: React.FC<CanvasProps> = ({ 
   projectId,
@@ -221,7 +186,8 @@ export const Canvas: React.FC<CanvasProps> = ({
   const uiCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const layerCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const layerImageDataRef = useRef<ImageData | null>(null);
+  const sharedUploadImageDataRef = useRef<ImageData | null>(null);
+  const dirtyUploadImageDataRef = useRef<ImageData | null>(null);
   const onionSkinCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const onionSkinValidRef = useRef<boolean>(false);
   const onionSkinCacheKeyRef = useRef<{
@@ -233,7 +199,8 @@ export const Canvas: React.FC<CanvasProps> = ({
     height: number;
   } | null>(null);
   const layerCanvasCacheRef = useRef<Map<string, CachedLayerCanvas>>(new Map());
-  const rotSpriteCacheRef = useRef<RotSpritePrecomputedBuffer | null>(null);
+  const lastRenderedProjectIdRef = useRef<string>(projectId);
+  const transformPreviewRef = useRef<TransformPreviewCache | null>(null);
   const cursorRef = useRef<HTMLDivElement>(null);
   const mousePosRef = useRef<{x: number, y: number}>({ x: -100, y: -100 });
   const touchTimeoutRef = useRef<number | null>(null);
@@ -282,32 +249,21 @@ export const Canvas: React.FC<CanvasProps> = ({
     };
   }, [refreshContainerRect]);
 
-  const selectionSet = useMemo(() => {
-    if (!selection) return null;
-    if (selection instanceof Set) {
-      return selection.size > 0 ? selection : null;
-    }
-    const arr = Array.isArray(selection) ? Array.from(selection as any) : [];
-    const numSet = new Set<number>();
-    for (let i = 0; i < arr.length; i++) {
-      const n = Number(arr[i]);
-      if (!isNaN(n)) numSet.add(n);
-    }
-    return numSet.size > 0 ? numSet : null;
-  }, [selection]);
+  const selectionMask = useMemo(
+    () => SelectionMask.fromAny(selection, width, height),
+    [selection, width, height]
+  );
 
   // Precompute merged boundary segments for active selection.
-  // Reduces marching-ants rendering complexity from O(Selection Area) to O(Selection Corners),
-  // improving performance by 100x-1000x on high-resolution canvas selections.
   const selectionBorderSegments = useMemo(() => {
-    if (!selectionSet || selectionSet.size === 0) return null;
-    return getMergedSelectionSegments(selectionSet, width, height);
-  }, [selectionSet, width, height]);
+    if (!selectionMask || selectionMask.size === 0) return null;
+    return getMergedSelectionSegments(selectionMask, width, height);
+  }, [selectionMask, width, height]);
 
   const selectionBoundingBox = useMemo(() => {
-    if (!selectionSet || selectionSet.size === 0) return null;
-    return getSelectionBoundingBox(selectionSet, width);
-  }, [selectionSet, width]);
+    if (!selectionMask || selectionMask.size === 0) return null;
+    return getSelectionBoundingBox(selectionMask, width);
+  }, [selectionMask, width]);
   
   const callbacks = useRef({ onDrawStart, onDraw, onDrawEnd });
   useEffect(() => {
@@ -339,7 +295,6 @@ export const Canvas: React.FC<CanvasProps> = ({
 
   // Performance refs: coordinate deduplication and debounced zoom commit
   const lastReportedCoordsRef = useRef<Position | null>(null);
-  const tileCanvasesRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   const zoomCommitTimerRef = useRef<number | null>(null);
   const wheelRafIdRef = useRef<number | null>(null);
   const pendingWheelRef = useRef<{
@@ -365,33 +320,10 @@ export const Canvas: React.FC<CanvasProps> = ({
       height,
       tiled,
     };
+    panRef.current = pan;
+    zoomRef.current = localZoom;
     onZoomRef.current = onZoom;
   });
-
-  const handleRegisterTileCanvas = (key: string, el: HTMLCanvasElement | null) => {
-    if (el) {
-      const prevEl = tileCanvasesRef.current.get(key);
-      tileCanvasesRef.current.set(key, el);
-      if (prevEl !== el && artCanvasRef.current) {
-        const ctx = el.getContext('2d');
-        if (ctx) {
-          const { width: w, height: h } = liveStateRef.current;
-          ctx.clearRect(0, 0, w, h);
-          ctx.drawImage(artCanvasRef.current, 0, 0);
-        }
-      }
-    } else {
-      tileCanvasesRef.current.delete(key);
-    }
-  };
-  
-  useEffect(() => {
-    panRef.current = pan;
-  }, [pan]);
-
-  useEffect(() => {
-    zoomRef.current = localZoom;
-  }, [localZoom]);
 
   useEffect(() => {
     const projectChanged = prevProjectIdRef.current !== projectId;
@@ -422,6 +354,23 @@ export const Canvas: React.FC<CanvasProps> = ({
         wheelRafIdRef.current = null;
       }
       setLiveZoom(null);
+
+      // Release all offscreen canvas GPU/backing buffers on unmount
+      releaseCanvas(offscreenCanvasRef.current);
+      offscreenCanvasRef.current = null;
+      releaseCanvas(layerCanvasRef.current);
+      layerCanvasRef.current = null;
+      releaseCanvas(onionSkinCanvasRef.current);
+      onionSkinCanvasRef.current = null;
+      sharedUploadImageDataRef.current = null;
+      dirtyUploadImageDataRef.current = null;
+      if (transformPreviewRef.current) {
+        releaseCanvas(transformPreviewRef.current.floatCanvas);
+        releaseCanvas(transformPreviewRef.current.bgCanvas);
+        transformPreviewRef.current = null;
+      }
+      layerCanvasCacheRef.current.forEach((entry) => releaseCanvas(entry.canvas));
+      layerCanvasCacheRef.current.clear();
     };
   }, []);
 
@@ -446,7 +395,6 @@ export const Canvas: React.FC<CanvasProps> = ({
   const [isMoving, setIsMoving] = useState(false);
   const [moveStart, setMoveStart] = useState<Position | null>(null);
   const [moveOffset, setMoveOffset] = useState<Position>({x: 0, y: 0});
-  const [floatingPixels, setFloatingPixels] = useState<Map<number, PixelValue> | null>(null);
 
   const [isRotating, setIsRotating] = useState(false);
   const [rotationPivot, setRotationPivot] = useState<Position | null>(null);
@@ -456,6 +404,115 @@ export const Canvas: React.FC<CanvasProps> = ({
   const [scaleHandle, setScaleHandle] = useState<number | null>(null); // 0-7: TL, TC, TR, RC, BR, BC, BL, LC
   const [initialBox, setInitialBox] = useState<{x: number, y: number, w: number, h: number} | null>(null);
   const [currentBox, setCurrentBox] = useState<{x: number, y: number, w: number, h: number} | null>(null);
+
+  const releaseTransformPreview = useCallback(() => {
+    const tp = transformPreviewRef.current;
+    if (tp) {
+      releaseCanvas(tp.floatCanvas);
+      releaseCanvas(tp.bgCanvas);
+      transformPreviewRef.current = null;
+    }
+  }, []);
+
+  const buildTransformPreview = useCallback(
+    (sel: SelectionMask, box: { x: number; y: number; w: number; h: number }) => {
+      releaseTransformPreview();
+      const frame = frames[activeFrameIndex];
+      const layerData = frame?.layerData?.[activeLayerId];
+      if (!layerData || box.w <= 0 || box.h <= 0) return;
+
+      const paletteUint32 = getPackedPalette255(palette);
+
+      // 1. Build tightly cropped floating selection canvas (box.w x box.h)
+      const floatCanvas = document.createElement('canvas');
+      floatCanvas.width = box.w;
+      floatCanvas.height = box.h;
+      const floatCtx = floatCanvas.getContext('2d');
+      if (!floatCtx) return;
+
+      const floatImg = floatCtx.createImageData(box.w, box.h);
+      const float32 = new Uint32Array(floatImg.data.buffer);
+      const isRgba = colorMode === 'rgba';
+      const bx = box.x;
+      const by = box.y;
+      const bw = box.w;
+      sel.forEachCoord((px, py, idx) => {
+        const val = layerData[idx];
+        if (val !== 0) {
+          float32[(py - by) * bw + (px - bx)] = isRgba
+            ? val
+            : pixelToPackedImageData(val, paletteUint32);
+        }
+      });
+      floatCtx.putImageData(floatImg, 0, 0);
+
+      // 2. Build background canvas (active layer with selected region punched out once)
+      const bgCanvas = document.createElement('canvas');
+      bgCanvas.width = width;
+      bgCanvas.height = height;
+      const bgCtx = bgCanvas.getContext('2d');
+      if (!bgCtx) {
+        releaseCanvas(floatCanvas);
+        return;
+      }
+
+      const cached = layerCanvasCacheRef.current.get(activeLayerId);
+      const cacheHit =
+        cached &&
+        cached.lastWidth === width &&
+        cached.lastHeight === height &&
+        cached.lastPixels === layerData &&
+        cached.lastColorMode === colorMode &&
+        (colorMode !== 'indexed' || cached.lastPalette === palette);
+
+      if (cacheHit) {
+        bgCtx.drawImage(cached.canvas, 0, 0);
+      } else {
+        const totalPixels = width * height;
+        const bgImg = bgCtx.createImageData(width, height);
+        const bg32 = new Uint32Array(bgImg.data.buffer);
+        const pxLen = Math.min(layerData.length, totalPixels);
+        if (isRgba) {
+          bg32.set(layerData.subarray(0, pxLen));
+        } else {
+          for (let i = 0; i < pxLen; i++) {
+            const val = layerData[i];
+            if (val !== 0) bg32[i] = pixelToPackedImageData(val, paletteUint32);
+          }
+        }
+        bgCtx.putImageData(bgImg, 0, 0);
+      }
+
+      if (sel.isRect) {
+        bgCtx.clearRect(bx, by, box.w, box.h);
+      } else {
+        const maskCanvas = document.createElement('canvas');
+        maskCanvas.width = box.w;
+        maskCanvas.height = box.h;
+        const maskCtx = maskCanvas.getContext('2d');
+        if (maskCtx) {
+          const maskImg = maskCtx.createImageData(box.w, box.h);
+          const mask32 = new Uint32Array(maskImg.data.buffer);
+          sel.forEachCoord((px, py) => {
+            mask32[(py - by) * bw + (px - bx)] = 0xffffffff;
+          });
+          maskCtx.putImageData(maskImg, 0, 0);
+          bgCtx.globalCompositeOperation = 'destination-out';
+          bgCtx.drawImage(maskCanvas, bx, by);
+          bgCtx.globalCompositeOperation = 'source-over';
+        }
+        releaseCanvas(maskCanvas);
+      }
+
+      transformPreviewRef.current = {
+        layerId: activeLayerId,
+        box,
+        floatCanvas,
+        bgCanvas,
+      };
+    },
+    [frames, activeFrameIndex, activeLayerId, palette, colorMode, width, height, releaseTransformPreview]
+  );
 
   const gestureState = useRef({
       startZoom: zoom,
@@ -540,29 +597,17 @@ export const Canvas: React.FC<CanvasProps> = ({
     if (!coords) return;
     const { x, y } = coords;
 
-    if (tool === 'move' && selection && selectionBoundingBox) {
+    if (tool === 'move' && selectionMask && selectionBoundingBox) {
         const box = selectionBoundingBox;
         
         // Rotation Handle Check
         const rotHandleX = box.x + box.w / 2;
         const rotHandleY = box.y - 2;
         if (Math.hypot(x - rotHandleX, y - rotHandleY) < 1.8) {
+            buildTransformPreview(selectionMask, box);
             setIsRotating(true);
             setRotationPivot({ x: box.x + box.w / 2, y: box.y + box.h / 2 });
             setRotationAngle(0);
-            
-            const frame = frames[activeFrameIndex];
-            if (frame) {
-              const layerData = frame.layerData[activeLayerId];
-              if (layerData) {
-                const floats = new Map<number, PixelValue>();
-                selection.forEach(idx => floats.set(idx, layerData[idx]));
-                setFloatingPixels(floats);
-                rotSpriteCacheRef.current = rotationAlgorithm === 'rotsprite'
-                  ? prepareRotSpriteBuffer(selection, layerData, width)
-                  : null;
-              }
-            }
             return;
         }
 
@@ -580,38 +625,22 @@ export const Canvas: React.FC<CanvasProps> = ({
 
         for (let i = 0; i < handles.length; i++) {
             if (Math.hypot(x - handles[i].x, y - handles[i].y) < 1.5) {
+                buildTransformPreview(selectionMask, box);
                 setIsScaling(true);
                 setScaleHandle(i);
                 setInitialBox({...box});
                 setCurrentBox({...box});
                 setMoveStart({x, y});
-
-                const frame = frames[activeFrameIndex];
-                const layerData = frame?.layerData?.[activeLayerId];
-                if (layerData) {
-                  const floats = new Map<number, PixelValue>();
-                  selection.forEach(idx => floats.set(idx, layerData[idx]));
-                  setFloatingPixels(floats);
-                }
                 return;
             }
         }
     }
 
-    if (tool === 'move' && selection && selection.has(getIndex(x, y, width))) {
+    if (tool === 'move' && selectionMask && selectionBoundingBox && x >= 0 && x < width && y >= 0 && y < height && selectionMask.has(getIndex(x, y, width))) {
+      buildTransformPreview(selectionMask, selectionBoundingBox);
       setIsMoving(true);
       setMoveStart({x, y});
       setMoveOffset({x: 0, y: 0});
-      
-      const frame = frames[activeFrameIndex];
-      if (frame) {
-        const layerData = frame.layerData[activeLayerId];
-        if (layerData) {
-          const floats = new Map<number, PixelValue>();
-          selection.forEach(idx => floats.set(idx, layerData[idx]));
-          setFloatingPixels(floats);
-        }
-      }
       return;
     }
 
@@ -634,10 +663,8 @@ export const Canvas: React.FC<CanvasProps> = ({
       const frame = frames[activeFrameIndex];
       if (frame) {
         const layerData = frame.layerData[activeLayerId];
-        if (layerData) {
-          const newSel = getWandSelection(layerData, x, y, width, height, fillContiguous);
-          combineSelection(newSel);
-        }
+        const newSel = getWandSelection(layerData, x, y, width, height, fillContiguous);
+        combineSelection(newSel);
       }
       return;
     }
@@ -746,31 +773,32 @@ export const Canvas: React.FC<CanvasProps> = ({
   };
 
   const handlePointerUp = () => {
-    if (isScaling && initialBox && currentBox && selection) {
-        onScalePixels(selection, initialBox, currentBox);
+    if (isScaling && initialBox && currentBox && selectionMask) {
+        onScalePixels(selectionMask, initialBox, currentBox);
+        releaseTransformPreview();
         setIsScaling(false);
         setScaleHandle(null);
         setInitialBox(null);
         setCurrentBox(null);
-        setFloatingPixels(null);
         return;
     }
 
-    if (isRotating && rotationPivot && selection) {
-        onRotatePixels(selection, rotationAngle, rotationPivot);
-        rotSpriteCacheRef.current = null;
+    if (isRotating && rotationPivot && selectionMask) {
+        onRotatePixels(selectionMask, rotationAngle, rotationPivot);
+        releaseTransformPreview();
         setIsRotating(false);
         setRotationPivot(null);
         setRotationAngle(0);
-        setFloatingPixels(null);
         return;
     }
 
-    if (isMoving && moveStart && selection && floatingPixels) {
-      onMovePixels(selection, moveOffset);
+    if (isMoving && moveStart && selectionMask) {
+      if (moveOffset.x !== 0 || moveOffset.y !== 0) {
+        onMovePixels(selectionMask, moveOffset);
+      }
+      releaseTransformPreview();
       setIsMoving(false);
       setMoveStart(null);
-      setFloatingPixels(null);
       setMoveOffset({x:0, y:0});
       return;
     }
@@ -780,15 +808,15 @@ export const Canvas: React.FC<CanvasProps> = ({
     if (isDrawing) {
       if (['rect-select', 'ellipse-select', 'lasso-select'].includes(tool) && startPos) {
          const cp = cursorPosRef.current || startPos;
-         let newSel = new Set<number>();
+         let newSel = SelectionMask.empty(width, height);
          const clamp = (val: number, max: number) => Math.max(0, Math.min(max - 1, val));
          const sx = clamp(startPos.x, width);
          const sy = clamp(startPos.y, height);
          const cx = clamp(cp.x, width);
          const cy = clamp(cp.y, height);
 
-         if (tool === 'rect-select') newSel = getRectSelection(sx, sy, cx, cy, width);
-         else if (tool === 'ellipse-select') newSel = getEllipseSelection(sx, sy, cx, cy, width);
+         if (tool === 'rect-select') newSel = getRectSelection(sx, sy, cx, cy, width, height);
+         else if (tool === 'ellipse-select') newSel = getEllipseSelection(sx, sy, cx, cy, width, height);
          else if (tool === 'lasso-select') newSel = getPolygonSelection(polyPoints.length > 0 ? polyPoints : [startPos], width, height);
          combineSelection(newSel);
       }
@@ -799,24 +827,21 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
   };
 
-  const combineSelection = (newSelection: Set<number>) => {
-    let finalSel = new Set<number>();
-    const current = selectionSet || new Set<number>();
+  const combineSelection = (newSelection: SelectionMask) => {
+    let finalSel: SelectionMask;
+    const current = selectionMask;
     switch (selectionMode) {
-      case 'replace': finalSel = newSelection; break;
-      case 'add': 
-        finalSel = new Set<number>();
-        current.forEach(i => finalSel.add(i));
-        newSelection.forEach(i => finalSel.add(i));
+      case 'replace':
+        finalSel = newSelection;
         break;
-      case 'subtract': 
-        finalSel = new Set<number>();
-        current.forEach(i => finalSel.add(i));
-        newSelection.forEach(i => finalSel.delete(i));
+      case 'add':
+        finalSel = current ? current.union(newSelection) : newSelection;
         break;
-      case 'intersect': 
-        finalSel = new Set<number>();
-        newSelection.forEach(i => { if (current.has(i)) finalSel.add(i); });
+      case 'subtract':
+        finalSel = current ? current.subtract(newSelection) : SelectionMask.empty(width, height);
+        break;
+      case 'intersect':
+        finalSel = current ? current.intersect(newSelection) : SelectionMask.empty(width, height);
         break;
     }
     onSelectionUpdate(finalSel.size > 0 ? finalSel : null);
@@ -989,56 +1014,71 @@ export const Canvas: React.FC<CanvasProps> = ({
     };
   }, [handleWheel, handleTouchStart, handleTouchMove, handleTouchEnd]);
 
-  const syncTiledOverlays = useCallback(
-    (
-      sourceCanvas: HTMLCanvasElement,
-      width: number,
-      height: number,
-      tiled: boolean,
-      dirtyRect?: { x: number; y: number; w: number; h: number }
-    ) => {
-      if (tiled && tileCanvasesRef.current.size > 0) {
-        tileCanvasesRef.current.forEach(tCanvas => {
-          if (tCanvas) {
-            const tCtx = tCanvas.getContext('2d');
-            if (tCtx) {
-              if (dirtyRect) {
-                const { x, y, w, h } = dirtyRect;
-                tCtx.clearRect(x, y, w, h);
-                tCtx.drawImage(sourceCanvas, x, y, w, h, x, y, w, h);
-              } else {
-                tCtx.clearRect(0, 0, width, height);
-                tCtx.drawImage(sourceCanvas, 0, 0);
-              }
-            }
-          }
-        });
+  // Present the composited offscreen sprite (and GPU tiled mode overlays) onto the viewport-sized artCanvasRef.
+  // Panning and zooming only re-run this single GPU drawImage pass without re-compositing layers.
+  const presentArtViewport = useCallback(() => {
+    const canvas = artCanvasRef.current;
+    const offscreen = offscreenCanvasRef.current;
+    if (!canvas || !offscreen || offscreen.width === 0 || offscreen.height === 0) return;
+    const ctx = canvas.getContext('2d', { alpha: true });
+    if (!ctx) return;
+
+    const { width: w, height: h, tiled: isTiled } = liveStateRef.current;
+    const dprNow = window.devicePixelRatio || 1;
+    const vw = canvas.width / dprNow;
+    const vh = canvas.height / dprNow;
+    if (vw <= 0 || vh <= 0 || w <= 0 || h <= 0) return;
+
+    const curPan = panRef.current;
+    const curZoom = zoomRef.current;
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(dprNow, 0, 0, dprNow, 0, 0);
+    ctx.imageSmoothingEnabled = curZoom < 1;
+
+    const drawClippedInstance = (offsetX: number, offsetY: number, alpha: number) => {
+      const sx0 = Math.max(0, Math.floor(-offsetX / curZoom));
+      const sy0 = Math.max(0, Math.floor(-offsetY / curZoom));
+      const sx1 = Math.min(w, Math.ceil((vw - offsetX) / curZoom));
+      const sy1 = Math.min(h, Math.ceil((vh - offsetY) / curZoom));
+      if (sx1 <= sx0 || sy1 <= sy0) return;
+
+      const sw = sx1 - sx0;
+      const sh = sy1 - sy0;
+      const dx = offsetX + sx0 * curZoom;
+      const dy = offsetY + sy0 * curZoom;
+      const dw = sw * curZoom;
+      const dh = sh * curZoom;
+
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(offscreen, sx0, sy0, sw, sh, dx, dy, dw, dh);
+    };
+
+    if (isTiled) {
+      const tileW = w * curZoom;
+      const tileH = h * curZoom;
+      for (let i = 0; i < TILE_OFFSETS.length; i++) {
+        const { tx, ty } = TILE_OFFSETS[i];
+        drawClippedInstance(curPan.x + tx * tileW, curPan.y + ty * tileH, 0.4);
       }
-    },
-    []
-  );
+    }
+
+    drawClippedInstance(curPan.x, curPan.y, 1);
+    ctx.globalAlpha = 1;
+  }, []);
 
   const currentArtFrame = frames[activeFrameIndex];
   const prevOnionFrame =
     onionSkin && activeFrameIndex > 0 ? (frames[activeFrameIndex - 1] ?? null) : null;
   const isTransformActive = isMoving || isRotating || isScaling;
-  const transformActiveLayerId = isTransformActive ? activeLayerId : '';
-  const transformSelection = isTransformActive ? selection : null;
-  const transformRotationAlgorithm = isRotating ? rotationAlgorithm : 'nearest';
-  const transformFloatingPixels = isTransformActive ? floatingPixels : null;
   const transformMoveOffset = isMoving ? moveOffset : null;
   const transformRotationAngle = isRotating ? rotationAngle : 0;
   const transformRotationPivot = isRotating ? rotationPivot : null;
-  const transformInitialBox = isScaling ? initialBox : null;
   const transformCurrentBox = isScaling ? currentBox : null;
 
-  // Art Rendering Effect (Double Buffered + Per-Layer Full-Alpha GPU-Composited & Onion-Skin Cached)
+  // Art Rendering Effect (Double Buffered + Per-Layer Canvas Cache + GPU Transform Preview)
   useEffect(() => {
-    const canvas = artCanvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d', { alpha: true });
-    if (!ctx) return;
-
     if (!offscreenCanvasRef.current) offscreenCanvasRef.current = document.createElement('canvas');
     const offscreen = offscreenCanvasRef.current;
     if (offscreen.width !== width || offscreen.height !== height) {
@@ -1048,40 +1088,44 @@ export const Canvas: React.FC<CanvasProps> = ({
     const offCtx = offscreen.getContext('2d');
     if (!offCtx) return;
 
-    if (!layerCanvasRef.current) layerCanvasRef.current = document.createElement('canvas');
-    const layerCanvas = layerCanvasRef.current;
-    if (layerCanvas.width !== width || layerCanvas.height !== height) {
-      layerCanvas.width = width;
-      layerCanvas.height = height;
-    }
-    const layerCtx = layerCanvas.getContext('2d');
-    if (!layerCtx) return;
-
     if (!currentArtFrame) return;
 
-    const getReusedImageData = (ref: React.MutableRefObject<ImageData | null>) => {
-      if (!ref.current || ref.current.width !== width || ref.current.height !== height) {
-        ref.current = offCtx.createImageData(width, height);
-      } else {
-        new Uint32Array(ref.current.data.buffer).fill(0);
-      }
-      return ref.current;
-    };
-
     const totalPixels = width * height;
+    const isLargeCanvas = totalPixels > LARGE_CANVAS_PIXELS;
     const paletteUint32 = getPackedPalette255(palette);
     const parentMap = getLayerParentMap(layers);
 
-    // Prune stale layer caches for deleted/switched-project layers so large canvases don't leak
-    if (layerCanvasCacheRef.current.size > layers.length) {
+    // On project switch, evict and zero all cached layer canvases immediately to release VRAM
+    if (lastRenderedProjectIdRef.current !== projectId) {
+      lastRenderedProjectIdRef.current = projectId;
+      layerCanvasCacheRef.current.forEach((entry) => releaseCanvas(entry.canvas));
+      layerCanvasCacheRef.current.clear();
+      sharedUploadImageDataRef.current = null;
+      dirtyUploadImageDataRef.current = null;
+      releaseCanvas(onionSkinCanvasRef.current);
+      onionSkinCanvasRef.current = null;
+      onionSkinValidRef.current = false;
+      onionSkinCacheKeyRef.current = null;
+    } else if (layerCanvasCacheRef.current.size > layers.length) {
+      // Prune stale layer caches for deleted layers
       const validIds = new Set<string>();
       for (let i = 0; i < layers.length; i++) validIds.add(layers[i].id);
-      for (const cachedId of layerCanvasCacheRef.current.keys()) {
+      for (const [cachedId, entry] of layerCanvasCacheRef.current.entries()) {
         if (!validIds.has(cachedId)) {
+          releaseCanvas(entry.canvas);
           layerCanvasCacheRef.current.delete(cachedId);
         }
       }
     }
+
+    const getSharedUploadImageData = (): ImageData => {
+      let img = sharedUploadImageDataRef.current;
+      if (!img || img.width !== width || img.height !== height) {
+        img = offCtx.createImageData(width, height);
+        sharedUploadImageDataRef.current = img;
+      }
+      return img;
+    };
 
     // 1. Draw Onion Skin to offscreen (cached canvas composited with GPU globalAlpha)
     offCtx.globalCompositeOperation = 'source-over';
@@ -1114,37 +1158,53 @@ export const Canvas: React.FC<CanvasProps> = ({
         }
         const onionCtx = onionCanvas.getContext('2d');
         if (onionCtx) {
+          if (!layerCanvasRef.current) layerCanvasRef.current = document.createElement('canvas');
+          const layerCanvas = layerCanvasRef.current;
+          if (layerCanvas.width !== width || layerCanvas.height !== height) {
+            layerCanvas.width = width;
+            layerCanvas.height = height;
+          }
+          const layerCtx = layerCanvas.getContext('2d');
+
           onionCtx.globalCompositeOperation = 'source-over';
           onionCtx.globalAlpha = 1;
           onionCtx.clearRect(0, 0, width, height);
 
-          for (let lIdx = 0; lIdx < layers.length; lIdx++) {
-            const layer = layers[lIdx];
-            if (layer.type === 'group') continue;
-            if (!isLayerVisible(layer, layers, parentMap)) continue;
-            const pixels = prevOnionFrame.layerData[layer.id];
-            if (!pixels) continue;
-            const effOpacity = getEffectiveLayerOpacity(layer, layers, parentMap);
-            if (effOpacity <= 0) continue;
+          if (layerCtx) {
+            for (let lIdx = 0; lIdx < layers.length; lIdx++) {
+              const layer = layers[lIdx];
+              if (layer.type === 'group') continue;
+              if (!isLayerVisible(layer, layers, parentMap)) continue;
+              const pixels = prevOnionFrame.layerData[layer.id];
+              if (!pixels) continue;
+              const effOpacity = getEffectiveLayerOpacity(layer, layers, parentMap);
+              if (effOpacity <= 0) continue;
 
-            const scratchImgData = getReusedImageData(layerImageDataRef);
-            const data32 = new Uint32Array(scratchImgData.data.buffer);
-            const pxLen = Math.min(pixels.length, totalPixels);
+              const scratchImgData = getSharedUploadImageData();
+              const data32 = new Uint32Array(scratchImgData.data.buffer);
+              const pxLen = Math.min(pixels.length, totalPixels);
 
-            if (colorMode === 'rgba') {
-              data32.set(pixels.subarray(0, pxLen));
-            } else {
-              for (let i = 0; i < pxLen; i++) {
-                const val = pixels[i];
-                if (val !== 0) {
-                  data32[i] = pixelToPackedImageData(val, paletteUint32);
+              if (colorMode === 'rgba') {
+                data32.set(pixels.subarray(0, pxLen));
+                if (pxLen < totalPixels) data32.fill(0, pxLen);
+              } else {
+                data32.fill(0);
+                for (let i = 0; i < pxLen; i++) {
+                  const val = pixels[i];
+                  if (val !== 0) {
+                    data32[i] = pixelToPackedImageData(val, paletteUint32);
+                  }
                 }
               }
-            }
 
-            layerCtx.putImageData(scratchImgData, 0, 0);
-            onionCtx.globalAlpha = effOpacity / 100;
-            onionCtx.drawImage(layerCanvas, 0, 0);
+              layerCtx.putImageData(scratchImgData, 0, 0);
+              onionCtx.globalAlpha = effOpacity / 100;
+              onionCtx.drawImage(layerCanvas, 0, 0);
+            }
+          }
+          if (isLargeCanvas) {
+            releaseCanvas(layerCanvasRef.current);
+            layerCanvasRef.current = null;
           }
           onionCtx.globalAlpha = 1;
           onionSkinValidRef.current = true;
@@ -1165,17 +1225,78 @@ export const Canvas: React.FC<CanvasProps> = ({
         offCtx.globalAlpha = 1;
       }
     } else {
+      if (onionSkinCanvasRef.current) {
+        releaseCanvas(onionSkinCanvasRef.current);
+        onionSkinCanvasRef.current = null;
+      }
+      if (layerCanvasRef.current) {
+        releaseCanvas(layerCanvasRef.current);
+        layerCanvasRef.current = null;
+      }
       onionSkinValidRef.current = false;
       onionSkinCacheKeyRef.current = null;
     }
 
-    // 2. Draw Layers to offscreen with per-layer full-alpha rasterization cache + GPU opacity
+    // 2. Draw Layers to offscreen with per-layer canvas cache + GPU opacity/blend & transform preview
     const activeLive = getLiveStroke();
+    const tp = isTransformActive ? transformPreviewRef.current : null;
 
     for (let lIdx = 0; lIdx < layers.length; lIdx++) {
       const layer = layers[lIdx];
       if (layer.type === 'group') continue;
       if (!isLayerVisible(layer, layers, parentMap)) continue;
+
+      const effOpacity = getEffectiveLayerOpacity(layer, layers, parentMap);
+      if (effOpacity <= 0) continue;
+
+      const compositeOp: GlobalCompositeOperation =
+        layer.blendMode === 'normal'
+          ? 'source-over'
+          : layer.blendMode === 'addition'
+            ? 'lighter'
+            : layer.blendMode === 'subtract' || layer.blendMode === 'divide'
+              ? 'source-over'
+              : (layer.blendMode as GlobalCompositeOperation);
+
+      // Fast GPU-composited transform preview for the active layer (zero full-res CPU work during drag)
+      if (tp && layer.id === tp.layerId) {
+        offCtx.globalAlpha = effOpacity / 100;
+        offCtx.globalCompositeOperation = compositeOp;
+        offCtx.imageSmoothingEnabled = false;
+        offCtx.drawImage(tp.bgCanvas, 0, 0);
+
+        if (isScaling && transformCurrentBox) {
+          offCtx.drawImage(
+            tp.floatCanvas,
+            transformCurrentBox.x,
+            transformCurrentBox.y,
+            transformCurrentBox.w,
+            transformCurrentBox.h
+          );
+        } else if (isRotating && transformRotationPivot) {
+          offCtx.save();
+          offCtx.translate(transformRotationPivot.x, transformRotationPivot.y);
+          offCtx.rotate(transformRotationAngle);
+          offCtx.drawImage(
+            tp.floatCanvas,
+            tp.box.x - transformRotationPivot.x,
+            tp.box.y - transformRotationPivot.y
+          );
+          offCtx.restore();
+        } else if (isMoving && transformMoveOffset) {
+          offCtx.drawImage(
+            tp.floatCanvas,
+            tp.box.x + transformMoveOffset.x,
+            tp.box.y + transformMoveOffset.y
+          );
+        } else {
+          offCtx.drawImage(tp.floatCanvas, tp.box.x, tp.box.y);
+        }
+
+        offCtx.globalAlpha = 1;
+        offCtx.globalCompositeOperation = 'source-over';
+        continue;
+      }
 
       const useLive =
         activeLive &&
@@ -1185,25 +1306,16 @@ export const Canvas: React.FC<CanvasProps> = ({
       const layerPixels = useLive ? activeLive.pixels : currentArtFrame.layerData[layer.id];
       if (!layerPixels) continue;
 
-      const isTargetLayer = layer.id === transformActiveLayerId;
-      const isFloatingActive =
-        isTransformActive && isTargetLayer && Boolean(transformSelection);
-
-      const effOpacity = getEffectiveLayerOpacity(layer, layers, parentMap);
-      if (effOpacity <= 0) continue;
-
       let layerCache = layerCanvasCacheRef.current.get(layer.id);
       if (!layerCache || layerCache.lastWidth !== width || layerCache.lastHeight !== height) {
+        if (layerCache) releaseCanvas(layerCache.canvas);
         const c = document.createElement('canvas');
         c.width = width;
         c.height = height;
         const cCtx = c.getContext('2d')!;
-        const imgData = cCtx.createImageData(width, height);
         layerCache = {
           canvas: c,
           ctx: cCtx,
-          imageData: imgData,
-          data32: new Uint32Array(imgData.data.buffer),
           lastPixels: null,
           lastPalette: null,
           lastColorMode: null,
@@ -1214,33 +1326,16 @@ export const Canvas: React.FC<CanvasProps> = ({
       }
 
       const isDirty =
-        isFloatingActive ||
         layerCache.lastPixels !== layerPixels ||
         layerCache.lastColorMode !== colorMode ||
         (colorMode === 'indexed' && layerCache.lastPalette !== palette);
 
       if (isDirty) {
-        const data32 = layerCache.data32;
+        const uploadImg = getSharedUploadImageData();
+        const data32 = new Uint32Array(uploadImg.data.buffer);
         const pxLen = Math.min(layerPixels.length, totalPixels);
 
-        if (isFloatingActive && transformSelection) {
-          data32.fill(0);
-          const sel = transformSelection;
-          if (colorMode === 'rgba') {
-            data32.set(layerPixels.subarray(0, pxLen));
-            sel.forEach((idx) => {
-              if (idx >= 0 && idx < pxLen) data32[idx] = 0;
-            });
-          } else {
-            for (let i = 0; i < pxLen; i++) {
-              if (sel.has(i)) continue;
-              const val = layerPixels[i];
-              if (val !== 0) {
-                data32[i] = pixelToPackedImageData(val, paletteUint32);
-              }
-            }
-          }
-        } else if (colorMode === 'rgba') {
+        if (colorMode === 'rgba') {
           data32.set(layerPixels.subarray(0, pxLen));
           if (pxLen < totalPixels) data32.fill(0, pxLen);
         } else {
@@ -1253,25 +1348,11 @@ export const Canvas: React.FC<CanvasProps> = ({
           }
         }
 
-        layerCache.ctx.putImageData(layerCache.imageData, 0, 0);
-        if (!isFloatingActive) {
-          layerCache.lastPixels = layerPixels;
-          layerCache.lastPalette = palette;
-          layerCache.lastColorMode = colorMode;
-        } else {
-          layerCache.lastPixels = null; // force update when transform ends
-        }
+        layerCache.ctx.putImageData(uploadImg, 0, 0);
+        layerCache.lastPixels = layerPixels;
+        layerCache.lastPalette = palette;
+        layerCache.lastColorMode = colorMode;
       }
-
-      // Composite cached layer canvas to offscreen using GPU globalAlpha & blend mode
-      const compositeOp: GlobalCompositeOperation =
-        layer.blendMode === 'normal'
-          ? 'source-over'
-          : layer.blendMode === 'addition'
-            ? 'lighter'
-            : layer.blendMode === 'subtract' || layer.blendMode === 'divide'
-              ? 'source-over'
-              : (layer.blendMode as GlobalCompositeOperation);
 
       offCtx.globalAlpha = effOpacity / 100;
       offCtx.globalCompositeOperation = compositeOp;
@@ -1280,98 +1361,38 @@ export const Canvas: React.FC<CanvasProps> = ({
       offCtx.globalCompositeOperation = 'source-over';
     }
 
-    // 3. Draw Floating Pixels (Transformations)
-    if (isTransformActive && transformFloatingPixels && transformSelection) {
-      let transformedGrid: PixelGrid;
-      if (isScaling && transformInitialBox && transformCurrentBox) {
-        const tempGrid: PixelGrid = createPixelGrid(width * height);
-        transformFloatingPixels.forEach((color, idx) => (tempGrid[idx] = color));
-        transformedGrid = scaleSelectionPixels(
-          transformSelection,
-          tempGrid,
-          transformInitialBox,
-          transformCurrentBox,
-          width,
-          height
-        );
-      } else if (isRotating && transformRotationPivot) {
-        const tempGrid: PixelGrid = createPixelGrid(width * height);
-        transformFloatingPixels.forEach((color, idx) => (tempGrid[idx] = color));
-        transformedGrid = rotateSelectionPixels(
-          transformSelection,
-          tempGrid,
-          transformRotationAngle,
-          transformRotationPivot,
-          width,
-          height,
-          transformRotationAlgorithm,
-          rotSpriteCacheRef.current
-        );
-      } else if (isMoving && transformMoveOffset) {
-        const tempGrid: PixelGrid = createPixelGrid(width * height);
-        transformFloatingPixels.forEach((val, idx) => {
-          const { x, y } = getCoords(idx, width);
-          const nx = x + transformMoveOffset.x;
-          const ny = y + transformMoveOffset.y;
-          if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-            tempGrid[getIndex(nx, ny, width)] = val;
-          }
-        });
-        transformedGrid = tempGrid;
-      } else {
-        transformedGrid = createPixelGrid(width * height);
-      }
-
-      const floatImgData = getReusedImageData(layerImageDataRef);
-      const floatData32 = new Uint32Array(floatImgData.data.buffer);
-      const floatPxLen = Math.min(transformedGrid.length, totalPixels);
-
-      if (colorMode === 'rgba') {
-        floatData32.set(transformedGrid.subarray(0, floatPxLen));
-      } else {
-        for (let i = 0; i < floatPxLen; i++) {
-          const val = transformedGrid[i];
-          if (val !== 0) {
-            floatData32[i] = pixelToPackedImageData(val, paletteUint32);
-          }
-        }
-      }
-      layerCtx.putImageData(floatImgData, 0, 0);
-      offCtx.drawImage(layerCanvas, 0, 0);
+    // Release large scratch upload ImageData (>1MP) so we don't keep an idle 33MB CPU buffer around
+    if (isLargeCanvas) {
+      sharedUploadImageDataRef.current = null;
     }
 
-    // Final Transfer to Art Canvas
-    ctx.clearRect(0, 0, width, height);
-    ctx.drawImage(offscreen, 0, 0);
-
-    // Synchronize Tiled Overlays if active
-    syncTiledOverlays(canvas, width, height, tiled);
+    // Present composited offscreen canvas to the viewport-sized art canvas
+    presentArtViewport();
   }, [
     projectId,
     currentArtFrame,
     prevOnionFrame,
     activeFrameIndex,
     layers,
-    transformActiveLayerId,
     palette,
     colorMode,
     width,
     height,
-    transformSelection,
-    transformRotationAlgorithm,
     isTransformActive,
     isMoving,
     isRotating,
     isScaling,
-    transformFloatingPixels,
     transformMoveOffset,
     transformRotationAngle,
     transformRotationPivot,
-    transformInitialBox,
     transformCurrentBox,
-    tiled,
-    syncTiledOverlays,
+    presentArtViewport,
   ]);
+
+  // Lightweight viewport presentation effect on pan / zoom / tiled / container resize
+  useEffect(() => {
+    presentArtViewport();
+  }, [pan, localZoom, tiled, containerSize, width, height, presentArtViewport]);
 
   // Direct Live-Stroke Dirty-Rect Subscriber (zero React re-renders & dirty-rect compositing during brush drag)
   useEffect(() => {
@@ -1380,14 +1401,12 @@ export const Canvas: React.FC<CanvasProps> = ({
       const curState = liveStateRef.current;
       if (live.projectId !== curState.projectId || live.frameIndex !== curState.activeFrameIndex) return;
 
-      const canvas = artCanvasRef.current;
       const offscreen = offscreenCanvasRef.current;
-      if (!canvas || !offscreen) return;
-      const ctx = canvas.getContext('2d', { alpha: true });
+      if (!offscreen) return;
       const offCtx = offscreen.getContext('2d');
-      if (!ctx || !offCtx) return;
+      if (!offCtx) return;
 
-      const { width, height, layers, palette, colorMode: curColorMode, tiled } = curState;
+      const { width, height, layers, palette, colorMode: curColorMode } = curState;
       let resizedOffscreen = false;
       if (offscreen.width !== width || offscreen.height !== height) {
         offscreen.width = width;
@@ -1409,16 +1428,14 @@ export const Canvas: React.FC<CanvasProps> = ({
       let layerCache = layerCanvasCacheRef.current.get(live.layerId);
       let needsFullRaster = Boolean(live.fullRedraw || !live.dirtyRect || resizedOffscreen);
       if (!layerCache || layerCache.lastWidth !== width || layerCache.lastHeight !== height) {
+        if (layerCache) releaseCanvas(layerCache.canvas);
         const c = document.createElement('canvas');
         c.width = width;
         c.height = height;
         const cCtx = c.getContext('2d')!;
-        const imgData = cCtx.createImageData(width, height);
         layerCache = {
           canvas: c,
           ctx: cCtx,
-          imageData: imgData,
-          data32: new Uint32Array(imgData.data.buffer),
           lastPixels: null,
           lastPalette: null,
           lastColorMode: null,
@@ -1435,7 +1452,6 @@ export const Canvas: React.FC<CanvasProps> = ({
         needsFullRaster = true;
       }
 
-      const data32 = layerCache.data32;
       let dirtyRegion: { x: number; y: number; w: number; h: number } | undefined;
 
       if (!needsFullRaster && live.dirtyRect) {
@@ -1449,26 +1465,48 @@ export const Canvas: React.FC<CanvasProps> = ({
           const rh = maxY - minY + 1;
           dirtyRegion = { x: minX, y: minY, w: rw, h: rh };
 
+          // Upload using a tiny dirty-rect ImageData (a few KB instead of a permanent 33MB per-layer buffer)
+          let dirtyImg = dirtyUploadImageDataRef.current;
+          if (!dirtyImg || dirtyImg.width < rw || dirtyImg.height < rh) {
+            dirtyImg = layerCache.ctx.createImageData(rw, rh);
+            dirtyUploadImageDataRef.current = dirtyImg;
+          }
+          const dirtyData32 = new Uint32Array(dirtyImg.data.buffer);
+          const stride = dirtyImg.width;
+
           if (curColorMode === 'rgba') {
-            for (let py = minY; py <= maxY; py++) {
-              const rowStart = py * width + minX;
-              data32.set(pixels.subarray(rowStart, rowStart + rw), rowStart);
+            for (let row = 0; row < rh; row++) {
+              const srcStart = (minY + row) * width + minX;
+              dirtyData32.set(pixels.subarray(srcStart, srcStart + rw), row * stride);
             }
           } else {
-            for (let py = minY; py <= maxY; py++) {
-              const rowOff = py * width;
-              for (let px = minX; px <= maxX; px++) {
-                const idx = rowOff + px;
-                const val = pixels[idx];
-                data32[idx] = val === 0 ? 0 : pixelToPackedImageData(val, paletteUint32);
+            for (let row = 0; row < rh; row++) {
+              const srcRowOff = (minY + row) * width + minX;
+              const dstRowOff = row * stride;
+              for (let col = 0; col < rw; col++) {
+                const val = pixels[srcRowOff + col];
+                dirtyData32[dstRowOff + col] = val === 0 ? 0 : pixelToPackedImageData(val, paletteUint32);
               }
             }
           }
-          layerCache.ctx.putImageData(layerCache.imageData, 0, 0, minX, minY, rw, rh);
+          layerCache.ctx.putImageData(dirtyImg, minX, minY, 0, 0, rw, rh);
+
+          // Shrink oversized dirty buffer if it grew large during a previous full-shape drag
+          if (dirtyImg.width * dirtyImg.height > 262_144 && rw * rh < 16_384) {
+            dirtyUploadImageDataRef.current = null;
+          }
         } else {
           return;
         }
       } else {
+        let uploadImg = sharedUploadImageDataRef.current;
+        if (!uploadImg || uploadImg.width !== width || uploadImg.height !== height) {
+          uploadImg = layerCache.ctx.createImageData(width, height);
+          if (totalPixels <= LARGE_CANVAS_PIXELS) {
+            sharedUploadImageDataRef.current = uploadImg;
+          }
+        }
+        const data32 = new Uint32Array(uploadImg.data.buffer);
         const pxLen = Math.min(pixels.length, totalPixels);
         if (curColorMode === 'rgba') {
           data32.set(pixels.subarray(0, pxLen));
@@ -1482,7 +1520,7 @@ export const Canvas: React.FC<CanvasProps> = ({
             }
           }
         }
-        layerCache.ctx.putImageData(layerCache.imageData, 0, 0);
+        layerCache.ctx.putImageData(uploadImg, 0, 0);
       }
 
       layerCache.lastPixels = pixels;
@@ -1537,10 +1575,6 @@ export const Canvas: React.FC<CanvasProps> = ({
           offCtx.globalAlpha = 1;
           offCtx.globalCompositeOperation = 'source-over';
         }
-
-        ctx.clearRect(rx, ry, rw, rh);
-        ctx.drawImage(offscreen, rx, ry, rw, rh, rx, ry, rw, rh);
-        syncTiledOverlays(canvas, width, height, tiled, dirtyRegion);
       } else {
         offCtx.globalCompositeOperation = 'source-over';
         offCtx.globalAlpha = 1;
@@ -1578,15 +1612,13 @@ export const Canvas: React.FC<CanvasProps> = ({
           offCtx.globalAlpha = 1;
           offCtx.globalCompositeOperation = 'source-over';
         }
-
-        ctx.clearRect(0, 0, width, height);
-        ctx.drawImage(offscreen, 0, 0);
-        syncTiledOverlays(canvas, width, height, tiled);
       }
+
+      presentArtViewport();
     };
 
     return subscribeLiveStroke(handleLiveStroke);
-  }, [syncTiledOverlays]);
+  }, [presentArtViewport]);
 
   // UI Rendering Effect (Grid, Selection, Brush)
   const renderUI = useCallback(() => {
@@ -1654,7 +1686,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
 
     // 3. Draw Selection (Marching Ants)
-    if (selectionSet && selectionSet.size > 0) {
+    if (selectionMask && selectionMask.size > 0) {
       ctx.save();
       ctx.translate(px, py);
       
@@ -1809,7 +1841,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
 
     ctx.restore();
-  }, [containerSize, showGrid, width, height, symmetryX, symmetryY, tool, brushSize, brushShape, selectionSet, selectionBorderSegments, selectionBoundingBox, localZoom, pan, startPos, polyPoints, isMoving, isDrawing, moveOffset, isRotating, rotationAngle, rotationPivot, isScaling, currentBox]);
+  }, [containerSize, showGrid, width, height, symmetryX, symmetryY, tool, brushSize, brushShape, selectionMask, selectionBorderSegments, selectionBoundingBox, localZoom, pan, startPos, polyPoints, isMoving, isDrawing, moveOffset, isRotating, rotationAngle, rotationPivot, isScaling, currentBox]);
 
   useLayoutEffect(() => {
     renderUIRef.current = renderUI;
@@ -1820,7 +1852,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   }, [renderUI]);
 
   const hasMarchingAnts = Boolean(
-    (selectionSet && selectionSet.size > 0) || 
+    (selectionMask && selectionMask.size > 0) || 
     polyPoints.length > 0 || 
     (isDrawing && startPos && ['rect-select', 'ellipse-select', 'lasso-select'].includes(tool))
   );
@@ -1844,6 +1876,15 @@ export const Canvas: React.FC<CanvasProps> = ({
   }, [hasMarchingAnts]);
 
   const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
+  const spriteLeft = pan.x;
+  const spriteTop = pan.y;
+  const spriteRight = pan.x + width * localZoom;
+  const spriteBottom = pan.y + height * localZoom;
+  const clipLeft = Math.max(0, spriteLeft);
+  const clipTop = Math.max(0, spriteTop);
+  const clipRight = Math.min(containerSize.width, spriteRight);
+  const clipBottom = Math.min(containerSize.height, spriteBottom);
+  const hasVisibleSprite = clipRight > clipLeft && clipBottom > clipTop;
 
   return (
     <div 
@@ -1871,43 +1912,30 @@ export const Canvas: React.FC<CanvasProps> = ({
         </div>
       )}
 
-      {/* Tiled Mode Overlays - Rendered below main art */}
-      {tiled && TILE_OFFSETS.map(({ tx, ty }) => (
-        <TiledCanvasTile
-          key={`tile-${tx}-${ty}`}
-          tx={tx}
-          ty={ty}
-          width={width}
-          height={height}
-          localZoom={localZoom}
-          panX={pan.x}
-          panY={pan.y}
-          onRegisterTileCanvas={handleRegisterTileCanvas}
+      {/* Viewport-Clamped Checkerboard Backdrop */}
+      {hasVisibleSprite && (
+        <div
+          className="absolute top-0 left-0 shadow-2xl pointer-events-none"
+          style={{
+            width: `${clipRight - clipLeft}px`,
+            height: `${clipBottom - clipTop}px`,
+            transform: `translate(${clipLeft}px, ${clipTop}px)`,
+            transformOrigin: 'top left',
+            backgroundImage: 'conic-gradient(var(--checker-a) 90deg, var(--checker-b) 90deg 180deg, var(--checker-a) 180deg 270deg, var(--checker-b) 270deg)',
+            backgroundPosition: `${spriteLeft - clipLeft}px ${spriteTop - clipTop}px`,
+            backgroundSize: '32px 32px',
+          }}
         />
-      ))}
+      )}
 
-      {/* Art Layer Wrapper */}
-      <div 
-        className="absolute top-0 left-0 shadow-2xl"
-        style={{ 
-          width: `${width * localZoom}px`, 
-          height: `${height * localZoom}px`,
-          transform: `translate(${pan.x}px, ${pan.y}px)`, 
-          transformOrigin: 'top left',
-          pointerEvents: 'none',
-          backgroundImage: 'conic-gradient(var(--checker-a) 90deg, var(--checker-b) 90deg 180deg, var(--checker-a) 180deg 270deg, var(--checker-b) 270deg)',
-          backgroundPosition: '0 0',
-          backgroundSize: '32px 32px'
-        }}
-      >
-        <canvas
-          ref={artCanvasRef}
-          width={width}
-          height={height}
-          className="w-full h-full block"
-          style={{ imageRendering: 'pixelated' }}
-        />
-      </div>
+      {/* Viewport-Sized Art Canvas (Main Sprite + GPU Tiled Mode Overlays) */}
+      <canvas
+        ref={artCanvasRef}
+        width={Math.floor(containerSize.width * dpr)}
+        height={Math.floor(containerSize.height * dpr)}
+        style={{ width: `${containerSize.width}px`, height: `${containerSize.height}px` }}
+        className="absolute inset-0 pointer-events-none"
+      />
 
       {/* UI Overlay Layer (Grid, Selection, Handles) */}
       <canvas

@@ -7,7 +7,7 @@ import {
   useReducedMotion,
   useTransform,
 } from 'motion/react';
-import { Command, Position, ProjectState, ToolType } from '../types';
+import { Command, Position, ProjectState, SelectionMask, ToolType } from '../types';
 import { MAX_BRUSH_SIZE, SELECTION_TOOLS } from '../constants';
 import { Canvas } from './Canvas';
 import { Palette } from './Palette';
@@ -115,7 +115,7 @@ interface MobileLayoutProps {
   selectionSize: { w: number; h: number } | null;
   setMousePos: (pos: Position | null) => void;
   setDragStartPos: (pos: Position | null) => void;
-  onScalePixels: (selection: Set<number>, srcBox: any, destBox: any) => void;
+  onScalePixels: (selection: SelectionMask, srcBox: any, destBox: any) => void;
   activeTagPopover?: any;
   onCloseTagPopover?: () => void;
   layerPropertiesState?: { isOpen: boolean; layer: any };
@@ -403,7 +403,7 @@ const MobileWorkspace: React.FC<Omit<MobileLayoutProps, 'handleFileChange'>> = (
     canvasTools.handleDrawEnd();
   };
 
-  const handleCanvasSelectionUpdate = (sel: Set<number> | null) => {
+  const handleCanvasSelectionUpdate = (sel: SelectionMask | null) => {
     updateState((prev) => ({ ...prev, selection: sel }), {
       action: 'Select Area',
       tool: projectActions.getActiveState().tool,

@@ -78,7 +78,9 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
   const [limitToSelection, setLimitToSelection] = useState<boolean>(
     !!state.selection && state.selection.size > 0
   );
-  const [livePreview, setLivePreview] = useState<boolean>(true);
+  const [livePreview, setLivePreview] = useState<boolean>(
+    () => state.width * state.height <= 512 * 512
+  );
 
   const originalStateRef = useRef<ProjectState>(state);
   const onPreviewRef = useRef(onPreview);
@@ -102,6 +104,7 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
       lastPreviewHashRef.current = '';
       setOutlineColor(state.primaryColor || '#000000');
       setLimitToSelection(!!state.selection && state.selection.size > 0);
+      setLivePreview(state.width * state.height <= 512 * 512);
     } else {
       if (!isConfirmedRef.current && hasPreviewAppliedRef.current) {
         onCancelRef.current(originalStateRef.current);
@@ -149,15 +152,25 @@ export const OutlineDialog: React.FC<OutlineDialogProps> = ({
     if (lastPreviewHashRef.current === previewHash) {
       return;
     }
-    lastPreviewHashRef.current = previewHash;
 
-    try {
-      const { newState } = applyOutlineEffect(originalStateRef.current, outlineOptions);
-      hasPreviewAppliedRef.current = true;
-      onPreviewRef.current(newState);
-    } catch (e) {
-      console.warn('Outline preview failed', e);
+    const runPreview = () => {
+      lastPreviewHashRef.current = previewHash;
+      try {
+        const { newState } = applyOutlineEffect(originalStateRef.current, outlineOptions);
+        hasPreviewAppliedRef.current = true;
+        onPreviewRef.current(newState);
+      } catch (e) {
+        console.warn('Outline preview failed', e);
+      }
+    };
+
+    const pixelCount = originalStateRef.current.width * originalStateRef.current.height;
+    if (pixelCount > 256 * 256) {
+      const timer = window.setTimeout(runPreview, 140);
+      return () => window.clearTimeout(timer);
     }
+
+    runPreview();
   }, [isOpen, outlineOptions, livePreview]);
 
   const handlePresetSelect = (preset: OutlineShapePreset) => {

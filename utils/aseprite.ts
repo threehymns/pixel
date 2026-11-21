@@ -1226,7 +1226,9 @@ export async function parseAseprite(buffer: ArrayBuffer, filename = 'imported'):
     const fData: Record<string, PixelGrid> = {};
 
     layers.forEach(layer => {
-      fData[layer.id] = frameLayerData[f][layer.id] || createPixelGrid(width * height);
+      if (layer.type !== 'group' && frameLayerData[f][layer.id]) {
+        fData[layer.id] = frameLayerData[f][layer.id];
+      }
     });
 
     frames.push({
@@ -1288,7 +1290,9 @@ export async function parseAseprite(buffer: ArrayBuffer, filename = 'imported'):
 
 const FALLBACK_ASEPRITE_PALETTE = ['#000000', '#ffffff'];
 
-interface CachedEncodedCel {
+export type AsepriteCompressionLevel = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+
+export interface CachedEncodedCel {
   width: number;
   height: number;
   pxLen: number;
@@ -1301,8 +1305,16 @@ interface CachedEncodedCel {
   hasIndexedValues: boolean;
   hasStringValues: boolean;
   compressedKey: string | null;
-  compressedPaletteRef: string[] | null;
+  compressedLevel: number;
+  compressedPaletteSig: string | null;
   compressedBytes: Uint8Array | null;
+}
+
+export interface AsepriteEncodeOptions {
+  compressionLevel?: AsepriteCompressionLevel;
+  frameGridIds?: Record<string, number>[];
+  externalCelCache?: Map<number, CachedEncodedCel>;
+  maxExternalCacheEntries?: number;
 }
 
 const ENCODED_CEL_CACHE = new WeakMap<PixelGrid, CachedEncodedCel>();
@@ -1330,14 +1342,23 @@ export type AsepriteEncodeInput = Pick<
 /**
  * Encodes a ProjectState object into a binary Aseprite (.ase/.aseprite) Uint8Array buffer.
  */
-export function encodeAseprite(state: AsepriteEncodeInput): Uint8Array {
+export function encodeAseprite(
+  state: AsepriteEncodeInput,
+  options?: AsepriteEncodeOptions
+): Uint8Array {
   const { 
     width, height, colorMode, palette = [], paletteNames, layers, frames, 
     tags = [], slices = [], tilesets = [], externalFiles = [], userData 
   } = state;
+  const compressionLevel: AsepriteCompressionLevel = options?.compressionLevel ?? 6;
+  const externalCelCache = options?.externalCelCache;
+  const frameGridIds = options?.frameGridIds;
+  const maxExternalCacheEntries = options?.maxExternalCacheEntries ?? 48;
+
   const effectivePalette = (palette && palette.length > 0) 
     ? palette 
     : FALLBACK_ASEPRITE_PALETTE;
+  const paletteSig = effectivePalette.join(',');
   const numFrames = frames.length;
   const isIndexed = colorMode === 'indexed';
   const colorDepth = isIndexed ? 8 : 32;
@@ -1360,7 +1381,8 @@ export function encodeAseprite(state: AsepriteEncodeInput): Uint8Array {
 
   interface CelSignatureEntry {
     frameIdx: number;
-    px: PixelGrid;
+    px: PixelGrid | null;
+    compressedBytes: Uint8Array | null;
     len: number;
     nonNullCount: number;
     minX: number;
@@ -1369,6 +1391,7 @@ export function encodeAseprite(state: AsepriteEncodeInput): Uint8Array {
     maxY: number;
   }
   const seenGridByLayer: Map<PixelGrid, number>[] = asepriteLayers.map(() => new Map());
+  const seenGridIdByLayer: Map<number, number>[] = asepriteLayers.map(() => new Map());
   const celBucketsByLayer: Map<number, CelSignatureEntry[]>[] = asepriteLayers.map(() => new Map());
 
   const frameBuffers: Uint8Array[] = [];
@@ -1685,13 +1708,29 @@ export function encodeAseprite(state: AsepriteEncodeInput): Uint8Array {
 
     // --- Cel Chunks for this frame ---
     const compressedKey = `${isIndexed ? 1 : 0}:${effectiveTransparentIndex}`;
+    const curFrameGridIds = frameGridIds?.[frameIdx];
 
     for (let lIdx = 0; lIdx < asepriteLayers.length; lIdx++) {
       const layer = asepriteLayers[lIdx];
+      if (layer.type === 'group') continue;
       const px = frame.layerData[layer.id];
-      if (!px) continue;
+      const gridId = curFrameGridIds ? curFrameGridIds[layer.id] : undefined;
+
+      // Lookup worker-persistent cache when gridId is provided
+      let externalCached: CachedEncodedCel | undefined;
+      if (externalCelCache && gridId !== undefined) {
+        externalCached = externalCelCache.get(gridId);
+        if (externalCached) {
+          // Refresh LRU position
+          externalCelCache.delete(gridId);
+          externalCelCache.set(gridId, externalCached);
+        }
+      }
+
+      if (!px && !externalCached) continue;
 
       const seenGrids = seenGridByLayer[lIdx];
+      const seenGridIds = seenGridIdByLayer[lIdx];
       const celBuckets = celBucketsByLayer[lIdx];
 
       let linkedFrameIdx = -1;
@@ -1699,19 +1738,24 @@ export function encodeAseprite(state: AsepriteEncodeInput): Uint8Array {
       let hasPixels = false;
       let cachedAnalysis: CachedEncodedCel | undefined;
 
-      // O(1) fast path when a frame shares the exact same PixelGrid array reference
-      const refMatch = seenGrids.get(px);
+      // O(1) fast path when a frame shares the exact same PixelGrid reference or gridId
+      const refMatch =
+        (gridId !== undefined ? seenGridIds.get(gridId) : undefined) ??
+        (px ? seenGrids.get(px) : undefined);
+
       if (refMatch !== undefined) {
         linkedFrameIdx = refMatch;
       } else {
-        const pxLen = px.length;
-        cachedAnalysis = ENCODED_CEL_CACHE.get(px);
+        const pxLen = px ? px.length : (externalCached?.pxLen ?? width * height);
+        cachedAnalysis = externalCached ?? (px ? ENCODED_CEL_CACHE.get(px) : undefined);
+
         if (
           !cachedAnalysis ||
           cachedAnalysis.width !== width ||
           cachedAnalysis.height !== height ||
           cachedAnalysis.pxLen !== pxLen
         ) {
+          if (!px) continue;
           // Single pass over pixels to compute both content signature hash and tight bounding box
           let nonNullCount = 0;
           let hash = (2166136261 ^ pxLen) | 0;
@@ -1759,7 +1803,8 @@ export function encodeAseprite(state: AsepriteEncodeInput): Uint8Array {
             hasIndexedValues,
             hasStringValues,
             compressedKey: null,
-            compressedPaletteRef: null,
+            compressedLevel: -1,
+            compressedPaletteSig: null,
             compressedBytes: null,
           };
           ENCODED_CEL_CACHE.set(px, cachedAnalysis);
@@ -1768,6 +1813,16 @@ export function encodeAseprite(state: AsepriteEncodeInput): Uint8Array {
           maxX = cachedAnalysis.maxX;
           minY = cachedAnalysis.minY;
           maxY = cachedAnalysis.maxY;
+        }
+
+        if (externalCelCache && gridId !== undefined && cachedAnalysis) {
+          externalCelCache.delete(gridId);
+          externalCelCache.set(gridId, cachedAnalysis);
+          while (externalCelCache.size > maxExternalCacheEntries) {
+            const oldestKey = externalCelCache.keys().next().value;
+            if (oldestKey === undefined) break;
+            externalCelCache.delete(oldestKey);
+          }
         }
 
         const { hash, nonNullCount } = cachedAnalysis;
@@ -1784,7 +1839,10 @@ export function encodeAseprite(state: AsepriteEncodeInput): Uint8Array {
               entry.maxX === maxX &&
               entry.minY === minY &&
               entry.maxY === maxY &&
-              isPixelGridEqual(px, entry.px)
+              ((px && entry.px && isPixelGridEqual(px, entry.px)) ||
+                (cachedAnalysis.compressedBytes &&
+                  entry.compressedBytes &&
+                  isUint8ArrayEqual(cachedAnalysis.compressedBytes, entry.compressedBytes)))
             ) {
               linkedFrameIdx = entry.frameIdx;
               break;
@@ -1793,24 +1851,11 @@ export function encodeAseprite(state: AsepriteEncodeInput): Uint8Array {
         }
 
         if (linkedFrameIdx >= 0) {
-          seenGrids.set(px, linkedFrameIdx);
+          if (px) seenGrids.set(px, linkedFrameIdx);
+          if (gridId !== undefined) seenGridIds.set(gridId, linkedFrameIdx);
         } else {
-          const entry: CelSignatureEntry = {
-            frameIdx,
-            px,
-            len: pxLen,
-            nonNullCount,
-            minX,
-            maxX,
-            minY,
-            maxY,
-          };
-          if (bucket) {
-            bucket.push(entry);
-          } else {
-            celBuckets.set(hash, [entry]);
-          }
-          seenGrids.set(px, frameIdx);
+          if (px) seenGrids.set(px, frameIdx);
+          if (gridId !== undefined) seenGridIds.set(gridId, frameIdx);
         }
       }
 
@@ -1832,27 +1877,28 @@ export function encodeAseprite(state: AsepriteEncodeInput): Uint8Array {
         frameChunksWriter.writeBytes(celBytes);
         numChunksInFrame++;
       } else {
-        if (hasPixels) {
+        if (hasPixels && cachedAnalysis) {
           const celW = maxX - minX + 1;
           const celH = maxY - minY + 1;
-          const needsPaletteMatch = cachedAnalysis
-            ? (isIndexed ? cachedAnalysis.hasStringValues : cachedAnalysis.hasIndexedValues)
-            : true;
+          const needsPaletteMatch = isIndexed
+            ? cachedAnalysis.hasStringValues
+            : cachedAnalysis.hasIndexedValues;
           const canReuseCompressed = Boolean(
-            cachedAnalysis &&
             cachedAnalysis.compressedBytes &&
             cachedAnalysis.compressedKey === compressedKey &&
-            (!needsPaletteMatch || cachedAnalysis.compressedPaletteRef === effectivePalette)
+            cachedAnalysis.compressedLevel >= compressionLevel &&
+            (!needsPaletteMatch || cachedAnalysis.compressedPaletteSig === paletteSig)
           );
 
           let compressedCelBytes: Uint8Array;
-          if (canReuseCompressed && cachedAnalysis?.compressedBytes) {
+          if (canReuseCompressed && cachedAnalysis.compressedBytes) {
             compressedCelBytes = cachedAnalysis.compressedBytes;
           } else {
+            if (!px) continue;
             const bpp = isIndexed ? 1 : 4;
             const rawBuffer = new Uint8Array(celW * celH * bpp);
 
-            if (!isIndexed && isLittleEndian && (!cachedAnalysis || !cachedAnalysis.hasIndexedValues)) {
+            if (!isIndexed && isLittleEndian && !cachedAnalysis.hasIndexedValues) {
               // Fast path: direct 32-bit row copies for RGBA cels (matches ABGR byte order)
               const raw32 = new Uint32Array(rawBuffer.buffer);
               for (let cy = 0; cy < celH; cy++) {
@@ -1904,12 +1950,30 @@ export function encodeAseprite(state: AsepriteEncodeInput): Uint8Array {
               }
             }
 
-            compressedCelBytes = deflate(rawBuffer);
-            if (cachedAnalysis) {
-              cachedAnalysis.compressedKey = compressedKey;
-              cachedAnalysis.compressedPaletteRef = effectivePalette;
-              cachedAnalysis.compressedBytes = compressedCelBytes;
-            }
+            compressedCelBytes = deflate(rawBuffer, { level: compressionLevel });
+            cachedAnalysis.compressedKey = compressedKey;
+            cachedAnalysis.compressedLevel = compressionLevel;
+            cachedAnalysis.compressedPaletteSig = paletteSig;
+            cachedAnalysis.compressedBytes = compressedCelBytes;
+          }
+
+          // Register in celBuckets after compressedBytes is available
+          const bucket = celBuckets.get(cachedAnalysis.hash);
+          const sigEntry: CelSignatureEntry = {
+            frameIdx,
+            px: px ?? null,
+            compressedBytes: compressedCelBytes,
+            len: cachedAnalysis.pxLen,
+            nonNullCount: cachedAnalysis.nonNullCount,
+            minX,
+            maxX,
+            minY,
+            maxY,
+          };
+          if (bucket) {
+            bucket.push(sigEntry);
+          } else {
+            celBuckets.set(cachedAnalysis.hash, [sigEntry]);
           }
 
           const celWriter = new BinaryWriter(compressedCelBytes.length + 64);
@@ -1983,6 +2047,15 @@ export function encodeAseprite(state: AsepriteEncodeInput): Uint8Array {
 }
 
 function isPixelGridEqual(a: PixelGrid, b: PixelGrid): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function isUint8ArrayEqual(a: Uint8Array, b: Uint8Array): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {

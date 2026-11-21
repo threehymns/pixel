@@ -1,4 +1,4 @@
-import { PixelGrid, PixelValue, ProjectState, ColorMode, Layer, Frame } from '../types';
+import { PixelGrid, PixelValue, ProjectState, ColorMode, Layer, Frame, SelectionMask } from '../types';
 import {
   EMPTY_PIXEL,
   clonePixelGrid,
@@ -9,6 +9,7 @@ import {
   hexToRgb,
   pixelToHex,
 } from './pixelBuffer';
+import { SelectionMask as SelectionMaskClass } from './selectionMask';
 
 export type OutlinePlacement = 'outside' | 'inside' | 'both';
 export type OutlineShapePreset = 'square' | 'circle' | 'horizontal' | 'vertical' | 'custom';
@@ -144,18 +145,22 @@ export const processOutlineGrid = (
   options: OutlineOptions,
   colorMode: ColorMode,
   palette: string[],
-  selection: Set<number> | null
-): { resultPixels: PixelGrid; outlineOnlyPixels: PixelGrid; outlineIndices: number[] } => {
+  selection: SelectionMask | null
+): { resultPixels: PixelGrid; outlineOnlyPixels: PixelGrid; outlineMask: SelectionMask | null } => {
   const total = width * height;
   const resultPixels: PixelGrid = clonePixelGrid(sourceGrid);
   const outlineOnlyPixels: PixelGrid = createPixelGrid(total);
-  const outlineIndices: number[] = [];
+
+  const offsets = getMatrixOffsets(options.matrix);
+  if (offsets.length === 0) {
+    return { resultPixels, outlineOnlyPixels, outlineMask: null };
+  }
 
   const resolvedOutlineVal = resolveOutlinePixelValue(options.outlineColor, colorMode, palette);
   const targetBgHex = options.bgMode === 'color' && options.bgColor ? options.bgColor.toLowerCase() : null;
   const targetBgRgb = targetBgHex ? (getPackedColor(targetBgHex, 255) & 0x00ffffff) : -1;
+  const useSelection = Boolean(options.scope === 'selection' && selection && selection.size > 0);
 
-  // Helper to determine if a pixel at index is considered "background"
   const isBackground = (idx: number): boolean => {
     const val = sourceGrid[idx];
     if (val === EMPTY_PIXEL) return true;
@@ -169,46 +174,68 @@ export const processOutlineGrid = (
     return false;
   };
 
-  // Helper to determine if a pixel is considered "foreground"
-  const isForeground = (idx: number): boolean => {
-    if (isBackground(idx)) return false;
-    if (options.scope === 'selection' && selection && selection.size > 0) {
-      return selection.has(idx);
-    }
-    return true;
-  };
-
-  // Binary mask of current foreground
+  // Single pass to build foreground mask & tight foreground bounding box
   const currentFg = new Uint8Array(total);
-  for (let i = 0; i < total; i++) {
-    if (isForeground(i)) currentFg[i] = 1;
+  let fgMinX = width;
+  let fgMinY = height;
+  let fgMaxX = -1;
+  let fgMaxY = -1;
+
+  for (let y = 0; y < height; y++) {
+    const rowOff = y * width;
+    for (let x = 0; x < width; x++) {
+      const idx = rowOff + x;
+      if (isBackground(idx)) continue;
+      if (useSelection && !selection!.has(idx)) continue;
+      currentFg[idx] = 1;
+      if (x < fgMinX) fgMinX = x;
+      if (x > fgMaxX) fgMaxX = x;
+      if (y < fgMinY) fgMinY = y;
+      if (y > fgMaxY) fgMaxY = y;
+    }
   }
 
-  const offsets = getMatrixOffsets(options.matrix);
-  if (offsets.length === 0) {
-    return { resultPixels, outlineOnlyPixels, outlineIndices };
+  if (fgMaxX < fgMinX || fgMaxY < fgMinY) {
+    return { resultPixels, outlineOnlyPixels, outlineMask: null };
   }
 
-  const outsideMask = new Uint8Array(total);
-  const insideMask = new Uint8Array(total);
+  const thickness = Math.max(1, options.thickness | 0);
+  const roiMinX = Math.max(0, fgMinX - thickness);
+  const roiMaxX = Math.min(width - 1, fgMaxX + thickness);
+  const roiMinY = Math.max(0, fgMinY - thickness);
+  const roiMaxY = Math.min(height - 1, fgMaxY + thickness);
+
+  const needSelectionExpansion = Boolean(selection && selection.size > 0);
+  const outlineMask = needSelectionExpansion ? SelectionMaskClass.empty(width, height) : null;
+
+  // Ping-pong two reusable scratch buffers across thickness steps (zero per-step allocations)
+  const bufA = new Uint8Array(total);
+  const bufB = new Uint8Array(total);
+  const outsideMask = options.placement === 'outside' || options.placement === 'both' ? new Uint8Array(total) : null;
 
   // --- OUTSIDE OUTLINE ---
-  if (options.placement === 'outside' || options.placement === 'both') {
-    let frontier = new Uint8Array(currentFg);
+  if (outsideMask) {
+    bufA.set(currentFg);
+    let frontier = bufA;
+    let nextFrontier = bufB;
 
-    for (let step = 0; step < options.thickness; step++) {
-      const nextFrontier = new Uint8Array(total);
-      for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-          const idx = y * width + x;
-          if (!isBackground(idx) || outsideMask[idx]) continue;
+    for (let step = 0; step < thickness; step++) {
+      // Clear only the ROI in nextFrontier
+      for (let y = roiMinY; y <= roiMaxY; y++) {
+        nextFrontier.fill(0, y * width + roiMinX, y * width + roiMaxX + 1);
+      }
+
+      for (let y = roiMinY; y <= roiMaxY; y++) {
+        const rowOff = y * width;
+        for (let x = roiMinX; x <= roiMaxX; x++) {
+          const idx = rowOff + x;
+          if (outsideMask[idx] || !isBackground(idx)) continue;
 
           for (let k = 0; k < offsets.length; k++) {
             const nx = x - offsets[k][0];
             const ny = y - offsets[k][1];
             if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-              const nIdx = ny * width + nx;
-              if (frontier[nIdx]) {
+              if (frontier[ny * width + nx]) {
                 outsideMask[idx] = 1;
                 nextFrontier[idx] = 1;
                 break;
@@ -217,27 +244,42 @@ export const processOutlineGrid = (
           }
         }
       }
+
+      const tmp = frontier;
       frontier = nextFrontier;
+      nextFrontier = tmp;
     }
 
-    for (let i = 0; i < total; i++) {
-      if (outsideMask[i]) {
-        resultPixels[i] = resolvedOutlineVal;
-        outlineOnlyPixels[i] = resolvedOutlineVal;
-        outlineIndices.push(i);
+    for (let y = roiMinY; y <= roiMaxY; y++) {
+      const rowOff = y * width;
+      for (let x = roiMinX; x <= roiMaxX; x++) {
+        const idx = rowOff + x;
+        if (outsideMask[idx]) {
+          resultPixels[idx] = resolvedOutlineVal;
+          outlineOnlyPixels[idx] = resolvedOutlineVal;
+          if (outlineMask) outlineMask.add(idx);
+        }
       }
     }
   }
 
   // --- INSIDE OUTLINE ---
   if (options.placement === 'inside' || options.placement === 'both') {
-    let insideForeground = new Uint8Array(currentFg);
+    const insideMask = new Uint8Array(total);
+    bufA.set(currentFg);
+    let insideForeground = bufA;
+    let nextFg = bufB;
 
-    for (let step = 0; step < options.thickness; step++) {
-      const nextFg = new Uint8Array(insideForeground);
-      for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-          const idx = y * width + x;
+    for (let step = 0; step < thickness; step++) {
+      for (let y = fgMinY; y <= fgMaxY; y++) {
+        const rowOff = y * width;
+        nextFg.set(insideForeground.subarray(rowOff + fgMinX, rowOff + fgMaxX + 1), rowOff + fgMinX);
+      }
+
+      for (let y = fgMinY; y <= fgMaxY; y++) {
+        const rowOff = y * width;
+        for (let x = fgMinX; x <= fgMaxX; x++) {
+          const idx = rowOff + x;
           if (!insideForeground[idx] || insideMask[idx]) continue;
 
           let isBorder = false;
@@ -262,21 +304,28 @@ export const processOutlineGrid = (
           }
         }
       }
+
+      const tmp = insideForeground;
       insideForeground = nextFg;
+      nextFg = tmp;
     }
 
-    for (let i = 0; i < total; i++) {
-      if (insideMask[i]) {
-        resultPixels[i] = resolvedOutlineVal;
-        outlineOnlyPixels[i] = resolvedOutlineVal;
-        if (!outsideMask[i]) {
-          outlineIndices.push(i);
+    for (let y = fgMinY; y <= fgMaxY; y++) {
+      const rowOff = y * width;
+      for (let x = fgMinX; x <= fgMaxX; x++) {
+        const idx = rowOff + x;
+        if (insideMask[idx]) {
+          resultPixels[idx] = resolvedOutlineVal;
+          outlineOnlyPixels[idx] = resolvedOutlineVal;
+          if (outlineMask && (!outsideMask || !outsideMask[idx])) {
+            outlineMask.add(idx);
+          }
         }
       }
     }
   }
 
-  return { resultPixels, outlineOnlyPixels, outlineIndices };
+  return { resultPixels, outlineOnlyPixels, outlineMask };
 };
 
 /**
@@ -330,24 +379,18 @@ export const applyOutlineEffect = (
     ? frames.map((_, i) => i)
     : [activeFrameIndex];
 
-  const addedOutlineIndices = new Set<number>();
+  let expandedSelection: SelectionMask | null = selection ? selection.clone() : null;
 
   const newFrames: Frame[] = frames.map((frame, fIdx) => {
     if (!framesToProcess.includes(fIdx)) {
-      if (options.targetLayer === 'new') {
-        return {
-          ...frame,
-          layerData: {
-            ...frame.layerData,
-            [targetLayerId]: createPixelGrid(width * height)
-          }
-        };
-      }
+      // Leave newly created outline layer sparse on non-processed frames
       return frame;
     }
 
-    const sourceGrid = frame.layerData[activeLayerId] || createPixelGrid(width * height);
-    const { resultPixels, outlineOnlyPixels, outlineIndices } = processOutlineGrid(
+    const sourceGrid = frame.layerData[activeLayerId];
+    if (!sourceGrid) return frame;
+
+    const { resultPixels, outlineOnlyPixels, outlineMask } = processOutlineGrid(
       sourceGrid,
       width,
       height,
@@ -357,8 +400,8 @@ export const applyOutlineEffect = (
       selection
     );
 
-    for (const idx of outlineIndices) {
-      addedOutlineIndices.add(idx);
+    if (expandedSelection && outlineMask && outlineMask.size > 0) {
+      expandedSelection = expandedSelection.union(outlineMask);
     }
 
     const newLayerData = { ...frame.layerData };
@@ -374,13 +417,7 @@ export const applyOutlineEffect = (
     };
   });
 
-  // If a selection exists, expand it to include the newly generated outline pixels
-  let newSelection = selection ? new Set(selection) : null;
-  if (newSelection && addedOutlineIndices.size > 0) {
-    for (const idx of addedOutlineIndices) {
-      newSelection.add(idx);
-    }
-  }
+  const newSelection = expandedSelection && expandedSelection.size > 0 ? expandedSelection : null;
 
   const placementLabel = options.placement.charAt(0).toUpperCase() + options.placement.slice(1);
   const actionSummary = `Outline (${placementLabel}, ${options.thickness}px)`;

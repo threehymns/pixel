@@ -96,8 +96,8 @@ async function performSaveRecentProject(project: ProjectState): Promise<RecentPr
   };
 
   try {
-    // Compress to .aseprite binary off the main thread
-    const asepriteBinary = await encodeAsepriteAsync(project);
+    // Compress to .aseprite binary off the main thread using fast deflate level 1 for autosave
+    const asepriteBinary = await encodeAsepriteAsync(project, { compressionLevel: 1 });
 
     const blobRecord: StoredBlobRecord = {
       id: project.id,

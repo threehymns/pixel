@@ -29,10 +29,80 @@ import {
   getSelectionBoundingBox,
   isDescendant,
   getGroupChildren,
+  SelectionMask,
+  releaseScratchRenderBuffers,
 } from '../utils';
 import { encodeAsepriteAsync } from '../utils/asepriteWorkerClient';
 import { saveRecentProject, getRecentProjects, loadRecentProjectState, clearAllRecents } from '../utils/storage';
 import { applyOutlineEffect, DEFAULT_OUTLINE_MATRIX } from '../utils/outline';
+import { toast } from '../components/ui/toast';
+
+interface PersistedDocSignature {
+  title: string;
+  width: number;
+  height: number;
+  colorMode: ColorMode;
+  frames: Frame[];
+  layers: Layer[];
+  palette: string[];
+  paletteLibrary: SavedPalette[];
+  paletteNames?: Record<number, string>;
+  tags?: FrameTag[];
+  slices?: Slice[];
+  tilesets?: ProjectState['tilesets'];
+  externalFiles?: ProjectState['externalFiles'];
+  colorProfile?: ProjectState['colorProfile'];
+  transparentIndex?: number;
+  grid?: ProjectState['grid'];
+  pixelRatio?: ProjectState['pixelRatio'];
+  userData?: ProjectState['userData'];
+}
+
+function makeDocSignature(s: ProjectState): PersistedDocSignature {
+  return {
+    title: s.title,
+    width: s.width,
+    height: s.height,
+    colorMode: s.colorMode,
+    frames: s.frames,
+    layers: s.layers,
+    palette: s.palette,
+    paletteLibrary: s.paletteLibrary,
+    paletteNames: s.paletteNames,
+    tags: s.tags,
+    slices: s.slices,
+    tilesets: s.tilesets,
+    externalFiles: s.externalFiles,
+    colorProfile: s.colorProfile,
+    transparentIndex: s.transparentIndex,
+    grid: s.grid,
+    pixelRatio: s.pixelRatio,
+    userData: s.userData,
+  };
+}
+
+function isSameDocSignature(a: PersistedDocSignature, b: PersistedDocSignature): boolean {
+  return (
+    a.title === b.title &&
+    a.width === b.width &&
+    a.height === b.height &&
+    a.colorMode === b.colorMode &&
+    a.frames === b.frames &&
+    a.layers === b.layers &&
+    a.palette === b.palette &&
+    a.paletteLibrary === b.paletteLibrary &&
+    a.paletteNames === b.paletteNames &&
+    a.tags === b.tags &&
+    a.slices === b.slices &&
+    a.tilesets === b.tilesets &&
+    a.externalFiles === b.externalFiles &&
+    a.colorProfile === b.colorProfile &&
+    a.transparentIndex === b.transparentIndex &&
+    a.grid === b.grid &&
+    a.pixelRatio === b.pixelRatio &&
+    a.userData === b.userData
+  );
+}
 
 export type ProjectStateUpdater = ProjectState | ((prev: ProjectState) => ProjectState);
 
@@ -446,7 +516,10 @@ function estimateHistoryBytes(history: HistoryEntry[]): number {
         const lp = entry.patch.layers[j];
         bytes += lp.before.byteLength + lp.after.byteLength;
       }
+      if (entry.patch.selectionBefore) bytes += entry.patch.selectionBefore.byteLength;
+      if (entry.patch.selectionAfter) bytes += entry.patch.selectionAfter.byteLength;
     } else if (entry.kind === 'snapshot' && entry.state) {
+      if (entry.state.selection) bytes += entry.state.selection.byteLength;
       const frames = entry.state.frames;
       for (let f = 0; f < frames.length; f++) {
         const ld = frames[f].layerData;
@@ -566,7 +639,13 @@ export function useProject() {
     };
   }, []);
 
+  // Track the last persisted (or untouched-import) document snapshot per project ID
+  // to avoid redundant auto-saves on open, tab switch, or clean close.
+  const persistedDocsRef = useRef<Map<string, PersistedDocSignature>>(new Map());
+
   const addToRecents = (project: ProjectState) => {
+    const sig = makeDocSignature(project);
+    persistedDocsRef.current.set(project.id, sig);
     // Asynchronously encode to compressed .aseprite binary & store in IndexedDB
     saveRecentProject(project)
       .then(newEntry => {
@@ -605,6 +684,8 @@ export function useProject() {
         selection: null, 
         fileHandle: undefined 
       };
+      // Already stored in IndexedDB — skip redundant auto-save until edited
+      persistedDocsRef.current.set(newProjectState.id, makeDocSignature(newProjectState));
       
       setProjects(prev => [...prev, {
         data: newProjectState,
@@ -651,15 +732,28 @@ export function useProject() {
     };
   });
 
-  // Auto-save active project changes to IndexedDB (debounced) only when actual document
-  // content or metadata changes — not on high-frequency UI-only changes (zoom, tool, selection, etc.).
+  // Auto-save active project changes to IndexedDB (adaptive debounce) only when actual document
+  // content or metadata differs from the last persisted snapshot.
   useEffect(() => {
     if (!isSaveableProject) return;
     const scheduledProjectId = state.id;
+    const curSig = makeDocSignature(state);
+    const lastSig = persistedDocsRef.current.get(scheduledProjectId);
+    if (lastSig && isSameDocSignature(lastSig, curSig)) {
+      return;
+    }
+
+    const totalPixels = state.width * state.height;
+    const delayMs = totalPixels > 2_000_000 ? 5000 : totalPixels > 500_000 ? 3000 : 1500;
 
     const timer = setTimeout(() => {
       const latestProject = activeProjectRef.current;
       if (!latestProject || latestProject.id !== scheduledProjectId) return;
+      const latestSig = makeDocSignature(latestProject);
+      const prevPersisted = persistedDocsRef.current.get(scheduledProjectId);
+      if (prevPersisted && isSameDocSignature(prevPersisted, latestSig)) return;
+
+      persistedDocsRef.current.set(scheduledProjectId, latestSig);
       saveRecentProject(latestProject)
         .then(newEntry => {
           setRecentProjects(prev => {
@@ -670,7 +764,7 @@ export function useProject() {
         .catch(err => {
           console.warn("Auto-saving recent project to IndexedDB failed:", err);
         });
-    }, 1500);
+    }, delayMs);
 
     return () => clearTimeout(timer);
   }, [
@@ -697,8 +791,8 @@ export function useProject() {
     state.userData,
   ]);
 
-  // Save on window unload/hide so last-second unsaved work (including UI state) is never lost.
-  // Skip very large canvases (>1MP) during unload since async worker encoding won't finish before page teardown.
+  // Save on window unload/hide so last-second unsaved work is never lost.
+  // Skip already-persisted documents and very large canvases (>1MP) during unload.
   useEffect(() => {
     const handleBeforeUnload = () => {
       const currentProject = activeProjectRef.current;
@@ -708,7 +802,12 @@ export function useProject() {
         currentProject.id !== 'default' &&
         currentProject.width * currentProject.height <= 1_000_000
       ) {
-        saveRecentProject(currentProject).catch(() => {});
+        const curSig = makeDocSignature(currentProject);
+        const prevSig = persistedDocsRef.current.get(currentProject.id);
+        if (!prevSig || !isSameDocSignature(prevSig, curSig)) {
+          persistedDocsRef.current.set(currentProject.id, curSig);
+          saveRecentProject(currentProject).catch(() => {});
+        }
       }
     };
 
@@ -743,7 +842,7 @@ export function useProject() {
       secondaryColor: chosenPalette ? (chosenPalette.colors[0] || '#000000') : INITIAL_STATE.secondaryColor,
       layers: [{ id: 'layer-1', name: 'Layer 1', visible: true, locked: false, opacity: 100, blendMode: 'normal' }],
       selectedLayerIds: ['layer-1'],
-      frames: [{ id: 'frame-1', layerData: { 'layer-1': createPixelGrid(w * h) } }],
+      frames: [{ id: 'frame-1', layerData: {} }],
       selectedFrameIndices: [0],
       zoom: computeInitialZoom(w, h, 64),
     };
@@ -765,9 +864,15 @@ export function useProject() {
     addToRecents(newProject);
   };
 
-  const loadProjectFromFile = async (file: File, handle?: FileSystemFileHandle) => {
+  const loadProjectFromFile = async (file: File, handle?: FileSystemFileHandle): Promise<boolean> => {
     try {
       const newState = await loadAndNormalizeProjectFile(file, handle);
+
+      // For large imports (>2MP, e.g. 4K photos), skip background IndexedDB auto-save
+      // until the user actually edits the document.
+      if (newState.width * newState.height > 2_000_000) {
+        persistedDocsRef.current.set(newState.id, makeDocSignature(newState));
+      }
 
       setProjects(prev => [...prev, {
         data: newState,
@@ -776,9 +881,10 @@ export function useProject() {
         lastSavedHistoryIndex: 0
       }]);
       setActiveProjectId(newState.id);
+      return true;
     } catch (e) {
       console.error(e);
-      alert("Failed to load project: " + e);
+      return false;
     }
   };
 
@@ -795,20 +901,7 @@ export function useProject() {
       const newState = typeof updater === 'function' ? updater(p.data) : updater;
       if (newState === p.data && !historyConfig) return p;
 
-      let cleanSelection: Set<number> | null = null;
-      if (newState.selection) {
-        if (newState.selection instanceof Set) {
-          cleanSelection = newState.selection.size > 0 ? newState.selection : null;
-        } else {
-          const arr = Array.isArray(newState.selection) ? newState.selection : [];
-          const numSet = new Set<number>();
-          for (let i = 0; i < arr.length; i++) {
-            const n = Number(arr[i]);
-            if (!isNaN(n)) numSet.add(n);
-          }
-          cleanSelection = numSet.size > 0 ? numSet : null;
-        }
-      }
+      const cleanSelection = SelectionMask.fromAny(newState.selection, newState.width, newState.height);
       const sanitizedState = newState.selection === cleanSelection
         ? newState
         : { ...newState, selection: cleanSelection };
@@ -973,7 +1066,7 @@ export function useProject() {
            await writable.write(blob);
            await writable.close();
            markSaved();
-           alert(`Saved ${fileHandle.name}`);
+           toast.success(`Saved ${fileHandle.name}`);
            return;
         }
         
@@ -983,13 +1076,13 @@ export function useProject() {
             await writable.write(aseBytes.buffer as ArrayBuffer);
             await writable.close();
             markSaved();
-            alert(`Saved ${fileHandle.name}`);
+            toast.success(`Saved ${fileHandle.name}`);
             return;
         }
         await saveProjectAs();
     } catch (e) {
         console.error("Save failed", e);
-        alert("Failed to save project.");
+        toast.error("Failed to save project.");
     }
   };
 
@@ -997,15 +1090,21 @@ export function useProject() {
     const { projects, activeProjectId } = latestRef.current;
     const projToClose = projects.find(p => p.data.id === id);
     if (projToClose && projToClose.data && projToClose.data.id !== 'default') {
-      saveRecentProject(projToClose.data)
-        .then(newEntry => {
-          setRecentProjects(prev => {
-            const filtered = prev.filter(p => p.id !== newEntry.id);
-            return [newEntry, ...filtered].slice(0, 10);
-          });
-        })
-        .catch(console.warn);
+      const prevSig = persistedDocsRef.current.get(id);
+      const curSig = makeDocSignature(projToClose.data);
+      if (!prevSig || !isSameDocSignature(prevSig, curSig)) {
+        saveRecentProject(projToClose.data)
+          .then(newEntry => {
+            setRecentProjects(prev => {
+              const filtered = prev.filter(p => p.id !== newEntry.id);
+              return [newEntry, ...filtered].slice(0, 10);
+            });
+          })
+          .catch(console.warn);
+      }
     }
+    persistedDocsRef.current.delete(id);
+    releaseScratchRenderBuffers();
 
     let nextActiveId = activeProjectId;
     if (activeProjectId === id) {
@@ -1175,7 +1274,6 @@ export function useProject() {
     const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     const newFrame: Frame = { id: `frame-${Date.now()}`, layerData: {} };
-    state.layers.forEach(l => newFrame.layerData[l.id] = createPixelGrid(state.width * state.height));
     updateState(
         { 
           ...state, 
@@ -1276,7 +1374,6 @@ export function useProject() {
     const { activeProjectId, state } = latestRef.current;
     if (activeProjectId === 'home') return;
     const newFrame: Frame = { id: `frame-${Date.now()}`, layerData: {} };
-    state.layers.forEach(l => newFrame.layerData[l.id] = createPixelGrid(state.width * state.height));
     const newFrames = [...state.frames];
     newFrames.splice(index, 0, newFrame);
     updateState(
@@ -1295,7 +1392,7 @@ export function useProject() {
     if (activeProjectId === 'home') return;
     const selected = [...state.selectedFrameIndices].sort((a, b) => a - b);
     if (selected.length < 3) {
-      alert("Select 3 or more frames to interpolate between the first and last of the selection.");
+      toast.info("Select 3 or more frames to interpolate between the first and last of the selection.");
       return;
     }
 
@@ -1422,7 +1519,6 @@ export function useProject() {
     }
 
     const newLayer: Layer = { id: newId, name: newName, visible: true, locked: false, opacity: 100, blendMode: 'normal', childLevel, parentId };
-    const newFrames = state.frames.map(f => ({ ...f, layerData: { ...f.layerData, [newId]: createPixelGrid(state.width * state.height) } }));
     const newLayers = [...state.layers];
     if (insertIndex >= 0 && insertIndex <= newLayers.length) {
       newLayers.splice(insertIndex, 0, newLayer);
@@ -1438,7 +1534,7 @@ export function useProject() {
     }
 
     updateState(
-        { ...state, layers: newLayers, frames: newFrames, activeLayerId: newId, selectedLayerIds: [newId] }, 
+        { ...state, layers: newLayers, activeLayerId: newId, selectedLayerIds: [newId] }, 
         { action: 'Add Layer' }
     );
   };
@@ -1463,11 +1559,10 @@ export function useProject() {
       parentId,
       collapsed: false
     };
-    const newFrames = state.frames.map(f => ({ ...f, layerData: { ...f.layerData, [newId]: createPixelGrid(state.width * state.height) } }));
     const newLayers = [...state.layers]; const idx = state.layers.findIndex(l => l.id === state.activeLayerId);
     if(idx!==-1) newLayers.splice(idx+1, 0, newLayer); else newLayers.push(newLayer);
     updateState(
-        { ...state, layers: newLayers, frames: newFrames, activeLayerId: newId, selectedLayerIds: [newId] }, 
+        { ...state, layers: newLayers, activeLayerId: newId, selectedLayerIds: [newId] }, 
         { action: 'Add Group' }
     );
   };
@@ -1532,13 +1627,17 @@ export function useProject() {
      const newLayers = [...state.layers];
      newLayers.splice(layerIndex + 1, 0, newLayer); // Insert above
      
-     const newFrames = state.frames.map(f => ({
-         ...f,
-         layerData: {
-             ...f.layerData,
-             [newId]: f.layerData[id] ? clonePixelGrid(f.layerData[id]) : createPixelGrid(state.width * state.height)
-         }
-     }));
+     const newFrames = state.frames.map(f => {
+         const src = f.layerData[id];
+         if (!src) return f;
+         return {
+             ...f,
+             layerData: {
+                 ...f.layerData,
+                 [newId]: clonePixelGrid(src),
+             },
+         };
+     });
 
      updateState(
          { ...state, layers: newLayers, frames: newFrames, activeLayerId: newId, selectedLayerIds: [newId] },
@@ -1566,7 +1665,10 @@ export function useProject() {
         duplicatedIds.push(newId);
 
         newFrames.forEach(f => {
-            f.layerData[newId] = sourceLayer.id in f.layerData ? clonePixelGrid(f.layerData[id]) : createPixelGrid(state.width * state.height);
+            const src = f.layerData[id];
+            if (src) {
+                f.layerData[newId] = clonePixelGrid(src);
+            }
         });
     });
 
@@ -1641,16 +1743,8 @@ export function useProject() {
       ...nonSelectedLayers.slice(insertIndex)
     ];
 
-    const newFrames = state.frames.map(f => ({
-      ...f,
-      layerData: {
-        ...f.layerData,
-        [groupId]: createPixelGrid(state.width * state.height)
-      }
-    }));
-
     updateState(
-      { ...state, layers: newLayers, frames: newFrames, activeLayerId: groupId, selectedLayerIds: [groupId] },
+      { ...state, layers: newLayers, activeLayerId: groupId, selectedLayerIds: [groupId] },
       { action: `Grouped ${selectedLayers.length} Layer(s)` }
     );
   };
@@ -1720,16 +1814,8 @@ export function useProject() {
     newLayers[groupIndex] = { ...newLayers[groupIndex], collapsed: false };
     newLayers.splice(groupIndex, 0, newLayer);
 
-    const newFrames = state.frames.map(f => ({
-      ...f,
-      layerData: {
-        ...f.layerData,
-        [newId]: createPixelGrid(state.width * state.height)
-      }
-    }));
-
     updateState(
-      { ...state, layers: newLayers, frames: newFrames, activeLayerId: newId, selectedLayerIds: [newId] },
+      { ...state, layers: newLayers, activeLayerId: newId, selectedLayerIds: [newId] },
       { action: `Added Layer to ${group.name}` }
     );
   };
@@ -1908,16 +1994,16 @@ export function useProject() {
       } else if (file.name.endsWith('.png')) {
         colors = await extractColorsFromPNG(file);
       } else {
-        alert("Unsupported format. Use .ase, .gpl, or .png");
+        toast.error("Unsupported format. Use .ase, .gpl, or .png");
         return;
       }
-      if (colors.length === 0) { alert("No colors found."); return; }
+      if (colors.length === 0) { toast.error("No colors found."); return; }
       const newPalette: SavedPalette = { id: `pal-${Date.now()}`, name: name, colors: colors };
       updateState(
           (prev) => ({ ...prev, paletteLibrary: [...prev.paletteLibrary, newPalette], palette: newPalette.colors, activePaletteId: newPalette.id }),
           { action: `Import Palette: ${name}` }
       );
-    } catch (e) { console.error(e); alert("Failed to import palette."); }
+    } catch (e) { console.error(e); toast.error("Failed to import palette."); }
   };
 
   const selectPalette = (id: string) => {
@@ -2002,7 +2088,8 @@ export function useProject() {
           if (i !== activeFrameIndex) return f;
           const newLayerData = { ...f.layerData };
           selectedLayerIds.forEach(lId => {
-              const basePixels = f.layerData[lId] || createPixelGrid(width * height);
+              const basePixels = f.layerData[lId];
+              if (!basePixels) return;
               const updatedPixels = clonePixelGrid(basePixels);
 
               if (selection) {
@@ -2040,18 +2127,7 @@ export function useProject() {
           return { ...f, layerData: newLayerData };
       });
 
-      let newSelection = selection;
-      if (selection) {
-          newSelection = new Set<number>();
-          selection.forEach(idx => {
-               const {x, y} = getCoords(idx, width);
-               const relX = x - box.x;
-               const relY = y - box.y;
-               const destX = axis === 'h' ? box.x + box.w - 1 - relX : x;
-               const destY = axis === 'v' ? box.y + box.h - 1 - relY : y;
-               newSelection!.add(getIndex(destX, destY, width));
-          });
-      }
+      const newSelection = selection ? selection.flip(axis, box) : null;
 
       updateState(
           { ...state, frames: newFrames, selection: newSelection },
@@ -2116,7 +2192,8 @@ export function useProject() {
           if (i !== activeFrameIndex) return f;
           const newLayerData = { ...f.layerData };
           selectedLayerIds.forEach(lId => {
-              const oldPixels = f.layerData[lId] || createPixelGrid(width * height);
+              const oldPixels = f.layerData[lId];
+              if (!oldPixels) return;
               const newPixels = createPixelGrid(width * height);
               for (let y = minY; y <= maxY; y++) {
                   const ny = y + offsetY;
@@ -2134,15 +2211,8 @@ export function useProject() {
 
       let newSelection = state.selection;
       if (state.selection) {
-          newSelection = new Set<number>();
-          state.selection.forEach(idx => {
-              const { x, y } = getCoords(idx, width);
-              const nx = x + offsetX;
-              const ny = y + offsetY;
-              if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-                  newSelection!.add(getIndex(nx, ny, width));
-              }
-          });
+          const moved = state.selection.translate(offsetX, offsetY);
+          newSelection = moved.size > 0 ? moved : null;
       }
 
       updateState(
@@ -2236,7 +2306,8 @@ export function useProject() {
           if (i !== activeFrameIndex) return f;
           const newLayerData = { ...f.layerData };
           selectedLayerIds.forEach(lId => {
-              const basePixels = f.layerData[lId] || createPixelGrid(width * height);
+              const basePixels = f.layerData[lId];
+              if (!basePixels) return;
               const layerPixels = clonePixelGrid(basePixels);
               selection.forEach(idx => { layerPixels[idx] = EMPTY_PIXEL; });
               newLayerData[lId] = layerPixels;
@@ -2292,20 +2363,32 @@ export function useProject() {
      const { activeProjectId, state } = latestRef.current;
      if (activeProjectId === 'home') return;
      const canvas = renderFrameToCanvas(state, state.activeFrameIndex);
-     const link = document.createElement('a'); 
-     link.download = `${state.title}.png`; 
-     link.href = canvas.toDataURL(); 
-     link.click();
+     const filename = `${state.title}.png`;
+     canvas.toBlob((blob) => {
+       if (!blob) return;
+       const url = URL.createObjectURL(blob);
+       const link = document.createElement('a');
+       link.download = filename;
+       link.href = url;
+       link.click();
+       setTimeout(() => URL.revokeObjectURL(url), 1000);
+     }, 'image/png');
   };
 
   const downloadSpriteSheet = () => {
      const { activeProjectId, state } = latestRef.current;
      if (activeProjectId === 'home') return;
      const canvas = renderSpriteSheet(state);
-     const link = document.createElement('a'); 
-     link.download = `${state.title}_spritesheet.png`; 
-     link.href = canvas.toDataURL(); 
-     link.click();
+     const filename = `${state.title}_spritesheet.png`;
+     canvas.toBlob((blob) => {
+       if (!blob) return;
+       const url = URL.createObjectURL(blob);
+       const link = document.createElement('a');
+       link.download = filename;
+       link.href = url;
+       link.click();
+       setTimeout(() => URL.revokeObjectURL(url), 1000);
+     }, 'image/png');
   };
 
   const setFrameDuration = (frameIndex: number, duration: number) => {

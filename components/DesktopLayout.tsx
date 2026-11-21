@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Allotment } from 'allotment';
-import { ProjectState, ToolType } from '../types';
+import { ProjectState, SelectionMask, ToolType } from '../types';
 import { MAX_BRUSH_SIZE, SELECTION_TOOLS } from '../constants';
 import { DragZonePosition } from '../hooks/useLayout';
 import { ProjectStateUpdater } from '../hooks/useProject';
@@ -156,7 +156,7 @@ interface DesktopLayoutProps {
   dragStartPos?: any;
   setMousePos: (pos: any) => void;
   setDragStartPos: (pos: any) => void;
-  onScalePixels: (selection: Set<number>, srcBox: any, destBox: any) => void;
+  onScalePixels: (selection: SelectionMask, srcBox: any, destBox: any) => void;
   selectionSize: any;
   layoutActions: any;
   slots: any;
@@ -1606,7 +1606,7 @@ interface DesktopWorkspaceProps {
   fileSystem: any;
   setMousePos: (pos: any) => void;
   setDragStartPos: (pos: any) => void;
-  onScalePixels: (selection: Set<number>, srcBox: any, destBox: any) => void;
+  onScalePixels: (selection: SelectionMask, srcBox: any, destBox: any) => void;
   layoutActions: any;
   slots: any;
   floatingPanes: any[];
@@ -1783,7 +1783,7 @@ const DesktopWorkspace: React.FC<DesktopWorkspaceProps> = ({
     canvasTools.handleDrawEnd();
   };
 
-  const handleCanvasSelectionUpdate = (sel: Set<number> | null) => {
+  const handleCanvasSelectionUpdate = (sel: SelectionMask | null) => {
     const currentTool = projectActions.getActiveState().tool;
     updateState((prev) => ({ ...prev, selection: sel }), { action: 'Select Area', tool: currentTool });
   };

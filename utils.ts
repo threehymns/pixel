@@ -2,6 +2,7 @@
 import { PixelGrid, Position, ProjectState, Layer, Frame, SavedPalette, PixelValue, ColorMode } from './types';
 import {
   EMPTY_PIXEL,
+  isLittleEndian,
   createPixelGrid,
   clonePixelGrid,
   packRGBA,
@@ -26,7 +27,8 @@ import {
   applyRectPatch,
   buildLayerPatch,
 } from './utils/pixelBuffer';
-import { parseAsepriteAsync } from './utils/asepriteWorkerClient';
+import { parseAsepriteAsync, decodeImageFileAsync } from './utils/asepriteWorkerClient';
+import { SelectionMask, SelectionBounds } from './utils/selectionMask';
 
 export {
   EMPTY_PIXEL,
@@ -53,7 +55,9 @@ export {
   extractRectPatch,
   applyRectPatch,
   buildLayerPatch,
+  SelectionMask,
 };
+export type { SelectionBounds };
 
 export const getIndex = (x: number, y: number, width: number): number => {
   return y * width + x;
@@ -66,16 +70,10 @@ export const getCoords = (index: number, width: number): Position => {
   };
 };
 
-export const getSelectionBoundingBox = (selection: Set<number>, width: number) => {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  selection.forEach(idx => {
-    const { x, y } = getCoords(Number(idx), width);
-    minX = Math.min(minX, x);
-    minY = Math.min(minY, y);
-    maxX = Math.max(maxX, x);
-    maxY = Math.max(maxY, y);
-  });
-  return { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
+export const getSelectionBoundingBox = (selection: SelectionMask, _width?: number) => {
+  const box = selection.getBoundingBox();
+  if (!box) return { x: 0, y: 0, w: 0, h: 0 };
+  return box;
 };
 
 // Bresenham's Line Algorithm for smooth strokes
@@ -266,7 +264,119 @@ export const pixelPerfectFilter = (points: Position[]): Position[] => {
   return out;
 };
 
-// Flood Fill Algorithm (BFS) - Optimized to O(N) using Int32Array queue & Uint8Array visited lookup
+/**
+ * In-place scanline Flood Fill with inline SelectionMask clipping.
+ * Avoids allocating 33MB Int32Array queues and 8MB visited buffers on 4K canvases.
+ * Returns true if any pixel was modified.
+ */
+export const floodFillInPlace = (
+  pixels: PixelGrid,
+  startX: number,
+  startY: number,
+  fillValue: PixelValue,
+  width: number,
+  height: number,
+  contiguous: boolean = true,
+  selection?: SelectionMask | null
+): boolean => {
+  if (startX < 0 || startX >= width || startY < 0 || startY >= height) return false;
+  const startIndex = startY * width + startX;
+  if (selection && !selection.has(startIndex)) return false;
+
+  const targetValue = pixels[startIndex];
+  if (targetValue === fillValue) return false;
+
+  if (!contiguous) {
+    let changed = false;
+    if (selection) {
+      selection.forEach((i) => {
+        if (pixels[i] === targetValue) {
+          pixels[i] = fillValue;
+          changed = true;
+        }
+      });
+    } else {
+      for (let i = 0; i < pixels.length; i++) {
+        if (pixels[i] === targetValue) {
+          pixels[i] = fillValue;
+          changed = true;
+        }
+      }
+    }
+    return changed;
+  }
+
+  // Span/scanline flood fill: writing fillValue (!== targetValue) serves as the visited marker.
+  const stackX: number[] = [startX];
+  const stackY: number[] = [startY];
+
+  while (stackX.length > 0) {
+    const x = stackX.pop()!;
+    const y = stackY.pop()!;
+    const rowOff = y * width;
+
+    if (pixels[rowOff + x] !== targetValue) continue;
+    if (selection && !selection.has(rowOff + x)) continue;
+
+    let lx = x;
+    while (lx > 0) {
+      const idx = rowOff + lx - 1;
+      if (pixels[idx] !== targetValue || (selection && !selection.has(idx))) break;
+      lx--;
+    }
+
+    let rx = x;
+    while (rx + 1 < width) {
+      const idx = rowOff + rx + 1;
+      if (pixels[idx] !== targetValue || (selection && !selection.has(idx))) break;
+      rx++;
+    }
+
+    pixels.fill(fillValue, rowOff + lx, rowOff + rx + 1);
+
+    // Enqueue seed spans on row above and row below
+    if (y > 0) {
+      const aboveY = y - 1;
+      const aboveOff = aboveY * width;
+      let inSpan = false;
+      for (let sx = lx; sx <= rx; sx++) {
+        const idx = aboveOff + sx;
+        const match = pixels[idx] === targetValue && (!selection || selection.has(idx));
+        if (match) {
+          if (!inSpan) {
+            stackX.push(sx);
+            stackY.push(aboveY);
+            inSpan = true;
+          }
+        } else {
+          inSpan = false;
+        }
+      }
+    }
+
+    if (y + 1 < height) {
+      const belowY = y + 1;
+      const belowOff = belowY * width;
+      let inSpan = false;
+      for (let sx = lx; sx <= rx; sx++) {
+        const idx = belowOff + sx;
+        const match = pixels[idx] === targetValue && (!selection || selection.has(idx));
+        if (match) {
+          if (!inSpan) {
+            stackX.push(sx);
+            stackY.push(belowY);
+            inSpan = true;
+          }
+        } else {
+          inSpan = false;
+        }
+      }
+    }
+  }
+
+  return true;
+};
+
 export const floodFill = (
   pixels: PixelGrid,
   startX: number,
@@ -274,70 +384,11 @@ export const floodFill = (
   fillValue: PixelValue,
   width: number,
   height: number,
-  contiguous: boolean = true
+  contiguous: boolean = true,
+  selection?: SelectionMask | null
 ): PixelGrid => {
   const newPixels = clonePixelGrid(pixels);
-  const startIndex = getIndex(startX, startY, width);
-  const targetValue = newPixels[startIndex];
-
-  if (targetValue === fillValue) return newPixels;
-
-  if (!contiguous) {
-    for (let i = 0; i < newPixels.length; i++) {
-      if (newPixels[i] === targetValue) {
-        newPixels[i] = fillValue;
-      }
-    }
-    return newPixels;
-  }
-
-  // Bolt Optimization: Replace O(N) Array.prototype.shift() with an indexed Int32Array queue
-  // and Set lookups with a Uint8Array visited buffer to eliminate garbage collection & O(N^2) shift overhead.
-  const totalPixels = width * height;
-  const queue = new Int32Array(totalPixels);
-  let head = 0;
-  let tail = 0;
-  queue[tail++] = startIndex;
-
-  const visited = new Uint8Array(totalPixels);
-  visited[startIndex] = 1;
-
-  while (head < tail) {
-    const idx = queue[head++];
-    const x = idx % width;
-
-    newPixels[idx] = fillValue;
-
-    if (x + 1 < width) {
-      const nIdx = idx + 1;
-      if (!visited[nIdx] && newPixels[nIdx] === targetValue) {
-        visited[nIdx] = 1;
-        queue[tail++] = nIdx;
-      }
-    }
-    if (x - 1 >= 0) {
-      const nIdx = idx - 1;
-      if (!visited[nIdx] && newPixels[nIdx] === targetValue) {
-        visited[nIdx] = 1;
-        queue[tail++] = nIdx;
-      }
-    }
-    if (idx + width < totalPixels) {
-      const nIdx = idx + width;
-      if (!visited[nIdx] && newPixels[nIdx] === targetValue) {
-        visited[nIdx] = 1;
-        queue[tail++] = nIdx;
-      }
-    }
-    if (idx - width >= 0) {
-      const nIdx = idx - width;
-      if (!visited[nIdx] && newPixels[nIdx] === targetValue) {
-        visited[nIdx] = 1;
-        queue[tail++] = nIdx;
-      }
-    }
-  }
-
+  floodFillInPlace(newPixels, startX, startY, fillValue, width, height, contiguous, selection);
   return newPixels;
 };
 
@@ -377,88 +428,12 @@ export interface Segment {
  * typically cutting segment draw calls by 4x-50x.
  */
 export const getMergedSelectionSegments = (
-  selection: Set<number>,
-  width: number,
-  height: number
+  selection: SelectionMask,
+  _width?: number,
+  _height?: number
 ): Segment[] => {
   if (!selection || selection.size === 0) return [];
-
-  // Group horizontal segments by Y coordinate and vertical segments by X coordinate
-  const hMap = new Map<number, { x1: number; x2: number }[]>();
-  const vMap = new Map<number, { y1: number; y2: number }[]>();
-
-  selection.forEach(rawIdx => {
-    const idx = Number(rawIdx);
-    const x = idx % width;
-    const y = (idx / width) | 0;
-
-    // Top border
-    if (y === 0 || !selection.has(idx - width)) {
-      let list = hMap.get(y);
-      if (!list) { list = []; hMap.set(y, list); }
-      list.push({ x1: x, x2: x + 1 });
-    }
-    // Bottom border
-    if (y === height - 1 || !selection.has(idx + width)) {
-      let list = hMap.get(y + 1);
-      if (!list) { list = []; hMap.set(y + 1, list); }
-      list.push({ x1: x, x2: x + 1 });
-    }
-    // Left border
-    if (x === 0 || !selection.has(idx - 1)) {
-      let list = vMap.get(x);
-      if (!list) { list = []; vMap.set(x, list); }
-      list.push({ y1: y, y2: y + 1 });
-    }
-    // Right border
-    if (x === width - 1 || !selection.has(idx + 1)) {
-      let list = vMap.get(x + 1);
-      if (!list) { list = []; vMap.set(x + 1, list); }
-      list.push({ y1: y, y2: y + 1 });
-    }
-  });
-
-  const mergedSegments: Segment[] = [];
-
-  // Merge collinear horizontal segments
-  hMap.forEach((intervals, y) => {
-    intervals.sort((a, b) => a.x1 - b.x1);
-    let curX1 = intervals[0].x1;
-    let curX2 = intervals[0].x2;
-
-    for (let i = 1; i < intervals.length; i++) {
-      const next = intervals[i];
-      if (next.x1 <= curX2) {
-        curX2 = Math.max(curX2, next.x2);
-      } else {
-        mergedSegments.push({ x1: curX1, y1: y, x2: curX2, y2: y });
-        curX1 = next.x1;
-        curX2 = next.x2;
-      }
-    }
-    mergedSegments.push({ x1: curX1, y1: y, x2: curX2, y2: y });
-  });
-
-  // Merge collinear vertical segments
-  vMap.forEach((intervals, x) => {
-    intervals.sort((a, b) => a.y1 - b.y1);
-    let curY1 = intervals[0].y1;
-    let curY2 = intervals[0].y2;
-
-    for (let i = 1; i < intervals.length; i++) {
-      const next = intervals[i];
-      if (next.y1 <= curY2) {
-        curY2 = Math.max(curY2, next.y2);
-      } else {
-        mergedSegments.push({ x1: x, y1: curY1, x2: x, y2: curY2 });
-        curY1 = next.y1;
-        curY2 = next.y2;
-      }
-    }
-    mergedSegments.push({ x1: x, y1: curY1, x2: x, y2: curY2 });
-  });
-
-  return mergedSegments;
+  return selection.getMergedSegments();
 };
 
 export function getLayerParentMap(layers: Layer[]): Map<string, Layer> {
@@ -642,6 +617,17 @@ const getCompositeOp = (blendMode: Layer['blendMode']): GlobalCompositeOperation
   return blendMode as GlobalCompositeOperation;
 };
 
+export const releaseScratchRenderBuffers = (): void => {
+  if (scratchLayerCanvas) {
+    scratchLayerCanvas.width = 0;
+    scratchLayerCanvas.height = 0;
+  }
+  scratchLayerCanvas = null;
+  scratchLayerCtx = null;
+  scratchLayerImgData = null;
+  scratchLayerData32 = null;
+};
+
 export const renderFrameToCanvas = (
     state: Pick<ProjectState, 'width' | 'height' | 'frames' | 'palette' | 'layers'> & { colorMode?: ColorMode },
     frameIndex: number
@@ -716,6 +702,11 @@ export const renderFrameToCanvas = (
     }
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
+
+    // Release large (>1MP) scratch buffers immediately so 4K renders/exports don't pin 66MB permanently
+    if (totalPixels > 1_000_000) {
+      releaseScratchRenderBuffers();
+    }
 
     return canvas;
 };
@@ -828,130 +819,238 @@ export const renderSpriteSheet = (state: ProjectState): HTMLCanvasElement => {
     return canvas;
 };
 
-// --- Selection Algorithms ---
+// --- Selection Algorithms (Backed by compact SelectionMask) ---
 
-export const getRectSelection = (x0: number, y0: number, x1: number, y1: number, width: number): Set<number> => {
-  const selection = new Set<number>();
-  const left = Math.min(x0, x1);
-  const right = Math.max(x0, x1);
-  const top = Math.min(y0, y1);
-  const bottom = Math.max(y0, y1);
+export const getRectSelection = (
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  width: number,
+  height: number
+): SelectionMask => {
+  const left = Math.max(0, Math.min(x0, x1));
+  const right = Math.min(width - 1, Math.max(x0, x1));
+  const top = Math.max(0, Math.min(y0, y1));
+  const bottom = Math.min(height - 1, Math.max(y0, y1));
+  if (right < left || bottom < top) return SelectionMask.empty(width, height);
+  return SelectionMask.fromRect(left, top, right - left + 1, bottom - top + 1, width, height);
+};
 
-  for (let y = top; y <= bottom; y++) {
-    for (let x = left; x <= right; x++) {
-      selection.add(getIndex(x, y, width));
-    }
+export const getEllipseSelection = (
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  width: number,
+  height: number
+): SelectionMask => {
+  const selection = SelectionMask.empty(width, height);
+  let a = Math.abs(x1 - x0);
+  let b = Math.abs(y1 - y0);
+  let b1 = b & 1;
+
+  let dx = 4 * (1 - a) * b * b;
+  let dy = 4 * (b1 + 1) * a * a;
+  let err = dx + dy + b1 * a * a;
+  let e2: number;
+
+  if (x0 > x1) {
+    const temp = x0;
+    x0 = x1;
+    x1 = temp;
   }
+  if (y0 > y1) {
+    const temp = y0;
+    y0 = y1;
+    y1 = temp;
+  }
+
+  y0 += Math.floor((b + 1) / 2);
+  y1 = y0 - b1;
+  a = 8 * a * a;
+  b1 = 8 * b * b;
+
+  do {
+    const left = Math.min(x0, x1);
+    const right = Math.max(x0, x1);
+    selection.addHorizontalSpan(y0, left, right);
+    selection.addHorizontalSpan(y1, left, right);
+    e2 = 2 * err;
+    if (e2 >= dx) {
+      x0++;
+      x1--;
+      err += dx += b1;
+    }
+    if (e2 <= dy) {
+      y0++;
+      y1--;
+      err += dy += a;
+    }
+  } while (x0 <= x1);
+
+  while (y0 - y1 < b) {
+    const left = Math.min(x0 - 1, x1 + 1);
+    const right = Math.max(x0 - 1, x1 + 1);
+    selection.addHorizontalSpan(y0++, left, right);
+    selection.addHorizontalSpan(y1--, left, right);
+  }
+
   return selection;
 };
 
-export const getEllipseSelection = (x0: number, y0: number, x1: number, y1: number, width: number): Set<number> => {
-  const selection = new Set<number>();
-  const filledPoints = getFilledEllipse(x0, y0, x1, y1);
-  filledPoints.forEach(p => {
-    selection.add(getIndex(p.x, p.y, width));
-  });
-  return selection;
-};
+export const getPolygonSelection = (
+  points: Position[],
+  width: number,
+  height: number
+): SelectionMask => {
+  const selection = SelectionMask.empty(width, height);
+  const n = points.length;
+  if (n < 3) return selection;
 
-export const getPolygonSelection = (points: Position[], width: number, height: number): Set<number> => {
-  const selection = new Set<number>();
-  if (points.length < 3) return selection;
+  let minY = height;
+  let maxY = 0;
+  for (let i = 0; i < n; i++) {
+    const py = points[i].y;
+    if (py < minY) minY = py;
+    if (py > maxY) maxY = py;
+  }
 
-  let minX = width, minY = height, maxX = 0, maxY = 0;
-  points.forEach(p => {
-    minX = Math.min(minX, p.x);
-    minY = Math.min(minY, p.y);
-    maxX = Math.max(maxX, p.x);
-    maxY = Math.max(maxY, p.y);
-  });
+  minY = Math.max(0, Math.floor(minY));
+  maxY = Math.min(height - 1, Math.ceil(maxY));
 
-  minX = Math.max(0, minX);
-  minY = Math.max(0, minY);
-  maxX = Math.min(width - 1, maxX);
-  maxY = Math.min(height - 1, maxY);
+  const intersections: number[] = [];
 
+  // Scanline polygon rasterizer: O(H * V + area/32) via word-level span fills
   for (let y = minY; y <= maxY; y++) {
-    for (let x = minX; x <= maxX; x++) {
-      let inside = false;
-      for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
-        const xi = points[i].x, yi = points[i].y;
-        const xj = points[j].x, yj = points[j].y;
-        
-        const intersect = ((yi > y) !== (yj > y))
-            && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
-        if (intersect) inside = !inside;
+    intersections.length = 0;
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      const xi = points[i].x;
+      const yi = points[i].y;
+      const xj = points[j].x;
+      const yj = points[j].y;
+
+      if ((yi > y) !== (yj > y)) {
+        const ix = xi + ((y - yi) * (xj - xi)) / (yj - yi);
+        intersections.push(ix);
       }
-      if (inside) selection.add(getIndex(x, y, width));
+    }
+
+    if (intersections.length < 2) continue;
+    intersections.sort((a, b) => a - b);
+
+    for (let k = 0; k + 1 < intersections.length; k += 2) {
+      const xStart = Math.max(0, Math.ceil(intersections[k]));
+      const xEnd = Math.min(width - 1, Math.floor(intersections[k + 1]));
+      if (xEnd >= xStart) {
+        selection.addHorizontalSpan(y, xStart, xEnd);
+      }
     }
   }
+
   return selection;
 };
 
 export const getWandSelection = (
-  pixels: PixelGrid,
+  pixels: PixelGrid | undefined,
   startX: number,
   startY: number,
   width: number,
   height: number,
   contiguous: boolean
-): Set<number> => {
-  const selection = new Set<number>();
-  const startIndex = getIndex(startX, startY, width);
+): SelectionMask => {
+  if (startX < 0 || startX >= width || startY < 0 || startY >= height) {
+    return SelectionMask.empty(width, height);
+  }
+  // Sparse/empty layer: all pixels are EMPTY_PIXEL
+  if (!pixels) {
+    return SelectionMask.full(width, height);
+  }
+
+  const selection = SelectionMask.empty(width, height);
+  const startIndex = startY * width + startX;
   const targetValue = pixels[startIndex];
 
   if (contiguous) {
-    // Bolt Optimization: Replace O(N) Array.prototype.shift() with an indexed Int32Array queue
-    // and Set lookups with a Uint8Array visited buffer to eliminate garbage collection & O(N^2) shift overhead.
-    const totalPixels = width * height;
-    const queue = new Int32Array(totalPixels);
-    let head = 0;
-    let tail = 0;
-    queue[tail++] = startIndex;
+    // Scanline magic wand writing directly into the 1-bit SelectionMask (zero 33MB queue / 8MB visited buffers)
+    const stackX: number[] = [startX];
+    const stackY: number[] = [startY];
 
-    const visited = new Uint8Array(totalPixels);
-    visited[startIndex] = 1;
+    while (stackX.length > 0) {
+      const x = stackX.pop()!;
+      const y = stackY.pop()!;
+      const rowOff = y * width;
 
-    while (head < tail) {
-      const idx = queue[head++];
-      selection.add(idx);
+      if (pixels[rowOff + x] !== targetValue || selection.has(rowOff + x)) continue;
 
-      const x = idx % width;
+      let lx = x;
+      while (lx > 0 && pixels[rowOff + lx - 1] === targetValue && !selection.has(rowOff + lx - 1)) {
+        lx--;
+      }
 
-      if (x + 1 < width) {
-        const nIdx = idx + 1;
-        if (!visited[nIdx] && pixels[nIdx] === targetValue) {
-          visited[nIdx] = 1;
-          queue[tail++] = nIdx;
+      let rx = x;
+      while (rx + 1 < width && pixels[rowOff + rx + 1] === targetValue && !selection.has(rowOff + rx + 1)) {
+        rx++;
+      }
+
+      selection.addHorizontalSpan(y, lx, rx);
+
+      if (y > 0) {
+        const aboveY = y - 1;
+        const aboveOff = aboveY * width;
+        let inSpan = false;
+        for (let sx = lx; sx <= rx; sx++) {
+          const idx = aboveOff + sx;
+          const match = pixels[idx] === targetValue && !selection.has(idx);
+          if (match) {
+            if (!inSpan) {
+              stackX.push(sx);
+              stackY.push(aboveY);
+              inSpan = true;
+            }
+          } else {
+            inSpan = false;
+          }
         }
       }
-      if (x - 1 >= 0) {
-        const nIdx = idx - 1;
-        if (!visited[nIdx] && pixels[nIdx] === targetValue) {
-          visited[nIdx] = 1;
-          queue[tail++] = nIdx;
-        }
-      }
-      if (idx + width < totalPixels) {
-        const nIdx = idx + width;
-        if (!visited[nIdx] && pixels[nIdx] === targetValue) {
-          visited[nIdx] = 1;
-          queue[tail++] = nIdx;
-        }
-      }
-      if (idx - width >= 0) {
-        const nIdx = idx - width;
-        if (!visited[nIdx] && pixels[nIdx] === targetValue) {
-          visited[nIdx] = 1;
-          queue[tail++] = nIdx;
+
+      if (y + 1 < height) {
+        const belowY = y + 1;
+        const belowOff = belowY * width;
+        let inSpan = false;
+        for (let sx = lx; sx <= rx; sx++) {
+          const idx = belowOff + sx;
+          const match = pixels[idx] === targetValue && !selection.has(idx);
+          if (match) {
+            if (!inSpan) {
+              stackX.push(sx);
+              stackY.push(belowY);
+              inSpan = true;
+            }
+          } else {
+            inSpan = false;
+          }
         }
       }
     }
   } else {
-    for (let i = 0; i < pixels.length; i++) {
-      if (pixels[i] === targetValue) selection.add(i);
+    for (let y = 0; y < height; y++) {
+      const rowOff = y * width;
+      let runStart = -1;
+      for (let x = 0; x < width; x++) {
+        if (pixels[rowOff + x] === targetValue) {
+          if (runStart === -1) runStart = x;
+        } else if (runStart !== -1) {
+          selection.addHorizontalSpan(y, runStart, x - 1);
+          runStart = -1;
+        }
+      }
+      if (runStart !== -1) {
+        selection.addHorizontalSpan(y, runStart, width - 1);
+      }
     }
   }
+
   return selection;
 };
 
@@ -1014,9 +1113,42 @@ export const parseASE = async (buffer: ArrayBuffer): Promise<string[]> => {
 
 // --- Project & Palette Utilities ---
 
-const decodeImageFileToImageData = async (
+const imageDataToPixelGridZeroCopy = (
+  imageData: ImageData,
+  width: number,
+  height: number
+): PixelGrid => {
+  const raw = imageData.data;
+  const pixelCount = width * height;
+  if (isLittleEndian && raw.byteOffset === 0 && raw.byteLength === raw.buffer.byteLength) {
+    const u32 = new Uint32Array(raw.buffer, 0, pixelCount);
+    for (let i = 0; i < pixelCount; i++) {
+      if ((u32[i] >>> 24) === 0) {
+        u32[i] = 0;
+      }
+    }
+    return u32;
+  }
+  const pixels = createPixelGrid(pixelCount);
+  for (let i = 0, p = 0; i < pixelCount; i++, p += 4) {
+    const a = raw[p + 3];
+    if (a !== 0) {
+      pixels[i] = ((a << 24) | (raw[p + 2] << 16) | (raw[p + 1] << 8) | raw[p]) >>> 0;
+    }
+  }
+  return pixels;
+};
+
+const decodeImageFileToPixelGrid = async (
   file: File
-): Promise<{ width: number; height: number; data: Uint8ClampedArray }> => {
+): Promise<{ width: number; height: number; pixels: PixelGrid }> => {
+  // 1. Fast path: decode off main thread via Worker + OffscreenCanvas with zero-copy ArrayBuffer transfer
+  const workerDecoded = await decodeImageFileAsync(file);
+  if (workerDecoded) {
+    return workerDecoded;
+  }
+
+  // 2. Main-thread createImageBitmap fallback (zero extra 33MB buffer copy)
   if (typeof createImageBitmap === 'function') {
     try {
       const bitmap = await createImageBitmap(file);
@@ -1030,7 +1162,9 @@ const decodeImageFileToImageData = async (
         if (!ctx) throw new Error('Failed to get canvas context');
         ctx.drawImage(bitmap, 0, 0);
         const imageData = ctx.getImageData(0, 0, width, height);
-        return { width, height, data: imageData.data };
+        canvas.width = 0;
+        canvas.height = 0;
+        return { width, height, pixels: imageDataToPixelGridZeroCopy(imageData, width, height) };
       } finally {
         bitmap.close();
       }
@@ -1039,6 +1173,7 @@ const decodeImageFileToImageData = async (
     }
   }
 
+  // 3. HTMLImageElement fallback
   return new Promise((resolve, reject) => {
     const objectUrl = URL.createObjectURL(file);
     const img = new Image();
@@ -1055,7 +1190,9 @@ const decodeImageFileToImageData = async (
         }
         ctx.drawImage(img, 0, 0);
         const imageData = ctx.getImageData(0, 0, width, height);
-        resolve({ width, height, data: imageData.data });
+        canvas.width = 0;
+        canvas.height = 0;
+        resolve({ width, height, pixels: imageDataToPixelGridZeroCopy(imageData, width, height) });
       } catch (err) {
         reject(err);
       } finally {
@@ -1085,9 +1222,7 @@ export const fileToProjectState = async (file: File): Promise<ProjectState> => {
     const height = Math.max(1, Number(state.height) || 32);
     const colorMode: ColorMode = state.colorMode === 'indexed' ? 'indexed' : 'rgba';
 
-    if (state.selection && Array.isArray(state.selection)) {
-      state.selection = new Set(state.selection);
-    }
+    state.selection = SelectionMask.fromAny(state.selection, width, height);
     if (Array.isArray(state.frames)) {
       for (const frame of state.frames) {
         if (frame && frame.layerData && typeof frame.layerData === 'object') {
@@ -1117,15 +1252,7 @@ export const fileToProjectState = async (file: File): Promise<ProjectState> => {
     return state as ProjectState;
   }
 
-  const { width, height, data } = await decodeImageFileToImageData(file);
-  const src32 = new Uint32Array(data.buffer, data.byteOffset, width * height);
-  const pixels = createPixelGrid(width * height);
-  for (let i = 0; i < src32.length; i++) {
-    const px = src32[i];
-    if ((px >>> 24) !== 0) {
-      pixels[i] = px >>> 0;
-    }
-  }
+  const { width, height, pixels } = await decodeImageFileToPixelGrid(file);
 
   const layerId = `layer-${Date.now()}`;
   const frameId = `frame-${Date.now()}`;
@@ -1169,22 +1296,68 @@ export const fileToProjectState = async (file: File): Promise<ProjectState> => {
   };
 };
 
+const MAX_EXTRACTED_PALETTE_COLORS = 256;
+
 export const extractColorsFromPNG = async (file: File): Promise<string[]> => {
-  const { width, height, data } = await decodeImageFileToImageData(file);
-  const data32 = new Uint32Array(data.buffer, data.byteOffset, width * height);
-  const packedColors = new Set<number>();
-  for (let i = 0; i < data32.length; i++) {
-    const pixel = data32[i];
+  const { pixels } = await decodeImageFileToPixelGrid(file);
+  const exactColors = new Set<number>();
+  let exceededExactCap = false;
+
+  for (let i = 0; i < pixels.length; i++) {
+    const pixel = pixels[i];
     if ((pixel >>> 24) !== 0) {
-      const r = pixel & 0xff;
-      const g = (pixel >>> 8) & 0xff;
-      const b = (pixel >>> 16) & 0xff;
-      packedColors.add((r << 16) | (g << 8) | b);
+      const rgb = ((pixel & 0xff) << 16) | (((pixel >>> 8) & 0xff) << 8) | ((pixel >>> 16) & 0xff);
+      if (!exactColors.has(rgb)) {
+        exactColors.add(rgb);
+        if (exactColors.size > MAX_EXTRACTED_PALETTE_COLORS) {
+          exceededExactCap = true;
+          break;
+        }
+      }
     }
   }
-  return Array.from(packedColors).map(p =>
-    rgbToHex((p >> 16) & 0xff, (p >> 8) & 0xff, p & 0xff)
-  );
+
+  if (!exceededExactCap) {
+    return Array.from(exactColors).map(p =>
+      rgbToHex((p >> 16) & 0xff, (p >> 8) & 0xff, p & 0xff)
+    );
+  }
+
+  // Photographic / high-color image: quantize into a 5-bit RGB histogram (32,768 bins)
+  // and extract the top 256 most frequent representative colors without unbounded Set memory.
+  const counts = new Uint32Array(32768);
+  const sumR = new Float64Array(32768);
+  const sumG = new Float64Array(32768);
+  const sumB = new Float64Array(32768);
+
+  const stride = pixels.length > 2_000_000 ? 2 : 1;
+  for (let i = 0; i < pixels.length; i += stride) {
+    const pixel = pixels[i];
+    if ((pixel >>> 24) === 0) continue;
+    const r = pixel & 0xff;
+    const g = (pixel >>> 8) & 0xff;
+    const b = (pixel >>> 16) & 0xff;
+    const bin = ((r >>> 3) << 10) | ((g >>> 3) << 5) | (b >>> 3);
+    counts[bin]++;
+    sumR[bin] += r;
+    sumG[bin] += g;
+    sumB[bin] += b;
+  }
+
+  const populatedBins: number[] = [];
+  for (let bin = 0; bin < 32768; bin++) {
+    if (counts[bin] > 0) populatedBins.push(bin);
+  }
+  populatedBins.sort((a, b) => counts[b] - counts[a]);
+
+  const topCount = Math.min(MAX_EXTRACTED_PALETTE_COLORS, populatedBins.length);
+  const result: string[] = new Array(topCount);
+  for (let i = 0; i < topCount; i++) {
+    const bin = populatedBins[i];
+    const c = counts[bin];
+    result[i] = rgbToHex(sumR[bin] / c, sumG[bin] / c, sumB[bin] / c);
+  }
+  return result;
 };
 
 // --- RotSprite & Scale Algorithm Helpers ---
@@ -1216,43 +1389,54 @@ const scale2xPass = (pixels: PixelGrid, width: number, height: number): { pixels
   return { pixels: newPixels, width: newWidth, height: newHeight };
 };
 
+const MAX_ROTSPRITE_PIXELS = 16_000_000; // 64 MB cap so 4K RotSprite never OOMs
+
+const getSafeRotSpritePasses = (w: number, h: number): number => {
+  const area = w * h;
+  if (area * 64 <= MAX_ROTSPRITE_PIXELS) return 3; // 8x
+  if (area * 16 <= MAX_ROTSPRITE_PIXELS) return 2; // 4x
+  if (area * 4 <= MAX_ROTSPRITE_PIXELS) return 1;  // 2x
+  return 0; // 1x fallback (nearest-neighbor)
+};
+
 export interface RotSpritePrecomputedBuffer {
   pixels: PixelGrid;
   width: number;
   height: number;
+  scale: number;
   box: { x: number; y: number; w: number; h: number };
 }
 
 /**
- * Precomputes the 8x Scale2x buffer once per rotation gesture so dragging
- * the rotation handle doesn't re-run 3 passes of Scale2x on every pointer move.
+ * Precomputes the Scale2x buffer once per rotation gesture with a safe memory cap
+ * so large selections on 4K images never exhaust memory.
  */
 export const prepareRotSpriteBuffer = (
-  selection: Set<number>,
+  selection: SelectionMask,
   layerPixels: PixelGrid,
   width: number
 ): RotSpritePrecomputedBuffer | null => {
   if (!selection || selection.size === 0) return null;
-  const box = getSelectionBoundingBox(selection, width);
-  if (box.w <= 0 || box.h <= 0) return null;
+  const box = selection.getBoundingBox();
+  if (!box || box.w <= 0 || box.h <= 0) return null;
+
+  const passes = getSafeRotSpritePasses(box.w, box.h);
+  if (passes === 0) return null;
+
   const subGrid = createPixelGrid(box.w * box.h);
-  selection.forEach(idx => {
-    const { x, y } = getCoords(idx, width);
+  selection.forEachCoord((x, y, idx) => {
     subGrid[(y - box.y) * box.w + (x - box.x)] = layerPixels[idx];
   });
 
   let scaled = { pixels: subGrid, width: box.w, height: box.h };
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < passes; i++) {
     scaled = scale2xPass(scaled.pixels, scaled.width, scaled.height);
   }
-  return { pixels: scaled.pixels, width: scaled.width, height: scaled.height, box };
+  return { pixels: scaled.pixels, width: scaled.width, height: scaled.height, scale: 1 << passes, box };
 };
 
-// Bolt Optimization: Calculate transformed bounding box bounds of active selection rotated around pivot.
-// Reduces rotation loop iterations from O(Width * Height) to O(Rotated Bounding Box Area),
-// achieving 100x-500x speedup when moving/rotating selections on high-resolution images.
 export const rotateSelectionPixels = (
-    selection: Set<number>, 
+    selection: SelectionMask, 
     layerPixels: PixelGrid, 
     angleRad: number, 
     pivot: Position,
@@ -1268,6 +1452,8 @@ export const rotateSelectionPixels = (
     const sin = Math.sin(angleRad);
 
     const box = precomputedScale8x ? precomputedScale8x.box : getSelectionBoundingBox(selection, width);
+    if (box.w <= 0 || box.h <= 0) return newPixels;
+
     const corners = [
         { x: box.x, y: box.y },
         { x: box.x + box.w, y: box.y },
@@ -1294,55 +1480,45 @@ export const rotateSelectionPixels = (
     const minY = Math.max(0, Math.floor(minTargetY) - 1);
     const maxY = Math.min(height - 1, Math.ceil(maxTargetY) + 1);
 
-    if (algorithm === 'rotsprite') {
-        let scaled: { pixels: PixelGrid; width: number; height: number };
-        if (precomputedScale8x) {
-            scaled = precomputedScale8x;
-        } else {
-            const subGrid = createPixelGrid(box.w * box.h);
-            selection.forEach(idx => {
-                const { x, y } = getCoords(idx, width);
-                subGrid[(y - box.y) * box.w + (x - box.x)] = layerPixels[idx];
-            });
+    const effectiveRotSprite =
+      algorithm === 'rotsprite'
+        ? (precomputedScale8x ?? prepareRotSpriteBuffer(selection, layerPixels, width))
+        : null;
 
-            scaled = { pixels: subGrid, width: box.w, height: box.h };
-            for (let i = 0; i < 3; i++) {
-                scaled = scale2xPass(scaled.pixels, scaled.width, scaled.height);
-            }
-        }
-
-        const scale = 8;
+    if (effectiveRotSprite) {
+        const scale = effectiveRotSprite.scale;
+        const scaledW = effectiveRotSprite.width;
+        const scaledH = effectiveRotSprite.height;
+        const scaledPx = effectiveRotSprite.pixels;
         for (let y = minY; y <= maxY; y++) {
+            const rowOff = y * width;
+            const ty = y + 0.5 - pivot.y;
             for (let x = minX; x <= maxX; x++) {
                 const tx = x + 0.5 - pivot.x;
-                const ty = y + 0.5 - pivot.y;
-                
                 const srcX_orig = tx * cos + ty * sin + pivot.x;
                 const srcY_orig = -tx * sin + ty * cos + pivot.y;
                 
-                const localX = (srcX_orig - box.x) * scale;
-                const localY = (srcY_orig - box.y) * scale;
+                const floorX = Math.floor((srcX_orig - box.x) * scale);
+                const floorY = Math.floor((srcY_orig - box.y) * scale);
                 
-                const floorX = Math.floor(localX);
-                const floorY = Math.floor(localY);
-                
-                if (floorX >= 0 && floorX < scaled.width && floorY >= 0 && floorY < scaled.height) {
-                    newPixels[getIndex(x, y, width)] = scaled.pixels[floorY * scaled.width + floorX];
+                if (floorX >= 0 && floorX < scaledW && floorY >= 0 && floorY < scaledH) {
+                    newPixels[rowOff + x] = scaledPx[floorY * scaledW + floorX];
                 }
             }
         }
     } else {
         for (let y = minY; y <= maxY; y++) {
+            const rowOff = y * width;
+            const ty = y + 0.5 - pivot.y;
             for (let x = minX; x <= maxX; x++) {
                 const tx = x + 0.5 - pivot.x;
-                const ty = y + 0.5 - pivot.y;
                 const srcX = Math.floor(tx * cos + ty * sin + pivot.x);
                 const srcY = Math.floor(-tx * sin + ty * cos + pivot.y);
                 
                 if (srcX >= 0 && srcX < width && srcY >= 0 && srcY < height) {
-                    const srcIdx = getIndex(srcX, srcY, width);
+                    const srcIdx = srcY * width + srcX;
                     if (selection.has(srcIdx)) {
-                        newPixels[getIndex(x, y, width)] = layerPixels[srcIdx] ?? EMPTY_PIXEL;
+                        newPixels[rowOff + x] = layerPixels[srcIdx] ?? EMPTY_PIXEL;
                     }
                 }
             }
@@ -1352,19 +1528,21 @@ export const rotateSelectionPixels = (
 };
 
 export const rotateSelectionMask = (
-    selection: Set<number>,
+    selection: SelectionMask,
     angleRad: number,
     pivot: Position,
     width: number,
     height: number
-): Set<number> => {
-    const newSelection = new Set<number>();
+): SelectionMask => {
+    const newSelection = SelectionMask.empty(width, height);
     if (!selection || selection.size === 0) return newSelection;
 
     const cos = Math.cos(angleRad);
     const sin = Math.sin(angleRad);
 
     const box = getSelectionBoundingBox(selection, width);
+    if (box.w <= 0 || box.h <= 0) return newSelection;
+
     const corners = [
         { x: box.x, y: box.y },
         { x: box.x + box.w, y: box.y },
@@ -1392,18 +1570,29 @@ export const rotateSelectionMask = (
     const maxY = Math.min(height - 1, Math.ceil(maxTargetY) + 1);
 
     for (let y = minY; y <= maxY; y++) {
+        const ty = y + 0.5 - pivot.y;
+        let runStart = -1;
         for (let x = minX; x <= maxX; x++) {
             const tx = x + 0.5 - pivot.x;
-            const ty = y + 0.5 - pivot.y;
             const srcX = Math.floor(tx * cos + ty * sin + pivot.x);
             const srcY = Math.floor(-tx * sin + ty * cos + pivot.y);
 
-            if (srcX >= 0 && srcX < width && srcY >= 0 && srcY < height) {
-                const srcIdx = getIndex(srcX, srcY, width);
-                if (selection.has(srcIdx)) {
-                    newSelection.add(getIndex(x, y, width));
-                }
+            const hit =
+              srcX >= 0 &&
+              srcX < width &&
+              srcY >= 0 &&
+              srcY < height &&
+              selection.has(srcY * width + srcX);
+
+            if (hit) {
+              if (runStart === -1) runStart = x;
+            } else if (runStart !== -1) {
+              newSelection.addHorizontalSpan(y, runStart, x - 1);
+              runStart = -1;
             }
+        }
+        if (runStart !== -1) {
+          newSelection.addHorizontalSpan(y, runStart, maxX);
         }
     }
     return newSelection;
@@ -1413,7 +1602,7 @@ export const rotateSelectionMask = (
  * Scales selection pixels using Nearest Neighbor reverse-mapping.
  */
 export const scaleSelectionPixels = (
-    selection: Set<number>,
+    selection: SelectionMask,
     layerPixels: PixelGrid,
     srcBox: { x: number, y: number, w: number, h: number },
     destBox: { x: number, y: number, w: number, h: number },
@@ -1423,24 +1612,26 @@ export const scaleSelectionPixels = (
     const newPixels = createPixelGrid(width * height);
     if (srcBox.w <= 0 || srcBox.h <= 0 || destBox.w <= 0 || destBox.h <= 0) return newPixels;
 
+    const invDestW = srcBox.w / destBox.w;
+    const invDestH = srcBox.h / destBox.h;
+
     for (let dy = 0; dy < destBox.h; dy++) {
+        const targetY = Math.floor(destBox.y + dy);
+        if (targetY < 0 || targetY >= height) continue;
+        const sy = Math.floor(srcBox.y + dy * invDestH);
+        if (sy < srcBox.y || sy >= srcBox.y + srcBox.h) continue;
+        const dstRow = targetY * width;
+        const srcRow = sy * width;
+
         for (let dx = 0; dx < destBox.w; dx++) {
             const targetX = Math.floor(destBox.x + dx);
-            const targetY = Math.floor(destBox.y + dy);
+            if (targetX < 0 || targetX >= width) continue;
+            const sx = Math.floor(srcBox.x + dx * invDestW);
 
-            if (targetX < 0 || targetX >= width || targetY < 0 || targetY >= height) continue;
-
-            // Map back to relative source box
-            const srcRelX = (dx / destBox.w) * srcBox.w;
-            const srcRelY = (dy / destBox.h) * srcBox.h;
-
-            const sx = Math.floor(srcBox.x + srcRelX);
-            const sy = Math.floor(srcBox.y + srcRelY);
-
-            if (sx >= srcBox.x && sx < srcBox.x + srcBox.w && sy >= srcBox.y && sy < srcBox.y + srcBox.h) {
-                const srcIdx = getIndex(sx, sy, width);
+            if (sx >= srcBox.x && sx < srcBox.x + srcBox.w) {
+                const srcIdx = srcRow + sx;
                 if (selection.has(srcIdx)) {
-                    newPixels[getIndex(targetX, targetY, width)] = layerPixels[srcIdx];
+                    newPixels[dstRow + targetX] = layerPixels[srcIdx];
                 }
             }
         }
@@ -1452,29 +1643,56 @@ export const scaleSelectionPixels = (
  * Updates selection mask to new bounding box.
  */
 export const scaleSelectionMask = (
-    selection: Set<number>,
+    selection: SelectionMask,
     srcBox: { x: number, y: number, w: number, h: number },
     destBox: { x: number, y: number, w: number, h: number },
     width: number,
     height: number
-): Set<number> => {
-    const newSelection = new Set<number>();
-    if (destBox.w <= 0 || destBox.h <= 0) return newSelection;
+): SelectionMask => {
+    if (destBox.w <= 0 || destBox.h <= 0 || srcBox.w <= 0 || srcBox.h <= 0) {
+      return SelectionMask.empty(width, height);
+    }
+
+    if (selection.isRect) {
+      const rx = Math.max(0, Math.floor(destBox.x));
+      const ry = Math.max(0, Math.floor(destBox.y));
+      const rx2 = Math.min(width, Math.floor(destBox.x + destBox.w));
+      const ry2 = Math.min(height, Math.floor(destBox.y + destBox.h));
+      return SelectionMask.fromRect(rx, ry, Math.max(0, rx2 - rx), Math.max(0, ry2 - ry), width, height);
+    }
+
+    const newSelection = SelectionMask.empty(width, height);
+    const invDestW = srcBox.w / destBox.w;
+    const invDestH = srcBox.h / destBox.h;
 
     for (let dy = 0; dy < destBox.h; dy++) {
+        const targetY = Math.floor(destBox.y + dy);
+        if (targetY < 0 || targetY >= height) continue;
+        const sy = Math.floor(srcBox.y + dy * invDestH);
+        const srcRow = sy * width;
+
+        let runStart = -1;
+        let lastX = -2;
         for (let dx = 0; dx < destBox.w; dx++) {
             const targetX = Math.floor(destBox.x + dx);
-            const targetY = Math.floor(destBox.y + dy);
-            if (targetX < 0 || targetX >= width || targetY < 0 || targetY >= height) continue;
+            if (targetX < 0 || targetX >= width) continue;
+            const sx = Math.floor(srcBox.x + dx * invDestW);
 
-            const srcRelX = (dx / destBox.w) * srcBox.w;
-            const srcRelY = (dy / destBox.h) * srcBox.h;
-            const sx = Math.floor(srcBox.x + srcRelX);
-            const sy = Math.floor(srcBox.y + srcRelY);
-
-            if (selection.has(getIndex(sx, sy, width))) {
-                newSelection.add(getIndex(targetX, targetY, width));
+            if (selection.has(srcRow + sx)) {
+                if (runStart === -1) {
+                  runStart = targetX;
+                  lastX = targetX;
+                } else if (targetX <= lastX + 1) {
+                  lastX = targetX;
+                } else {
+                  newSelection.addHorizontalSpan(targetY, runStart, lastX);
+                  runStart = targetX;
+                  lastX = targetX;
+                }
             }
+        }
+        if (runStart !== -1) {
+          newSelection.addHorizontalSpan(targetY, runStart, lastX);
         }
     }
     return newSelection;

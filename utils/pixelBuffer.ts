@@ -191,10 +191,11 @@ export const pixelToPackedImageData = (
 interface PaletteRgbLookup {
   len: number;
   rgb: Uint8Array;
-  cache: Map<number, number>;
+  lut: Int16Array | null;
 }
 
 const PALETTE_RGB_LOOKUP_CACHE = new WeakMap<string[], PaletteRgbLookup>();
+const LUT_SIZE = 32 * 32 * 32; // 32,768 entries (64 KB)
 
 const getPaletteRgbLookup = (palette: string[]): PaletteRgbLookup => {
   const cached = PALETTE_RGB_LOOKUP_CACHE.get(palette);
@@ -213,13 +214,15 @@ const getPaletteRgbLookup = (palette: string[]): PaletteRgbLookup => {
       rgb[off + 2] = pb;
     }
   }
-  const entry: PaletteRgbLookup = { len, rgb, cache: new Map<number, number>() };
+  const entry: PaletteRgbLookup = { len, rgb, lut: null };
   PALETTE_RGB_LOOKUP_CACHE.set(palette, entry);
   return entry;
 };
 
 /**
  * Weighted RGB distance for perceptual palette color matching.
+ * Uses a lazily populated 5-bit/channel (32x32x32 = 64 KB) LUT so both integer
+ * and fractional (dithered) RGB lookups run in O(1) without Map overhead.
  */
 export const findNearestPaletteIndex = (
   r: number,
@@ -231,20 +234,47 @@ export const findNearestPaletteIndex = (
   if (len === 0) return 0;
 
   const lookup = getPaletteRgbLookup(palette);
-  const isIntKey =
-    (r | 0) === r &&
-    (g | 0) === g &&
-    (b | 0) === b &&
-    r >= 0 &&
-    r <= 255 &&
-    g >= 0 &&
-    g <= 255 &&
-    b >= 0 &&
-    b <= 255;
-  const key = isIntKey ? (r << 16) | (g << 8) | b : -1;
-  if (key >= 0) {
-    const cachedIdx = lookup.cache.get(key);
-    if (cachedIdx !== undefined) return cachedIdx;
+  const cr = r <= 0 ? 0 : r >= 255 ? 255 : (r + 0.5) | 0;
+  const cg = g <= 0 ? 0 : g >= 255 ? 255 : (g + 0.5) | 0;
+  const cb = b <= 0 ? 0 : b >= 255 ? 255 : (b + 0.5) | 0;
+
+  if (len <= 32767) {
+    let lut = lookup.lut;
+    if (!lut) {
+      lut = new Int16Array(LUT_SIZE);
+      lut.fill(-1);
+      lookup.lut = lut;
+    }
+    const r5 = cr >>> 3;
+    const g5 = cg >>> 3;
+    const b5 = cb >>> 3;
+    const lutKey = (r5 << 10) | (g5 << 5) | b5;
+    const cachedIdx = lut[lutKey];
+    if (cachedIdx >= 0) return cachedIdx;
+
+    // Evaluate perceptual distance at the 5-bit bin center for uniform accuracy
+    const qr = (r5 << 3) | (r5 >>> 2);
+    const qg = (g5 << 3) | (g5 >>> 2);
+    const qb = (b5 << 3) | (b5 >>> 2);
+
+    let minDistance = Infinity;
+    let nearestIndex = 0;
+    const rgb = lookup.rgb;
+
+    for (let i = 0, off = 0; i < len; i++, off += 3) {
+      const dr = qr - rgb[off];
+      const dg = qg - rgb[off + 1];
+      const db = qb - rgb[off + 2];
+      const dist = 0.3 * dr * dr + 0.59 * dg * dg + 0.11 * db * db;
+      if (dist < minDistance) {
+        minDistance = dist;
+        nearestIndex = i;
+        if (dist === 0) break;
+      }
+    }
+
+    lut[lutKey] = nearestIndex;
+    return nearestIndex;
   }
 
   let minDistance = Infinity;
@@ -252,9 +282,9 @@ export const findNearestPaletteIndex = (
   const rgb = lookup.rgb;
 
   for (let i = 0, off = 0; i < len; i++, off += 3) {
-    const dr = r - rgb[off];
-    const dg = g - rgb[off + 1];
-    const db = b - rgb[off + 2];
+    const dr = cr - rgb[off];
+    const dg = cg - rgb[off + 1];
+    const db = cb - rgb[off + 2];
     const dist = 0.3 * dr * dr + 0.59 * dg * dg + 0.11 * db * db;
     if (dist < minDistance) {
       minDistance = dist;
@@ -263,9 +293,6 @@ export const findNearestPaletteIndex = (
     }
   }
 
-  if (key >= 0 && lookup.cache.size < 4096) {
-    lookup.cache.set(key, nearestIndex);
-  }
   return nearestIndex;
 };
 
@@ -363,7 +390,7 @@ export const applyRectPatch = (
  */
 export const buildLayerPatch = (
   layerId: string,
-  beforeGrid: PixelGrid,
+  beforeGrid: PixelGrid | null | undefined,
   afterGrid: PixelGrid,
   width: number,
   height: number,
@@ -381,15 +408,29 @@ export const buildLayerPatch = (
   let maxX = -1;
   let maxY = -1;
 
-  for (let y = scanMinY; y <= scanMaxY; y++) {
-    const rowOff = y * width;
-    for (let x = scanMinX; x <= scanMaxX; x++) {
-      const idx = rowOff + x;
-      if (beforeGrid[idx] !== afterGrid[idx]) {
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-        if (y < minY) minY = y;
-        if (y > maxY) maxY = y;
+  if (beforeGrid) {
+    for (let y = scanMinY; y <= scanMaxY; y++) {
+      const rowOff = y * width;
+      for (let x = scanMinX; x <= scanMaxX; x++) {
+        const idx = rowOff + x;
+        if (beforeGrid[idx] !== afterGrid[idx]) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+  } else {
+    for (let y = scanMinY; y <= scanMaxY; y++) {
+      const rowOff = y * width;
+      for (let x = scanMinX; x <= scanMaxX; x++) {
+        if (afterGrid[rowOff + x] !== EMPTY_PIXEL) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
       }
     }
   }
@@ -405,7 +446,7 @@ export const buildLayerPatch = (
     y: minY,
     w,
     h,
-    before: extractRectPatch(beforeGrid, width, minX, minY, w, h),
+    before: beforeGrid ? extractRectPatch(beforeGrid, width, minX, minY, w, h) : new Uint32Array(w * h),
     after: extractRectPatch(afterGrid, width, minX, minY, w, h),
   };
 };

@@ -1,4 +1,8 @@
 
+import type { SelectionMask } from './utils/selectionMask';
+
+export type { SelectionMask };
+
 export interface Position {
   x: number;
   y: number;
@@ -186,7 +190,7 @@ export interface ProjectState {
   } | null;
 
   // Selection
-  selection: Set<number> | null;
+  selection: SelectionMask | null;
   selectionMode: SelectionMode;
 
   // Aseprite extra data
@@ -228,8 +232,8 @@ export interface PixelLayerPatch {
 export interface PixelHistoryPatch {
   frameIndex: number;
   layers: PixelLayerPatch[];
-  selectionBefore?: Set<number> | null;
-  selectionAfter?: Set<number> | null;
+  selectionBefore?: SelectionMask | null;
+  selectionAfter?: SelectionMask | null;
 }
 
 export interface HistoryEntry {

@@ -2,6 +2,7 @@
 import { useLayoutEffect, useRef } from 'react';
 import { Command, ProjectState, ToolType, ColorMode, FrameTag, Layer } from '../types';
 import { MIN_BRUSH_SIZE, MAX_BRUSH_SIZE, MIN_ZOOM, MAX_ZOOM } from '../constants';
+import { SelectionMask } from '../utils';
 
 interface UseAppCommandsProps {
     state: ProjectState;
@@ -195,8 +196,7 @@ export function useAppCommands({
             id: 'select.all', label: 'Select All', category: 'Select', hotkey: 'Ctrl+A', keys: ['Control+a', 'Meta+a'],
             perform: () => {
                 const s = latestRef.current.state;
-                const all = new Set<number>();
-                for (let i = 0; i < s.width * s.height; i++) all.add(i);
+                const all = SelectionMask.full(s.width, s.height);
                 latestRef.current.updateState({ ...s, selection: all }, { action: 'Select All' });
             }
         },
@@ -208,11 +208,10 @@ export function useAppCommands({
             id: 'select.invert', label: 'Invert Selection', category: 'Select', hotkey: 'Ctrl+Shift+I', keys: ['Control+I', 'Meta+I'],
             perform: () => {
                 const s = latestRef.current.state;
-                const newSel = new Set<number>();
-                for (let i = 0; i < s.width * s.height; i++) {
-                    if (!s.selection?.has(i)) newSel.add(i);
-                }
-                latestRef.current.updateState({ ...s, selection: newSel }, { action: 'Invert Selection' });
+                const nextSel = s.selection
+                  ? s.selection.invert()
+                  : SelectionMask.full(s.width, s.height);
+                latestRef.current.updateState({ ...s, selection: nextSel.size > 0 ? nextSel : null }, { action: 'Invert Selection' });
             }
         },
         {

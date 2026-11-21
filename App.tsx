@@ -31,7 +31,6 @@ import { useMobile } from './hooks/useMobile';
 import { useLayout } from './hooks/useLayout';
 import { setCursorMousePos, setCursorDragStartPos } from './hooks/useCursorStore';
 import { setStatusMessage } from './hooks/useStatusStore';
-import { getCoords } from './utils';
 
 const EMPTY_COMMANDS: any[] = [];
 const CLOSED_LAYER_PROPS = { isOpen: false, layer: null };
@@ -316,10 +315,15 @@ export default function App() {
     fileInputRef.current?.click();
   };
 
-  const handleImportFile = (file: File) => {
-    projectActions.loadProjectFromFile(file);
-    setStatusMessage({ text: `Opened ${file.name}`, type: 'success' });
-    toast.success(`Opened ${file.name}`);
+  const handleImportFile = async (file: File) => {
+    const ok = await projectActions.loadProjectFromFile(file);
+    if (ok) {
+      setStatusMessage({ text: `Opened ${file.name}`, type: 'success' });
+      toast.success(`Opened ${file.name}`);
+    } else {
+      setStatusMessage({ text: `Failed to open ${file.name}`, type: 'error' });
+      toast.error(`Failed to open ${file.name}`);
+    }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -581,27 +585,8 @@ export default function App() {
     handleMovePixels: canvasTools.handleMovePixels,
   });
 
-  let selectionSize: { w: number; h: number } | null = null;
-  if (state.selection) {
-    const selSet =
-      state.selection instanceof Set
-        ? state.selection
-        : new Set<number>(Array.from(state.selection as any));
-    if (selSet.size > 0) {
-      let minX = Infinity,
-        minY = Infinity,
-        maxX = -Infinity,
-        maxY = -Infinity;
-      selSet.forEach((idx) => {
-        const { x, y } = getCoords(idx, state.width);
-        minX = Math.min(minX, x);
-        minY = Math.min(minY, y);
-        maxX = Math.max(maxX, x);
-        maxY = Math.max(maxY, y);
-      });
-      selectionSize = { w: maxX - minX + 1, h: maxY - minY + 1 };
-    }
-  }
+  const selBox = state.selection?.getBoundingBox() ?? null;
+  const selectionSize = selBox ? { w: selBox.w, h: selBox.h } : null;
 
   const layoutProjectActions = {
     ...projectActions,
