@@ -14,12 +14,23 @@ import {
 import { 
   getIndex,
   getRectSelection, getEllipseSelection, getPolygonSelection, getWandSelection,
-  getPackedPalette255, pixelToPackedImageData,
+  getPackedPalette255, pixelToPackedImageData, createRgbaImageDataView,
   getMergedSelectionSegments, Segment, getSelectionBoundingBox,
   getLayerParentMap, isLayerVisible, getEffectiveLayerOpacity, SelectionMask,
 } from '../utils';
+import {
+  getPendingLayerBitmap,
+  isHydratedReplacementFor,
+  resolveHydratedPixelGrid,
+} from '../utils/layerBitmapCache';
 import { setLiveZoom } from '../hooks/useCursorStore';
-import { subscribeLiveStroke, getLiveStroke, LiveStrokePayload } from '../hooks/useLiveStrokeStore';
+import {
+  subscribeLiveStroke,
+  getLiveStroke,
+  LiveStrokePayload,
+  subscribeLiveShapePreview,
+  getLiveShapePreview,
+} from '../hooks/useLiveStrokeStore';
 import { MIN_ZOOM, MAX_ZOOM } from '../constants';
 
 const CURSOR_SVG = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M10 2H14V8H10V2ZM10 16H14V22H10V16ZM2 10H8V14H2V10ZM16 10H22V14H16V10ZM10 10H14V14H10V10Z" fill="white"/></svg>`;
@@ -48,6 +59,44 @@ function releaseCanvas(canvas: HTMLCanvasElement | null): void {
   if (!canvas) return;
   canvas.width = 0;
   canvas.height = 0;
+}
+
+function uploadPixelsToCanvas(
+  targetCtx: CanvasRenderingContext2D,
+  pixels: PixelGrid,
+  width: number,
+  height: number,
+  colorMode: ColorMode | string,
+  paletteUint32: Uint32Array,
+  getScratchImageData: () => ImageData
+): void {
+  // Zero-copy fast path: RGBA PixelGrid is already little-endian ABGR matching ImageData layout
+  if (colorMode === 'rgba') {
+    const directImg = createRgbaImageDataView(pixels, width, height);
+    if (directImg) {
+      targetCtx.putImageData(directImg, 0, 0);
+      return;
+    }
+  }
+
+  const totalPixels = width * height;
+  const uploadImg = getScratchImageData();
+  const data32 = new Uint32Array(uploadImg.data.buffer);
+  const pxLen = Math.min(pixels.length, totalPixels);
+
+  if (colorMode === 'rgba') {
+    data32.set(pixels.subarray(0, pxLen));
+    if (pxLen < totalPixels) data32.fill(0, pxLen);
+  } else {
+    data32.fill(0);
+    for (let i = 0; i < pxLen; i++) {
+      const val = pixels[i];
+      if (val !== 0) {
+        data32[i] = pixelToPackedImageData(val, paletteUint32);
+      }
+    }
+  }
+  targetCtx.putImageData(uploadImg, 0, 0);
 }
 
 // Precomputed circle brush boundary contours for instant, allocation-free rendering
@@ -182,6 +231,8 @@ export const Canvas: React.FC<CanvasProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const containerRectRef = useRef<DOMRect | null>(null);
+  const checkerboardRef = useRef<HTMLDivElement>(null);
+  const referenceImageElRef = useRef<HTMLDivElement>(null);
   const artCanvasRef = useRef<HTMLCanvasElement>(null);
   const uiCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -217,6 +268,8 @@ export const Canvas: React.FC<CanvasProps> = ({
   });
   const renderUIRef = useRef<() => void>(() => {});
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  const containerSizeRef = useRef(containerSize);
+  const referenceImageRef = useRef(referenceImage);
 
   const refreshContainerRect = useCallback(() => {
     if (containerRef.current) {
@@ -293,10 +346,13 @@ export const Canvas: React.FC<CanvasProps> = ({
   const panRef = useRef<Position>({ x: 0, y: 0 });
   const zoomRef = useRef(zoom);
 
-  // Performance refs: coordinate deduplication and debounced zoom commit
+  // Performance refs: coordinate deduplication, imperative pan/zoom, and debounced settle commit
   const lastReportedCoordsRef = useRef<Position | null>(null);
-  const zoomCommitTimerRef = useRef<number | null>(null);
+  const viewportCommitTimerRef = useRef<number | null>(null);
+  const pendingZoomCommitRef = useRef<boolean>(false);
   const wheelRafIdRef = useRef<number | null>(null);
+  const touchRafIdRef = useRef<number | null>(null);
+  const pendingTouchViewportRef = useRef<{ pan: Position; zoom: number } | null>(null);
   const pendingWheelRef = useRef<{
     panDx: number;
     panDy: number;
@@ -308,6 +364,9 @@ export const Canvas: React.FC<CanvasProps> = ({
   const lastCommittedZoomRef = useRef<number>(zoom);
   const prevProjectIdRef = useRef<string>(projectId);
   const onZoomRef = useRef(onZoom);
+  const presentArtViewportRef = useRef<() => void>(() => {});
+
+  // Keep live state refs fresh without clobbering in-flight imperative panRef / zoomRef during gestures
   useLayoutEffect(() => {
     liveStateRef.current = {
       projectId,
@@ -320,38 +379,81 @@ export const Canvas: React.FC<CanvasProps> = ({
       height,
       tiled,
     };
-    panRef.current = pan;
-    zoomRef.current = localZoom;
+    containerSizeRef.current = containerSize;
+    referenceImageRef.current = referenceImage;
     onZoomRef.current = onZoom;
   });
+
+  const syncViewportDom = useCallback(() => {
+    const curPan = panRef.current;
+    const curZoom = zoomRef.current;
+    const { width: w, height: h } = liveStateRef.current;
+    const { width: cw, height: ch } = containerSizeRef.current;
+
+    const checkerEl = checkerboardRef.current;
+    if (checkerEl) {
+      const spriteLeft = curPan.x;
+      const spriteTop = curPan.y;
+      const spriteRight = curPan.x + w * curZoom;
+      const spriteBottom = curPan.y + h * curZoom;
+      const clipLeft = Math.max(0, spriteLeft);
+      const clipTop = Math.max(0, spriteTop);
+      const clipRight = Math.min(cw, spriteRight);
+      const clipBottom = Math.min(ch, spriteBottom);
+      if (clipRight > clipLeft && clipBottom > clipTop) {
+        checkerEl.style.display = 'block';
+        checkerEl.style.width = `${clipRight - clipLeft}px`;
+        checkerEl.style.height = `${clipBottom - clipTop}px`;
+        checkerEl.style.transform = `translate(${clipLeft}px, ${clipTop}px)`;
+        checkerEl.style.backgroundPosition = `${spriteLeft - clipLeft}px ${spriteTop - clipTop}px`;
+      } else {
+        checkerEl.style.display = 'none';
+      }
+    }
+
+    const refImg = referenceImageRef.current;
+    const refEl = referenceImageElRef.current;
+    if (refImg && refImg.visible && refEl) {
+      refEl.style.transform = `translate(${curPan.x + refImg.x * curZoom}px, ${curPan.y + refImg.y * curZoom}px) scale(${refImg.scale * curZoom})`;
+    }
+  }, []);
 
   useEffect(() => {
     const projectChanged = prevProjectIdRef.current !== projectId;
     prevProjectIdRef.current = projectId;
     if (projectChanged || zoom !== lastCommittedZoomRef.current) {
-      if (zoomCommitTimerRef.current !== null) {
-        window.clearTimeout(zoomCommitTimerRef.current);
-        zoomCommitTimerRef.current = null;
+      if (viewportCommitTimerRef.current !== null) {
+        window.clearTimeout(viewportCommitTimerRef.current);
+        viewportCommitTimerRef.current = null;
       }
+      pendingZoomCommitRef.current = false;
       setLiveZoom(null);
       lastCommittedZoomRef.current = zoom;
       zoomRef.current = zoom;
       setLocalZoom(zoom);
-    } else if (zoomCommitTimerRef.current === null) {
+      syncViewportDom();
+      presentArtViewportRef.current();
+      renderUIRef.current();
+    } else if (viewportCommitTimerRef.current === null) {
       zoomRef.current = zoom;
       setLocalZoom(zoom);
+      syncViewportDom();
     }
-  }, [zoom, projectId]);
+  }, [zoom, projectId, syncViewportDom]);
 
   useEffect(() => {
     return () => {
-      if (zoomCommitTimerRef.current !== null) {
-        window.clearTimeout(zoomCommitTimerRef.current);
-        zoomCommitTimerRef.current = null;
+      if (viewportCommitTimerRef.current !== null) {
+        window.clearTimeout(viewportCommitTimerRef.current);
+        viewportCommitTimerRef.current = null;
       }
       if (wheelRafIdRef.current !== null) {
         cancelAnimationFrame(wheelRafIdRef.current);
         wheelRafIdRef.current = null;
+      }
+      if (touchRafIdRef.current !== null) {
+        cancelAnimationFrame(touchRafIdRef.current);
+        touchRafIdRef.current = null;
       }
       setLiveZoom(null);
 
@@ -374,20 +476,43 @@ export const Canvas: React.FC<CanvasProps> = ({
     };
   }, []);
 
-  const scheduleZoomCommit = useCallback((newZoom: number) => {
-    zoomRef.current = newZoom;
-    setLocalZoom(newZoom);
-    setLiveZoom(newZoom);
-    if (zoomCommitTimerRef.current !== null) {
-      window.clearTimeout(zoomCommitTimerRef.current);
-    }
-    zoomCommitTimerRef.current = window.setTimeout(() => {
-      zoomCommitTimerRef.current = null;
-      lastCommittedZoomRef.current = newZoom;
-      onZoomRef.current(newZoom);
-      setLiveZoom(null);
-    }, 120);
-  }, []);
+  // Imperatively updates pan/zoom DOM + art + UI canvases with zero React re-renders during active gestures,
+  // committing React state only once the gesture settles.
+  const applyImperativeViewport = useCallback(
+    (nextPan: Position, nextZoom: number, zoomChanged: boolean) => {
+      panRef.current = nextPan;
+      zoomRef.current = nextZoom;
+
+      syncViewportDom();
+      presentArtViewportRef.current();
+      renderUIRef.current();
+
+      if (zoomChanged) {
+        pendingZoomCommitRef.current = true;
+        setLiveZoom(nextZoom);
+      }
+
+      if (viewportCommitTimerRef.current !== null) {
+        window.clearTimeout(viewportCommitTimerRef.current);
+      }
+      viewportCommitTimerRef.current = window.setTimeout(() => {
+        viewportCommitTimerRef.current = null;
+        const settledPan = panRef.current;
+        const settledZoom = zoomRef.current;
+        const shouldCommitZoom = pendingZoomCommitRef.current;
+        pendingZoomCommitRef.current = false;
+
+        setPan(settledPan);
+        if (shouldCommitZoom) {
+          setLocalZoom(settledZoom);
+          lastCommittedZoomRef.current = settledZoom;
+          onZoomRef.current(settledZoom);
+          setLiveZoom(null);
+        }
+      }, 120);
+    },
+    [syncViewportDom]
+  );
 
   const [startPos, setStartPos] = useState<Position | null>(null);
   const [polyPoints, setPolyPoints] = useState<Position[]>([]);
@@ -418,7 +543,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     (sel: SelectionMask, box: { x: number; y: number; w: number; h: number }) => {
       releaseTransformPreview();
       const frame = frames[activeFrameIndex];
-      const layerData = frame?.layerData?.[activeLayerId];
+      const layerData = resolveHydratedPixelGrid(frame?.layerData?.[activeLayerId]);
       if (!layerData || box.w <= 0 || box.h <= 0) return;
 
       const paletteUint32 = getPackedPalette255(palette);
@@ -461,26 +586,16 @@ export const Canvas: React.FC<CanvasProps> = ({
         cached &&
         cached.lastWidth === width &&
         cached.lastHeight === height &&
-        cached.lastPixels === layerData &&
+        (cached.lastPixels === layerData || isHydratedReplacementFor(layerData, cached.lastPixels)) &&
         cached.lastColorMode === colorMode &&
         (colorMode !== 'indexed' || cached.lastPalette === palette);
 
       if (cacheHit) {
         bgCtx.drawImage(cached.canvas, 0, 0);
       } else {
-        const totalPixels = width * height;
-        const bgImg = bgCtx.createImageData(width, height);
-        const bg32 = new Uint32Array(bgImg.data.buffer);
-        const pxLen = Math.min(layerData.length, totalPixels);
-        if (isRgba) {
-          bg32.set(layerData.subarray(0, pxLen));
-        } else {
-          for (let i = 0; i < pxLen; i++) {
-            const val = layerData[i];
-            if (val !== 0) bg32[i] = pixelToPackedImageData(val, paletteUint32);
-          }
-        }
-        bgCtx.putImageData(bgImg, 0, 0);
+        uploadPixelsToCanvas(bgCtx, layerData, width, height, colorMode, paletteUint32, () =>
+          bgCtx.createImageData(width, height)
+        );
       }
 
       if (sel.isRect) {
@@ -528,14 +643,18 @@ export const Canvas: React.FC<CanvasProps> = ({
       if (lastCenteredRef.current !== projectId && containerSize.width > 0 && containerSize.height > 0) {
         const contentW = width * zoom;
         const contentH = height * zoom;
-        setPan({
+        const centeredPan = {
           x: (containerSize.width - contentW) / 2,
           y: (containerSize.height - contentH) / 2
-        });
+        };
+        panRef.current = centeredPan;
+        zoomRef.current = zoom;
+        setPan(centeredPan);
+        syncViewportDom();
         lastCenteredRef.current = projectId;
       }
     }
-  }, [projectId, width, height, zoom, containerSize]);
+  }, [projectId, width, height, zoom, containerSize, syncViewportDom]);
 
   const lastFitTriggerRef = useRef<number | undefined>(fitTrigger);
   useEffect(() => {
@@ -551,13 +670,22 @@ export const Canvas: React.FC<CanvasProps> = ({
       x: (containerSize.width - width * fittedZoom) / 2,
       y: (containerSize.height - height * fittedZoom) / 2,
     };
+    if (viewportCommitTimerRef.current !== null) {
+      window.clearTimeout(viewportCommitTimerRef.current);
+      viewportCommitTimerRef.current = null;
+    }
+    pendingZoomCommitRef.current = false;
     panRef.current = nextPan;
     setPan(nextPan);
     zoomRef.current = fittedZoom;
     setLocalZoom(fittedZoom);
     lastCommittedZoomRef.current = fittedZoom;
+    setLiveZoom(null);
+    syncViewportDom();
+    presentArtViewportRef.current();
+    renderUIRef.current();
     onZoomRef.current(fittedZoom);
-  }, [fitTrigger, containerSize, width, height]);
+  }, [fitTrigger, containerSize, width, height, syncViewportDom]);
 
   const getPixelCoords = useCallback((clientX: number, clientY: number) => {
     const el = containerRef.current;
@@ -662,7 +790,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       if (x < 0 || x >= width || y < 0 || y >= height) return;
       const frame = frames[activeFrameIndex];
       if (frame) {
-        const layerData = frame.layerData[activeLayerId];
+        const layerData = resolveHydratedPixelGrid(frame.layerData[activeLayerId]) ?? undefined;
         const newSel = getWandSelection(layerData, x, y, width, height, fillContiguous);
         combineSelection(newSel);
       }
@@ -764,7 +892,11 @@ export const Canvas: React.FC<CanvasProps> = ({
       if (tool === 'lasso-select') {
         setPolyPoints(prev => [...prev, { x, y }]);
       } else if (['rect-select', 'ellipse-select'].includes(tool)) {
-      } else if (['pencil', 'eraser', 'smudge', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'blur', 'sharpen', 'color-replace'].includes(tool)) {
+      } else if (['line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse'].includes(tool)) {
+        const cx = Math.max(0, Math.min(width - 1, x));
+        const cy = Math.max(0, Math.min(height - 1, y));
+        callbacks.current.onDraw(cx, cy, modifiers);
+      } else if (['pencil', 'eraser', 'smudge', 'blur', 'sharpen', 'color-replace'].includes(tool)) {
         if (x >= 0 && x < width && y >= 0 && y < height) {
           callbacks.current.onDraw(x, y, modifiers);
         }
@@ -900,19 +1032,13 @@ export const Canvas: React.FC<CanvasProps> = ({
         const newZoom = Math.min(Math.max(currentZoom * Math.exp(-zoomDelta * ZOOM_SPEED), MIN_ZOOM), MAX_ZOOM);
         const newPanX = mx - (cx / currentZoom) * newZoom - panDx;
         const newPanY = my - (cy / currentZoom) * newZoom - panDy;
-        const newPan = { x: newPanX, y: newPanY };
-        panRef.current = newPan;
-        setPan(newPan);
-        scheduleZoomCommit(newZoom);
+        applyImperativeViewport({ x: newPanX, y: newPanY }, newZoom, true);
       } else if (panDx !== 0 || panDy !== 0) {
-        setPan(prev => {
-          const next = { x: prev.x - panDx, y: prev.y - panDy };
-          panRef.current = next;
-          return next;
-        });
+        const prevPan = panRef.current;
+        applyImperativeViewport({ x: prevPan.x - panDx, y: prevPan.y - panDy }, zoomRef.current, false);
       }
     });
-  }, [scheduleZoomCommit]);
+  }, [applyImperativeViewport]);
 
   const handleTouchStart = useCallback((e: TouchEvent) => {
      // Cancel any pending draw trigger
@@ -966,7 +1092,7 @@ export const Canvas: React.FC<CanvasProps> = ({
          const cy = (t1.clientY + t2.clientY) / 2;
          const { startZoom, startDist, startPan, startCenter } = gestureState.current;
          const scaleFactor = dist / Math.max(1, startDist);
-         let newZoom = Math.min(Math.max(startZoom * scaleFactor, MIN_ZOOM), MAX_ZOOM);
+         const newZoom = Math.min(Math.max(startZoom * scaleFactor, MIN_ZOOM), MAX_ZOOM);
          const dx = cx - startCenter.x;
          const dy = cy - startCenter.y;
          const rect = containerRectRef.current || containerRef.current!.getBoundingClientRect();
@@ -974,12 +1100,19 @@ export const Canvas: React.FC<CanvasProps> = ({
          const my = startCenter.y - rect.top;
          const canvasX = mx - startPan.x;
          const canvasY = my - startPan.y;
-         let newPanX = mx - (canvasX / startZoom) * newZoom + dx;
-         let newPanY = my - (canvasY / startZoom) * newZoom + dy;
-         const newPan = { x: newPanX, y: newPanY };
-         panRef.current = newPan;
-         setPan(newPan);
-         scheduleZoomCommit(newZoom);
+         const newPanX = mx - (canvasX / startZoom) * newZoom + dx;
+         const newPanY = my - (canvasY / startZoom) * newZoom + dy;
+
+         pendingTouchViewportRef.current = { pan: { x: newPanX, y: newPanY }, zoom: newZoom };
+         if (touchRafIdRef.current === null) {
+           touchRafIdRef.current = requestAnimationFrame(() => {
+             touchRafIdRef.current = null;
+             const pending = pendingTouchViewportRef.current;
+             if (!pending) return;
+             pendingTouchViewportRef.current = null;
+             applyImperativeViewport(pending.pan, pending.zoom, true);
+           });
+         }
       } else if (e.touches.length === 1) {
           // Only move if we aren't waiting for a potential second finger
           if (!touchTimeoutRef.current) {
@@ -987,7 +1120,7 @@ export const Canvas: React.FC<CanvasProps> = ({
              pointerHandlersRef.current.handlePointerMove(e.touches[0].clientX, e.touches[0].clientY, { shift: false, ctrl: false, alt: false, meta: false });
           }
       }
-  }, [scheduleZoomCommit]);
+  }, [applyImperativeViewport]);
 
   const handleTouchEnd = useCallback((e: TouchEvent) => { 
     if (touchTimeoutRef.current) {
@@ -1067,6 +1200,10 @@ export const Canvas: React.FC<CanvasProps> = ({
     drawClippedInstance(curPan.x, curPan.y, 1);
     ctx.globalAlpha = 1;
   }, []);
+
+  useLayoutEffect(() => {
+    presentArtViewportRef.current = presentArtViewport;
+  });
 
   const currentArtFrame = frames[activeFrameIndex];
   const prevOnionFrame =
@@ -1180,24 +1317,22 @@ export const Canvas: React.FC<CanvasProps> = ({
               const effOpacity = getEffectiveLayerOpacity(layer, layers, parentMap);
               if (effOpacity <= 0) continue;
 
-              const scratchImgData = getSharedUploadImageData();
-              const data32 = new Uint32Array(scratchImgData.data.buffer);
-              const pxLen = Math.min(pixels.length, totalPixels);
-
-              if (colorMode === 'rgba') {
-                data32.set(pixels.subarray(0, pxLen));
-                if (pxLen < totalPixels) data32.fill(0, pxLen);
-              } else {
-                data32.fill(0);
-                for (let i = 0; i < pxLen; i++) {
-                  const val = pixels[i];
-                  if (val !== 0) {
-                    data32[i] = pixelToPackedImageData(val, paletteUint32);
-                  }
-                }
+              const pendingBmp = getPendingLayerBitmap(pixels);
+              if (pendingBmp) {
+                onionCtx.globalAlpha = effOpacity / 100;
+                onionCtx.drawImage(pendingBmp.bitmap, 0, 0);
+                continue;
               }
 
-              layerCtx.putImageData(scratchImgData, 0, 0);
+              uploadPixelsToCanvas(
+                layerCtx,
+                pixels,
+                width,
+                height,
+                colorMode,
+                paletteUint32,
+                getSharedUploadImageData
+              );
               onionCtx.globalAlpha = effOpacity / 100;
               onionCtx.drawImage(layerCanvas, 0, 0);
             }
@@ -1325,30 +1460,38 @@ export const Canvas: React.FC<CanvasProps> = ({
         layerCanvasCacheRef.current.set(layer.id, layerCache);
       }
 
+      // If background worker hydration just swapped a pending ImageBitmap placeholder for its exact
+      // Uint32Array PixelGrid, layerCache.canvas already holds those exact GPU pixels—skip putImageData.
+      if (
+        layerCache.lastPixels !== layerPixels &&
+        layerCache.lastColorMode === colorMode &&
+        (colorMode !== 'indexed' || layerCache.lastPalette === palette) &&
+        isHydratedReplacementFor(layerPixels, layerCache.lastPixels)
+      ) {
+        layerCache.lastPixels = layerPixels;
+      }
+
       const isDirty =
         layerCache.lastPixels !== layerPixels ||
         layerCache.lastColorMode !== colorMode ||
         (colorMode === 'indexed' && layerCache.lastPalette !== palette);
 
       if (isDirty) {
-        const uploadImg = getSharedUploadImageData();
-        const data32 = new Uint32Array(uploadImg.data.buffer);
-        const pxLen = Math.min(layerPixels.length, totalPixels);
-
-        if (colorMode === 'rgba') {
-          data32.set(layerPixels.subarray(0, pxLen));
-          if (pxLen < totalPixels) data32.fill(0, pxLen);
+        const pendingBmp = getPendingLayerBitmap(layerPixels);
+        if (pendingBmp) {
+          layerCache.ctx.clearRect(0, 0, width, height);
+          layerCache.ctx.drawImage(pendingBmp.bitmap, 0, 0);
         } else {
-          data32.fill(0);
-          for (let i = 0; i < pxLen; i++) {
-            const val = layerPixels[i];
-            if (val !== 0) {
-              data32[i] = pixelToPackedImageData(val, paletteUint32);
-            }
-          }
+          uploadPixelsToCanvas(
+            layerCache.ctx,
+            layerPixels,
+            width,
+            height,
+            colorMode,
+            paletteUint32,
+            getSharedUploadImageData
+          );
         }
-
-        layerCache.ctx.putImageData(uploadImg, 0, 0);
         layerCache.lastPixels = layerPixels;
         layerCache.lastPalette = palette;
         layerCache.lastColorMode = colorMode;
@@ -1389,10 +1532,12 @@ export const Canvas: React.FC<CanvasProps> = ({
     presentArtViewport,
   ]);
 
-  // Lightweight viewport presentation effect on pan / zoom / tiled / container resize
+  // Lightweight viewport presentation effect on settled pan / zoom / tiled / container resize
   useEffect(() => {
+    syncViewportDom();
     presentArtViewport();
-  }, [pan, localZoom, tiled, containerSize, width, height, presentArtViewport]);
+    renderUIRef.current();
+  }, [pan, localZoom, tiled, containerSize, width, height, referenceImage, syncViewportDom, presentArtViewport]);
 
   // Direct Live-Stroke Dirty-Rect Subscriber (zero React re-renders & dirty-rect compositing during brush drag)
   useEffect(() => {
@@ -1499,28 +1644,24 @@ export const Canvas: React.FC<CanvasProps> = ({
           return;
         }
       } else {
-        let uploadImg = sharedUploadImageDataRef.current;
-        if (!uploadImg || uploadImg.width !== width || uploadImg.height !== height) {
-          uploadImg = layerCache.ctx.createImageData(width, height);
-          if (totalPixels <= LARGE_CANVAS_PIXELS) {
-            sharedUploadImageDataRef.current = uploadImg;
-          }
-        }
-        const data32 = new Uint32Array(uploadImg.data.buffer);
-        const pxLen = Math.min(pixels.length, totalPixels);
-        if (curColorMode === 'rgba') {
-          data32.set(pixels.subarray(0, pxLen));
-          if (pxLen < totalPixels) data32.fill(0, pxLen);
-        } else {
-          data32.fill(0);
-          for (let i = 0; i < pxLen; i++) {
-            const val = pixels[i];
-            if (val !== 0) {
-              data32[i] = pixelToPackedImageData(val, paletteUint32);
+        uploadPixelsToCanvas(
+          layerCache.ctx,
+          pixels,
+          width,
+          height,
+          curColorMode,
+          paletteUint32,
+          () => {
+            let uploadImg = sharedUploadImageDataRef.current;
+            if (!uploadImg || uploadImg.width !== width || uploadImg.height !== height) {
+              uploadImg = layerCache!.ctx.createImageData(width, height);
+              if (totalPixels <= LARGE_CANVAS_PIXELS) {
+                sharedUploadImageDataRef.current = uploadImg;
+              }
             }
+            return uploadImg;
           }
-        }
-        layerCache.ctx.putImageData(uploadImg, 0, 0);
+        );
       }
 
       layerCache.lastPixels = pixels;
@@ -1620,7 +1761,14 @@ export const Canvas: React.FC<CanvasProps> = ({
     return subscribeLiveStroke(handleLiveStroke);
   }, [presentArtViewport]);
 
-  // UI Rendering Effect (Grid, Selection, Brush)
+  // Subscribe to lightweight live filled-shape vector previews (zero React re-renders during drag)
+  useEffect(() => {
+    return subscribeLiveShapePreview(() => {
+      scheduleRenderUI();
+    });
+  }, [scheduleRenderUI]);
+
+  // UI Rendering Effect (Grid, Selection, Shape Preview, Brush)
   const renderUI = useCallback(() => {
     const canvas = uiCanvasRef.current;
     if (!canvas) return;
@@ -1633,9 +1781,9 @@ export const Canvas: React.FC<CanvasProps> = ({
     ctx.save();
     ctx.scale(dpr, dpr);
 
-    const z = localZoom;
-    const px = pan.x;
-    const py = pan.y;
+    const z = zoomRef.current;
+    const px = panRef.current.x;
+    const py = panRef.current.y;
     const dashOffset = (performance.now() / 30) % 8;
     const cursorPos = cursorPosRef.current;
 
@@ -1794,6 +1942,75 @@ export const Canvas: React.FC<CanvasProps> = ({
         ctx.restore();
     }
 
+    // 5b. Draw Live Filled-Shape Vector Preview (instant GPU overlay for 4K filled-rect / filled-ellipse)
+    const shapePreview = getLiveShapePreview();
+    if (shapePreview && shapePreview.projectId === projectId) {
+        const rects: { l: number; t: number; r: number; b: number }[] = [
+          { l: shapePreview.left, t: shapePreview.top, r: shapePreview.right, b: shapePreview.bottom },
+        ];
+        if (symmetryX) {
+          rects.push({
+            l: width - 1 - shapePreview.right,
+            t: shapePreview.top,
+            r: width - 1 - shapePreview.left,
+            b: shapePreview.bottom,
+          });
+        }
+        if (symmetryY) {
+          rects.push({
+            l: shapePreview.left,
+            t: height - 1 - shapePreview.bottom,
+            r: shapePreview.right,
+            b: height - 1 - shapePreview.top,
+          });
+        }
+        if (symmetryX && symmetryY) {
+          rects.push({
+            l: width - 1 - shapePreview.right,
+            t: height - 1 - shapePreview.bottom,
+            r: width - 1 - shapePreview.left,
+            b: height - 1 - shapePreview.top,
+          });
+        }
+
+        ctx.save();
+        ctx.translate(px, py);
+        ctx.beginPath();
+        ctx.rect(0, 0, width * z, height * z);
+        ctx.clip();
+
+        ctx.beginPath();
+        for (let i = 0; i < rects.length; i++) {
+          const item = rects[i];
+          const rx = item.l * z;
+          const ry = item.t * z;
+          const rw = (item.r - item.l + 1) * z;
+          const rh = (item.b - item.t + 1) * z;
+          if (shapePreview.tool === 'filled-rect') {
+            ctx.rect(rx, ry, rw, rh);
+          } else {
+            ctx.moveTo(rx + rw, ry + rh / 2);
+            ctx.ellipse(rx + rw / 2, ry + rh / 2, rw / 2, rh / 2, 0, 0, Math.PI * 2);
+          }
+        }
+
+        ctx.save();
+        ctx.globalAlpha = shapePreview.isShading ? 0.25 : 0.65;
+        ctx.fillStyle = shapePreview.isShading ? '#ffffff' : shapePreview.colorHex;
+        ctx.fill();
+        ctx.restore();
+
+        ctx.lineWidth = 1;
+        ctx.setLineDash([]);
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)';
+        ctx.stroke();
+        ctx.setLineDash([4, 4]);
+        ctx.lineDashOffset = -dashOffset;
+        ctx.strokeStyle = '#ffffff';
+        ctx.stroke();
+        ctx.restore();
+    }
+
     // 6. Draw Brush Preview (Optimized with direct rect & contour caching)
     const isBrushTool = ['pencil', 'eraser', 'smudge', 'blur', 'sharpen', 'color-replace'].includes(tool);
     const isOtherToolWithPreview = ['bucket', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'eyedropper'].includes(tool);
@@ -1841,7 +2058,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
 
     ctx.restore();
-  }, [containerSize, showGrid, width, height, symmetryX, symmetryY, tool, brushSize, brushShape, selectionMask, selectionBorderSegments, selectionBoundingBox, localZoom, pan, startPos, polyPoints, isMoving, isDrawing, moveOffset, isRotating, rotationAngle, rotationPivot, isScaling, currentBox]);
+  }, [projectId, containerSize, showGrid, width, height, symmetryX, symmetryY, tool, brushSize, brushShape, selectionMask, selectionBorderSegments, selectionBoundingBox, startPos, polyPoints, isMoving, isDrawing, moveOffset, isRotating, rotationAngle, rotationPivot, isScaling, currentBox]);
 
   useLayoutEffect(() => {
     renderUIRef.current = renderUI;
@@ -1901,6 +2118,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       {/* Reference Image Layer */}
       {referenceImage && referenceImage.visible && (
         <div 
+          ref={referenceImageElRef}
           className="absolute top-0 left-0 pointer-events-none"
           style={{
             transform: `translate(${pan.x + referenceImage.x * localZoom}px, ${pan.y + referenceImage.y * localZoom}px) scale(${referenceImage.scale * localZoom})`,
@@ -1912,21 +2130,21 @@ export const Canvas: React.FC<CanvasProps> = ({
         </div>
       )}
 
-      {/* Viewport-Clamped Checkerboard Backdrop */}
-      {hasVisibleSprite && (
-        <div
-          className="absolute top-0 left-0 shadow-2xl pointer-events-none"
-          style={{
-            width: `${clipRight - clipLeft}px`,
-            height: `${clipBottom - clipTop}px`,
-            transform: `translate(${clipLeft}px, ${clipTop}px)`,
-            transformOrigin: 'top left',
-            backgroundImage: 'conic-gradient(var(--checker-a) 90deg, var(--checker-b) 90deg 180deg, var(--checker-a) 180deg 270deg, var(--checker-b) 270deg)',
-            backgroundPosition: `${spriteLeft - clipLeft}px ${spriteTop - clipTop}px`,
-            backgroundSize: '32px 32px',
-          }}
-        />
-      )}
+      {/* Viewport-Clamped Checkerboard Backdrop (imperatively positioned during pan/zoom gestures) */}
+      <div
+        ref={checkerboardRef}
+        className="absolute top-0 left-0 shadow-2xl pointer-events-none"
+        style={{
+          display: hasVisibleSprite ? 'block' : 'none',
+          width: `${Math.max(0, clipRight - clipLeft)}px`,
+          height: `${Math.max(0, clipBottom - clipTop)}px`,
+          transform: `translate(${clipLeft}px, ${clipTop}px)`,
+          transformOrigin: 'top left',
+          backgroundImage: 'conic-gradient(var(--checker-a) 90deg, var(--checker-b) 90deg 180deg, var(--checker-a) 180deg 270deg, var(--checker-b) 270deg)',
+          backgroundPosition: `${spriteLeft - clipLeft}px ${spriteTop - clipTop}px`,
+          backgroundSize: '32px 32px',
+        }}
+      />
 
       {/* Viewport-Sized Art Canvas (Main Sprite + GPU Tiled Mode Overlays) */}
       <canvas

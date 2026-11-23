@@ -5,6 +5,7 @@ import {
   isLittleEndian,
   createPixelGrid,
   clonePixelGrid,
+  createRgbaImageDataView,
   packRGBA,
   encodeIndexedPixel,
   decodeIndexedPixel,
@@ -28,12 +29,17 @@ import {
   buildLayerPatch,
 } from './utils/pixelBuffer';
 import { parseAsepriteAsync, decodeImageFileAsync } from './utils/asepriteWorkerClient';
+import {
+  createPendingBitmapGrid,
+  getPendingLayerBitmap,
+} from './utils/layerBitmapCache';
 import { SelectionMask, SelectionBounds } from './utils/selectionMask';
 
 export {
   EMPTY_PIXEL,
   createPixelGrid,
   clonePixelGrid,
+  createRgbaImageDataView,
   packRGBA,
   encodeIndexedPixel,
   decodeIndexedPixel,
@@ -228,6 +234,68 @@ export const getFilledEllipse = (x0: number, y0: number, x1: number, y1: number)
   }
 
   return points;
+};
+
+/**
+ * Zero-allocation scanline span generator for a filled ellipse (Alois Zingl's midpoint algorithm).
+ * Invokes onSpan(y, left, right) for each horizontal span without allocating per-pixel Position objects.
+ */
+export const forEachFilledEllipseSpan = (
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  onSpan: (y: number, left: number, right: number) => void
+): void => {
+  let a = Math.abs(x1 - x0);
+  let b = Math.abs(y1 - y0);
+  let b1 = b & 1;
+
+  let dx = 4 * (1 - a) * b * b;
+  let dy = 4 * (b1 + 1) * a * a;
+  let err = dx + dy + b1 * a * a;
+  let e2: number;
+
+  if (x0 > x1) {
+    const temp = x0;
+    x0 = x1;
+    x1 = temp;
+  }
+  if (y0 > y1) {
+    const temp = y0;
+    y0 = y1;
+    y1 = temp;
+  }
+
+  y0 += Math.floor((b + 1) / 2);
+  y1 = y0 - b1;
+  a = 8 * a * a;
+  b1 = 8 * b * b;
+
+  do {
+    const left = x0 < x1 ? x0 : x1;
+    const right = x0 < x1 ? x1 : x0;
+    onSpan(y0, left, right);
+    if (y1 !== y0) onSpan(y1, left, right);
+    e2 = 2 * err;
+    if (e2 >= dx) {
+      x0++;
+      x1--;
+      err += dx += b1;
+    }
+    if (e2 <= dy) {
+      y0++;
+      y1--;
+      err += dy += a;
+    }
+  } while (x0 <= x1);
+
+  while (y0 - y1 < b) {
+    const left = Math.min(x0 - 1, x1 + 1);
+    const right = Math.max(x0 - 1, x1 + 1);
+    onSpan(y0++, left, right);
+    onSpan(y1--, left, right);
+  }
 };
 
 // Pixel Perfect Filter
@@ -657,13 +725,6 @@ export const renderFrameToCanvas = (
     if (!layerCtx) return canvas;
     scratchLayerCtx = layerCtx;
 
-    // Reuse scratch ImageData buffer across calls for the same canvas dimensions
-    if (!scratchLayerImgData || !scratchLayerData32 || scratchLayerImgData.width !== state.width || scratchLayerImgData.height !== state.height) {
-      scratchLayerImgData = layerCtx.createImageData(state.width, state.height);
-      scratchLayerData32 = new Uint32Array(scratchLayerImgData.data.buffer);
-    }
-    const layerImgData = scratchLayerImgData;
-    const data32 = scratchLayerData32;
     const paletteUint32 = getPackedPalette255(state.palette);
     const parentMap = getLayerParentMap(state.layers);
     const totalPixels = state.width * state.height;
@@ -679,23 +740,42 @@ export const renderFrameToCanvas = (
         const effectiveOpacity = getEffectiveLayerOpacity(l, state.layers, parentMap);
         if (effectiveOpacity <= 0) continue;
 
-        const pxLen = Math.min(px.length, totalPixels);
-        if (isRgbaMode) {
-            data32.set(px.subarray(0, pxLen));
-            if (pxLen < totalPixels) {
-                data32.fill(0, pxLen);
-            }
-        } else {
-            data32.fill(0);
-            for (let i = 0; i < pxLen; i++) {
-                const val = px[i];
-                if (val !== 0) {
-                    data32[i] = pixelToPackedImageData(val, paletteUint32);
-                }
-            }
+        const pendingBmp = getPendingLayerBitmap(px);
+        if (pendingBmp) {
+            ctx.globalAlpha = effectiveOpacity / 100;
+            ctx.globalCompositeOperation = getCompositeOp(l.blendMode);
+            ctx.drawImage(pendingBmp.bitmap, 0, 0);
+            continue;
         }
 
-        layerCtx.putImageData(layerImgData, 0, 0);
+        const directImg = isRgbaMode ? createRgbaImageDataView(px, state.width, state.height) : null;
+        if (directImg) {
+            layerCtx.putImageData(directImg, 0, 0);
+        } else {
+            // Reuse scratch ImageData buffer only when indexed or non-standard buffer length
+            if (!scratchLayerImgData || !scratchLayerData32 || scratchLayerImgData.width !== state.width || scratchLayerImgData.height !== state.height) {
+              scratchLayerImgData = layerCtx.createImageData(state.width, state.height);
+              scratchLayerData32 = new Uint32Array(scratchLayerImgData.data.buffer);
+            }
+            const layerImgData = scratchLayerImgData;
+            const data32 = scratchLayerData32;
+            const pxLen = Math.min(px.length, totalPixels);
+            if (isRgbaMode) {
+                data32.set(px.subarray(0, pxLen));
+                if (pxLen < totalPixels) {
+                    data32.fill(0, pxLen);
+                }
+            } else {
+                data32.fill(0);
+                for (let i = 0; i < pxLen; i++) {
+                    const val = px[i];
+                    if (val !== 0) {
+                        data32[i] = pixelToPackedImageData(val, paletteUint32);
+                    }
+                }
+            }
+            layerCtx.putImageData(layerImgData, 0, 0);
+        }
         ctx.globalAlpha = effectiveOpacity / 100;
         ctx.globalCompositeOperation = getCompositeOp(l.blendMode);
         ctx.drawImage(layerCanvas, 0, 0);
@@ -782,6 +862,14 @@ export const renderFrameToDownsampledCanvas = (
 
       const effectiveOpacity = getEffectiveLayerOpacity(l, state.layers, parentMap);
       if (effectiveOpacity <= 0) continue;
+
+      const pendingBmp = getPendingLayerBitmap(px);
+      if (pendingBmp) {
+        ctx.globalAlpha = effectiveOpacity / 100;
+        ctx.globalCompositeOperation = getCompositeOp(l.blendMode);
+        ctx.drawImage(pendingBmp.bitmap, 0, 0, dstW, dstH);
+        continue;
+      }
 
       let dstIdx = 0;
       for (let y = 0; y < dstH; y++) {
@@ -1212,7 +1300,7 @@ export const fileToProjectState = async (file: File): Promise<ProjectState> => {
 
   if (fileNameLower.endsWith('.aseprite') || fileNameLower.endsWith('.ase')) {
     const buffer = await file.arrayBuffer();
-    return parseAsepriteAsync(buffer, file.name);
+    return parseAsepriteAsync(buffer, file.name, { transfer: true });
   }
 
   if (fileNameLower.endsWith('.json') || fileNameLower.endsWith('.pxa')) {
@@ -1252,7 +1340,48 @@ export const fileToProjectState = async (file: File): Promise<ProjectState> => {
     return state as ProjectState;
   }
 
-  const { width, height, pixels } = await decodeImageFileToPixelGrid(file);
+  // Fast open path for large raster images (> 500K pixels, e.g. HD/4K photos):
+  // Decode directly to GPU-ready ImageBitmap for instant display without waiting on 33MB CPU readback.
+  // Background worker hydration then populates the full Uint32Array off the main thread.
+  let width = 0;
+  let height = 0;
+  let pixels: PixelGrid;
+
+  if (typeof createImageBitmap === 'function' && !fileNameLower.endsWith('.svg')) {
+    try {
+      const bitmap = await createImageBitmap(file);
+      width = bitmap.width;
+      height = bitmap.height;
+      if (width * height > 500_000) {
+        pixels = createPendingBitmapGrid(bitmap, width, height, file);
+      } else {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+          if (!ctx) throw new Error('Failed to get canvas context');
+          ctx.drawImage(bitmap, 0, 0);
+          const imageData = ctx.getImageData(0, 0, width, height);
+          canvas.width = 0;
+          canvas.height = 0;
+          pixels = imageDataToPixelGridZeroCopy(imageData, width, height);
+        } finally {
+          bitmap.close();
+        }
+      }
+    } catch {
+      const decoded = await decodeImageFileToPixelGrid(file);
+      width = decoded.width;
+      height = decoded.height;
+      pixels = decoded.pixels;
+    }
+  } else {
+    const decoded = await decodeImageFileToPixelGrid(file);
+    width = decoded.width;
+    height = decoded.height;
+    pixels = decoded.pixels;
+  }
 
   const layerId = `layer-${Date.now()}`;
   const frameId = `frame-${Date.now()}`;

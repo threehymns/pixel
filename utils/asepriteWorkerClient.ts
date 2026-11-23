@@ -49,7 +49,7 @@ function getWorker(): Worker | null {
       type: 'module',
     });
     w.onmessage = (event: MessageEvent<any>) => {
-      const { id, ok, buffer, state, decodedImage, error } = event.data || {};
+      const { id, ok, buffer, state, decodedImage, cachedGridIds, error } = event.data || {};
       const req = pending.get(id);
       if (!req) return;
       pending.delete(id);
@@ -62,6 +62,14 @@ function getWorker(): Worker | null {
           pixels: new Uint32Array(decodedImage.buffer),
         });
       } else if (buffer !== undefined) {
+        if (Array.isArray(cachedGridIds)) {
+          const validIds = new Set<number>(cachedGridIds);
+          for (const key of knownWorkerCelCache.keys()) {
+            if (!validIds.has(key)) {
+              knownWorkerCelCache.delete(key);
+            }
+          }
+        }
         req.resolve(new Uint8Array(buffer));
       } else {
         req.resolve(state);
@@ -242,7 +250,8 @@ export async function encodeAsepriteAsync(
  */
 export async function parseAsepriteAsync(
   buffer: ArrayBuffer,
-  filename = 'imported'
+  filename = 'imported',
+  options?: { transfer?: boolean }
 ): Promise<ProjectState> {
   const worker = getWorker();
   if (!worker) {
@@ -250,7 +259,7 @@ export async function parseAsepriteAsync(
   }
 
   const id = nextRequestId++;
-  const workerBuffer = buffer.slice(0);
+  const workerBuffer = options?.transfer ? buffer : buffer.slice(0);
 
   try {
     return await new Promise<ProjectState>((resolve, reject) => {
@@ -258,6 +267,9 @@ export async function parseAsepriteAsync(
       worker.postMessage({ id, type: 'parse', buffer: workerBuffer, filename }, [workerBuffer]);
     });
   } catch {
+    if (options?.transfer) {
+      throw new Error('Failed to parse Aseprite buffer in worker');
+    }
     return parseAseprite(buffer, filename);
   }
 }

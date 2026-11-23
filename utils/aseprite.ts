@@ -1297,6 +1297,7 @@ export interface CachedEncodedCel {
   height: number;
   pxLen: number;
   hash: number;
+  hasValidHash: boolean;
   nonNullCount: number;
   minX: number;
   maxX: number;
@@ -1315,6 +1316,389 @@ export interface AsepriteEncodeOptions {
   frameGridIds?: Record<string, number>[];
   externalCelCache?: Map<number, CachedEncodedCel>;
   maxExternalCacheEntries?: number;
+  maxExternalCacheBytes?: number;
+}
+
+const DEFAULT_MAX_EXTERNAL_CACHE_BYTES = 96 * 1024 * 1024; // 96 MB
+const NATIVE_DEFLATE_MIN_RAW_BYTES = 262_144; // 256 KB
+
+function evictExternalCelCache(
+  cache: Map<number, CachedEncodedCel>,
+  maxEntries: number,
+  maxBytes: number
+): void {
+  let totalBytes = 0;
+  cache.forEach((entry) => {
+    totalBytes += entry.compressedBytes ? entry.compressedBytes.byteLength : 0;
+  });
+
+  while (cache.size > maxEntries || (totalBytes > maxBytes && cache.size > 0)) {
+    const oldest = cache.entries().next().value;
+    if (!oldest) break;
+    const [oldestKey, oldestVal] = oldest;
+    cache.delete(oldestKey);
+    totalBytes -= oldestVal.compressedBytes ? oldestVal.compressedBytes.byteLength : 0;
+  }
+}
+
+function storeInExternalCelCache(
+  cache: Map<number, CachedEncodedCel>,
+  gridId: number,
+  entry: CachedEncodedCel,
+  maxEntries: number,
+  maxBytes: number
+): void {
+  const entryBytes = entry.compressedBytes ? entry.compressedBytes.byteLength : 0;
+  cache.delete(gridId);
+  if (entryBytes <= maxBytes) {
+    cache.set(gridId, entry);
+  }
+  evictExternalCelCache(cache, maxEntries, maxBytes);
+}
+
+function computePixelGridHash(px: PixelGrid, width: number, height: number): number {
+  const pxLen = px.length;
+  let hash = (2166136261 ^ pxLen) | 0;
+  const limit = Math.min(pxLen, width * height);
+  for (let i = 0; i < limit; i++) {
+    const val = px[i];
+    if (val === EMPTY_PIXEL) continue;
+    hash = Math.imul(hash ^ Math.imul(i + 1, 0x9e3779b1) ^ val, 16777619);
+  }
+  for (let i = width * height; i < pxLen; i++) {
+    const val = px[i];
+    if (val === EMPTY_PIXEL) continue;
+    hash = Math.imul(hash ^ Math.imul(i + 1, 0x9e3779b1) ^ val, 16777619);
+  }
+  return hash;
+}
+
+function analyzeCelPixels(
+  px: PixelGrid,
+  width: number,
+  height: number,
+  computeHash: boolean
+): CachedEncodedCel {
+  const pxLen = px.length;
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
+  let nonNullCount = 0;
+  let hash = computeHash ? ((2166136261 ^ pxLen) | 0) : 0;
+  let hasIndexedValues = false;
+  let hasStringValues = false;
+
+  if (computeHash) {
+    for (let y = 0; y < height; y++) {
+      const rowOffset = y * width;
+      if (rowOffset >= pxLen) break;
+      const rowEnd = Math.min(width, pxLen - rowOffset);
+      for (let x = 0; x < rowEnd; x++) {
+        const i = rowOffset + x;
+        const val = px[i];
+        if (val === EMPTY_PIXEL) continue;
+        nonNullCount++;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+        if ((val >>> 24) !== 0) {
+          hasStringValues = true;
+        } else {
+          hasIndexedValues = true;
+        }
+        hash = Math.imul(hash ^ Math.imul(i + 1, 0x9e3779b1) ^ val, 16777619);
+      }
+    }
+    for (let i = width * height; i < pxLen; i++) {
+      const val = px[i];
+      if (val === EMPTY_PIXEL) continue;
+      hash = Math.imul(hash ^ Math.imul(i + 1, 0x9e3779b1) ^ val, 16777619);
+    }
+  } else {
+    for (let y = 0; y < height; y++) {
+      const rowOffset = y * width;
+      if (rowOffset >= pxLen) break;
+      const rowEnd = Math.min(width, pxLen - rowOffset);
+      for (let x = 0; x < rowEnd; x++) {
+        const val = px[rowOffset + x];
+        if (val === EMPTY_PIXEL) continue;
+        nonNullCount++;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+        if ((val >>> 24) !== 0) {
+          hasStringValues = true;
+        } else {
+          hasIndexedValues = true;
+        }
+      }
+    }
+  }
+
+  return {
+    width,
+    height,
+    pxLen,
+    hash,
+    hasValidHash: computeHash,
+    nonNullCount,
+    minX,
+    maxX,
+    minY,
+    maxY,
+    hasIndexedValues,
+    hasStringValues,
+    compressedKey: null,
+    compressedLevel: -1,
+    compressedPaletteSig: null,
+    compressedBytes: null,
+  };
+}
+
+function buildCelRawBuffer(
+  px: PixelGrid,
+  width: number,
+  height: number,
+  minX: number,
+  minY: number,
+  celW: number,
+  celH: number,
+  isIndexed: boolean,
+  hasIndexedValues: boolean,
+  effectiveTransparentIndex: number,
+  effectivePalette: string[]
+): Uint8Array {
+  // Zero-copy fast path for full-bleed little-endian RGBA cels (avoids 33MB copy on 4K photos)
+  if (
+    !isIndexed &&
+    isLittleEndian &&
+    !hasIndexedValues &&
+    minX === 0 &&
+    minY === 0 &&
+    celW === width &&
+    celH === height &&
+    px.length >= width * height
+  ) {
+    return new Uint8Array(px.buffer, px.byteOffset, width * height * 4);
+  }
+
+  const bpp = isIndexed ? 1 : 4;
+  const rawBuffer = new Uint8Array(celW * celH * bpp);
+
+  if (!isIndexed && isLittleEndian && !hasIndexedValues) {
+    const raw32 = new Uint32Array(rawBuffer.buffer);
+    for (let cy = 0; cy < celH; cy++) {
+      const srcStart = (minY + cy) * width + minX;
+      raw32.set(px.subarray(srcStart, srcStart + celW), cy * celW);
+    }
+    return rawBuffer;
+  }
+
+  const palettePacked = isIndexed ? null : getPackedPalette255(effectivePalette);
+  let rawOffset = 0;
+  for (let cy = 0; cy < celH; cy++) {
+    const rowBase = (minY + cy) * width + minX;
+    for (let cx = 0; cx < celW; cx++) {
+      const val = px[rowBase + cx];
+
+      if (isIndexed) {
+        if (val === EMPTY_PIXEL) {
+          rawBuffer[rawOffset++] = effectiveTransparentIndex;
+        } else if ((val >>> 24) === 0) {
+          rawBuffer[rawOffset++] = decodeIndexedPixel(val) & 0xff;
+        } else {
+          rawBuffer[rawOffset++] = findNearestPaletteIndex(
+            val & 0xff,
+            (val >>> 8) & 0xff,
+            (val >>> 16) & 0xff,
+            effectivePalette
+          );
+        }
+      } else {
+        if (val === EMPTY_PIXEL) {
+          rawOffset += 4;
+        } else if ((val >>> 24) !== 0) {
+          rawBuffer[rawOffset++] = val & 0xff;
+          rawBuffer[rawOffset++] = (val >>> 8) & 0xff;
+          rawBuffer[rawOffset++] = (val >>> 16) & 0xff;
+          rawBuffer[rawOffset++] = (val >>> 24) & 0xff;
+        } else {
+          const pIdx = decodeIndexedPixel(val);
+          const packed =
+            palettePacked && pIdx >= 0 && pIdx < palettePacked.length
+              ? palettePacked[pIdx]
+              : 0;
+          rawBuffer[rawOffset++] = packed & 0xff;
+          rawBuffer[rawOffset++] = (packed >>> 8) & 0xff;
+          rawBuffer[rawOffset++] = (packed >>> 16) & 0xff;
+          rawBuffer[rawOffset++] = (packed >>> 24) & 0xff;
+        }
+      }
+    }
+  }
+  return rawBuffer;
+}
+
+async function deflateWithCompressionStream(data: Uint8Array): Promise<Uint8Array | null> {
+  if (typeof CompressionStream === 'undefined') return null;
+  try {
+    const cs = new CompressionStream('deflate');
+    const writer = cs.writable.getWriter();
+    // Kick off write without awaiting first so large buffers don't deadlock on TransformStream backpressure
+    const writePromise = writer.write(data as BufferSource).then(() => writer.close());
+    writePromise.catch(() => {});
+
+    const reader = cs.readable.getReader();
+    const chunks: Uint8Array[] = [];
+    let totalLen = 0;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) {
+        chunks.push(value);
+        totalLen += value.byteLength;
+      }
+    }
+    await writePromise;
+
+    if (chunks.length === 1) return chunks[0];
+    const out = new Uint8Array(totalLen);
+    let offset = 0;
+    for (let i = 0; i < chunks.length; i++) {
+      out.set(chunks[i], offset);
+      offset += chunks[i].byteLength;
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Asynchronously pre-compresses large cels (>= 256 KB raw) using native browser CompressionStream('deflate')
+ * (RFC 1950 zlib format, 3-5x faster than JS pako on 4K photos) and stores results in the cel cache
+ * so encodeAseprite can reuse them with zero JS deflate work.
+ */
+export async function precompressLargeCelsInCache(
+  state: AsepriteEncodeInput,
+  options?: AsepriteEncodeOptions
+): Promise<void> {
+  if (typeof CompressionStream === 'undefined') return;
+  const { width, height, colorMode, palette = [], layers, frames } = state;
+  const compressionLevel: AsepriteCompressionLevel = options?.compressionLevel ?? 6;
+  const externalCelCache = options?.externalCelCache;
+  const frameGridIds = options?.frameGridIds;
+  const maxExternalCacheEntries = options?.maxExternalCacheEntries ?? 48;
+  const maxExternalCacheBytes = options?.maxExternalCacheBytes ?? DEFAULT_MAX_EXTERNAL_CACHE_BYTES;
+
+  const effectivePalette = palette && palette.length > 0 ? palette : FALLBACK_ASEPRITE_PALETTE;
+  const paletteSig = effectivePalette.join(',');
+  const numFrames = frames.length;
+  const needHash = numFrames > 1;
+  const isIndexed = colorMode === 'indexed';
+  const effectiveTransparentIndex =
+    state.transparentIndex !== undefined && state.transparentIndex >= 0
+      ? state.transparentIndex
+      : isIndexed
+        ? effectivePalette.length <= 255
+          ? 255
+          : 0
+        : 0;
+  const compressedKey = `${isIndexed ? 1 : 0}:${effectiveTransparentIndex}`;
+
+  const seenGridIds = new Set<number>();
+  const seenGrids = new Set<PixelGrid>();
+
+  for (let frameIdx = 0; frameIdx < numFrames; frameIdx++) {
+    const frame = frames[frameIdx];
+    const curFrameGridIds = frameGridIds?.[frameIdx];
+    for (let lIdx = 0; lIdx < layers.length; lIdx++) {
+      const layer = layers[lIdx];
+      if (layer.type === 'group') continue;
+      const px = frame.layerData[layer.id];
+      if (!px || px.length === 0) continue;
+
+      const gridId = curFrameGridIds ? curFrameGridIds[layer.id] : undefined;
+      if (gridId !== undefined) {
+        if (seenGridIds.has(gridId)) continue;
+        seenGridIds.add(gridId);
+      } else {
+        if (seenGrids.has(px)) continue;
+        seenGrids.add(px);
+      }
+
+      let cachedAnalysis =
+        (externalCelCache && gridId !== undefined ? externalCelCache.get(gridId) : undefined) ??
+        ENCODED_CEL_CACHE.get(px);
+
+      if (
+        !cachedAnalysis ||
+        cachedAnalysis.width !== width ||
+        cachedAnalysis.height !== height ||
+        cachedAnalysis.pxLen !== px.length
+      ) {
+        cachedAnalysis = analyzeCelPixels(px, width, height, needHash);
+        ENCODED_CEL_CACHE.set(px, cachedAnalysis);
+      } else if (needHash && !cachedAnalysis.hasValidHash) {
+        cachedAnalysis.hash = computePixelGridHash(px, width, height);
+        cachedAnalysis.hasValidHash = true;
+      }
+
+      if (cachedAnalysis.nonNullCount === 0) continue;
+
+      const celW = cachedAnalysis.maxX - cachedAnalysis.minX + 1;
+      const celH = cachedAnalysis.maxY - cachedAnalysis.minY + 1;
+      const rawByteSize = celW * celH * (isIndexed ? 1 : 4);
+      if (rawByteSize < NATIVE_DEFLATE_MIN_RAW_BYTES) continue;
+
+      const needsPaletteMatch = isIndexed
+        ? cachedAnalysis.hasStringValues
+        : cachedAnalysis.hasIndexedValues;
+      const alreadyCompressed = Boolean(
+        cachedAnalysis.compressedBytes &&
+          cachedAnalysis.compressedKey === compressedKey &&
+          cachedAnalysis.compressedLevel >= compressionLevel &&
+          (!needsPaletteMatch || cachedAnalysis.compressedPaletteSig === paletteSig)
+      );
+      if (alreadyCompressed) continue;
+
+      const rawBuffer = buildCelRawBuffer(
+        px,
+        width,
+        height,
+        cachedAnalysis.minX,
+        cachedAnalysis.minY,
+        celW,
+        celH,
+        isIndexed,
+        cachedAnalysis.hasIndexedValues,
+        effectiveTransparentIndex,
+        effectivePalette
+      );
+
+      const compressed = await deflateWithCompressionStream(rawBuffer);
+      if (!compressed) continue;
+
+      cachedAnalysis.compressedKey = compressedKey;
+      cachedAnalysis.compressedLevel = compressionLevel;
+      cachedAnalysis.compressedPaletteSig = paletteSig;
+      cachedAnalysis.compressedBytes = compressed;
+      ENCODED_CEL_CACHE.set(px, cachedAnalysis);
+
+      if (externalCelCache && gridId !== undefined) {
+        storeInExternalCelCache(
+          externalCelCache,
+          gridId,
+          cachedAnalysis,
+          maxExternalCacheEntries,
+          maxExternalCacheBytes
+        );
+      }
+    }
+  }
 }
 
 const ENCODED_CEL_CACHE = new WeakMap<PixelGrid, CachedEncodedCel>();
@@ -1354,12 +1738,14 @@ export function encodeAseprite(
   const externalCelCache = options?.externalCelCache;
   const frameGridIds = options?.frameGridIds;
   const maxExternalCacheEntries = options?.maxExternalCacheEntries ?? 48;
+  const maxExternalCacheBytes = options?.maxExternalCacheBytes ?? DEFAULT_MAX_EXTERNAL_CACHE_BYTES;
 
   const effectivePalette = (palette && palette.length > 0) 
     ? palette 
     : FALLBACK_ASEPRITE_PALETTE;
   const paletteSig = effectivePalette.join(',');
   const numFrames = frames.length;
+  const needLinkedCelHash = numFrames > 1;
   const isIndexed = colorMode === 'indexed';
   const colorDepth = isIndexed ? 8 : 32;
 
@@ -1394,11 +1780,18 @@ export function encodeAseprite(
   const seenGridIdByLayer: Map<number, number>[] = asepriteLayers.map(() => new Map());
   const celBucketsByLayer: Map<number, CelSignatureEntry[]>[] = asepriteLayers.map(() => new Map());
 
-  const frameBuffers: Uint8Array[] = [];
+  interface EncodedFrameParts {
+    header: Uint8Array;
+    parts: Uint8Array[];
+    totalBytes: number;
+  }
+  const encodedFrames: EncodedFrameParts[] = [];
 
   for (let frameIdx = 0; frameIdx < numFrames; frameIdx++) {
     const frame = frames[frameIdx];
-    const frameChunksWriter = new BinaryWriter(1024 * 64);
+    const frameChunksWriter = new BinaryWriter(frameIdx === 0 ? 1024 * 16 : 256);
+    const frameExtraParts: Uint8Array[] = [];
+    let frameExtraBytes = 0;
     let numChunksInFrame = 0;
 
     // --- Frame 0 Special Header Chunks ---
@@ -1739,9 +2132,10 @@ export function encodeAseprite(
       let cachedAnalysis: CachedEncodedCel | undefined;
 
       // O(1) fast path when a frame shares the exact same PixelGrid reference or gridId
-      const refMatch =
-        (gridId !== undefined ? seenGridIds.get(gridId) : undefined) ??
-        (px ? seenGrids.get(px) : undefined);
+      const refMatch = needLinkedCelHash
+        ? ((gridId !== undefined ? seenGridIds.get(gridId) : undefined) ??
+          (px ? seenGrids.get(px) : undefined))
+        : undefined;
 
       if (refMatch !== undefined) {
         linkedFrameIdx = refMatch;
@@ -1756,106 +2150,57 @@ export function encodeAseprite(
           cachedAnalysis.pxLen !== pxLen
         ) {
           if (!px) continue;
-          // Single pass over pixels to compute both content signature hash and tight bounding box
-          let nonNullCount = 0;
-          let hash = (2166136261 ^ pxLen) | 0;
-          let hasIndexedValues = false;
-          let hasStringValues = false;
-
-          for (let y = 0; y < height; y++) {
-            const rowOffset = y * width;
-            if (rowOffset >= pxLen) break;
-            const rowEnd = Math.min(width, pxLen - rowOffset);
-            for (let x = 0; x < rowEnd; x++) {
-              const i = rowOffset + x;
-              const val = px[i];
-              if (val === EMPTY_PIXEL) continue;
-              nonNullCount++;
-              if (x < minX) minX = x;
-              if (x > maxX) maxX = x;
-              if (y < minY) minY = y;
-              if (y > maxY) maxY = y;
-              if ((val >>> 24) !== 0) {
-                hasStringValues = true;
-              } else {
-                hasIndexedValues = true;
-              }
-              hash = Math.imul(hash ^ Math.imul(i + 1, 0x9e3779b1) ^ val, 16777619);
-            }
-          }
-
-          for (let i = width * height; i < pxLen; i++) {
-            const val = px[i];
-            if (val === EMPTY_PIXEL) continue;
-            hash = Math.imul(hash ^ Math.imul(i + 1, 0x9e3779b1) ^ val, 16777619);
-          }
-
-          cachedAnalysis = {
-            width,
-            height,
-            pxLen,
-            hash,
-            nonNullCount,
-            minX,
-            maxX,
-            minY,
-            maxY,
-            hasIndexedValues,
-            hasStringValues,
-            compressedKey: null,
-            compressedLevel: -1,
-            compressedPaletteSig: null,
-            compressedBytes: null,
-          };
+          cachedAnalysis = analyzeCelPixels(px, width, height, needLinkedCelHash);
           ENCODED_CEL_CACHE.set(px, cachedAnalysis);
         } else {
+          if (needLinkedCelHash && !cachedAnalysis.hasValidHash && px) {
+            cachedAnalysis.hash = computePixelGridHash(px, width, height);
+            cachedAnalysis.hasValidHash = true;
+          }
           minX = cachedAnalysis.minX;
           maxX = cachedAnalysis.maxX;
           minY = cachedAnalysis.minY;
           maxY = cachedAnalysis.maxY;
         }
 
-        if (externalCelCache && gridId !== undefined && cachedAnalysis) {
-          externalCelCache.delete(gridId);
-          externalCelCache.set(gridId, cachedAnalysis);
-          while (externalCelCache.size > maxExternalCacheEntries) {
-            const oldestKey = externalCelCache.keys().next().value;
-            if (oldestKey === undefined) break;
-            externalCelCache.delete(oldestKey);
-          }
-        }
+        minX = cachedAnalysis.minX;
+        maxX = cachedAnalysis.maxX;
+        minY = cachedAnalysis.minY;
+        maxY = cachedAnalysis.maxY;
 
         const { hash, nonNullCount } = cachedAnalysis;
         hasPixels = nonNullCount > 0;
 
-        const bucket = celBuckets.get(hash);
-        if (bucket) {
-          for (let b = 0; b < bucket.length; b++) {
-            const entry = bucket[b];
-            if (
-              entry.len === pxLen &&
-              entry.nonNullCount === nonNullCount &&
-              entry.minX === minX &&
-              entry.maxX === maxX &&
-              entry.minY === minY &&
-              entry.maxY === maxY &&
-              ((px && entry.px && isPixelGridEqual(px, entry.px)) ||
-                (cachedAnalysis.compressedBytes &&
-                  entry.compressedBytes &&
-                  isUint8ArrayEqual(cachedAnalysis.compressedBytes, entry.compressedBytes)))
-            ) {
-              linkedFrameIdx = entry.frameIdx;
-              break;
+        if (needLinkedCelHash) {
+          const bucket = celBuckets.get(hash);
+          if (bucket) {
+            for (let b = 0; b < bucket.length; b++) {
+              const entry = bucket[b];
+              if (
+                entry.len === pxLen &&
+                entry.nonNullCount === nonNullCount &&
+                entry.minX === minX &&
+                entry.maxX === maxX &&
+                entry.minY === minY &&
+                entry.maxY === maxY &&
+                ((px && entry.px && isPixelGridEqual(px, entry.px)) ||
+                  (cachedAnalysis.compressedBytes &&
+                    entry.compressedBytes &&
+                    isUint8ArrayEqual(cachedAnalysis.compressedBytes, entry.compressedBytes)))
+              ) {
+                linkedFrameIdx = entry.frameIdx;
+                break;
+              }
             }
           }
-        }
 
-        if (linkedFrameIdx >= 0) {
-          if (px) seenGrids.set(px, linkedFrameIdx);
-          if (gridId !== undefined) seenGridIds.set(gridId, linkedFrameIdx);
-        } else {
-          if (px) seenGrids.set(px, frameIdx);
-          if (gridId !== undefined) seenGridIds.set(gridId, frameIdx);
+          if (linkedFrameIdx >= 0) {
+            if (px) seenGrids.set(px, linkedFrameIdx);
+            if (gridId !== undefined) seenGridIds.set(gridId, linkedFrameIdx);
+          } else {
+            if (px) seenGrids.set(px, frameIdx);
+            if (gridId !== undefined) seenGridIds.set(gridId, frameIdx);
+          }
         }
       }
 
@@ -1874,7 +2219,8 @@ export function encodeAseprite(
 
         const celBytes = celWriter.getBytes();
         new DataView(celBytes.buffer).setUint32(0, celBytes.length, true);
-        frameChunksWriter.writeBytes(celBytes);
+        frameExtraParts.push(celBytes);
+        frameExtraBytes += celBytes.byteLength;
         numChunksInFrame++;
       } else {
         if (hasPixels && cachedAnalysis) {
@@ -1895,60 +2241,19 @@ export function encodeAseprite(
             compressedCelBytes = cachedAnalysis.compressedBytes;
           } else {
             if (!px) continue;
-            const bpp = isIndexed ? 1 : 4;
-            const rawBuffer = new Uint8Array(celW * celH * bpp);
-
-            if (!isIndexed && isLittleEndian && !cachedAnalysis.hasIndexedValues) {
-              // Fast path: direct 32-bit row copies for RGBA cels (matches ABGR byte order)
-              const raw32 = new Uint32Array(rawBuffer.buffer);
-              for (let cy = 0; cy < celH; cy++) {
-                const srcStart = (minY + cy) * width + minX;
-                raw32.set(px.subarray(srcStart, srcStart + celW), cy * celW);
-              }
-            } else {
-              const palettePacked = isIndexed ? null : getPackedPalette255(effectivePalette);
-              let rawOffset = 0;
-              for (let cy = 0; cy < celH; cy++) {
-                const rowBase = (minY + cy) * width + minX;
-                for (let cx = 0; cx < celW; cx++) {
-                  const val = px[rowBase + cx];
-
-                  if (isIndexed) {
-                    if (val === EMPTY_PIXEL) {
-                      rawBuffer[rawOffset++] = effectiveTransparentIndex;
-                    } else if ((val >>> 24) === 0) {
-                      rawBuffer[rawOffset++] = decodeIndexedPixel(val) & 0xff;
-                    } else {
-                      rawBuffer[rawOffset++] = findNearestPaletteIndex(
-                        val & 0xff,
-                        (val >>> 8) & 0xff,
-                        (val >>> 16) & 0xff,
-                        effectivePalette
-                      );
-                    }
-                  } else {
-                    if (val === EMPTY_PIXEL) {
-                      rawOffset += 4;
-                    } else if ((val >>> 24) !== 0) {
-                      rawBuffer[rawOffset++] = val & 0xff;
-                      rawBuffer[rawOffset++] = (val >>> 8) & 0xff;
-                      rawBuffer[rawOffset++] = (val >>> 16) & 0xff;
-                      rawBuffer[rawOffset++] = (val >>> 24) & 0xff;
-                    } else {
-                      const pIdx = decodeIndexedPixel(val);
-                      const packed =
-                        palettePacked && pIdx >= 0 && pIdx < palettePacked.length
-                          ? palettePacked[pIdx]
-                          : 0;
-                      rawBuffer[rawOffset++] = packed & 0xff;
-                      rawBuffer[rawOffset++] = (packed >>> 8) & 0xff;
-                      rawBuffer[rawOffset++] = (packed >>> 16) & 0xff;
-                      rawBuffer[rawOffset++] = (packed >>> 24) & 0xff;
-                    }
-                  }
-                }
-              }
-            }
+            const rawBuffer = buildCelRawBuffer(
+              px,
+              width,
+              height,
+              minX,
+              minY,
+              celW,
+              celH,
+              isIndexed,
+              cachedAnalysis.hasIndexedValues,
+              effectiveTransparentIndex,
+              effectivePalette
+            );
 
             compressedCelBytes = deflate(rawBuffer, { level: compressionLevel });
             cachedAnalysis.compressedKey = compressedKey;
@@ -1957,93 +2262,137 @@ export function encodeAseprite(
             cachedAnalysis.compressedBytes = compressedCelBytes;
           }
 
-          // Register in celBuckets after compressedBytes is available
-          const bucket = celBuckets.get(cachedAnalysis.hash);
-          const sigEntry: CelSignatureEntry = {
-            frameIdx,
-            px: px ?? null,
-            compressedBytes: compressedCelBytes,
-            len: cachedAnalysis.pxLen,
-            nonNullCount: cachedAnalysis.nonNullCount,
-            minX,
-            maxX,
-            minY,
-            maxY,
-          };
-          if (bucket) {
-            bucket.push(sigEntry);
-          } else {
-            celBuckets.set(cachedAnalysis.hash, [sigEntry]);
+          if (externalCelCache && gridId !== undefined) {
+            storeInExternalCelCache(
+              externalCelCache,
+              gridId,
+              cachedAnalysis,
+              maxExternalCacheEntries,
+              maxExternalCacheBytes
+            );
           }
 
-          const celWriter = new BinaryWriter(compressedCelBytes.length + 64);
-          celWriter.writeDword(0);
-          celWriter.writeWord(0x2005);
-          celWriter.writeWord(lIdx);
-          celWriter.writeShort(minX);
-          celWriter.writeShort(minY);
-          celWriter.writeByte(255);
-          celWriter.writeWord(2); // Compressed Image
-          celWriter.writeShort(0);
-          celWriter.writeBytes(new Uint8Array(5));
-          celWriter.writeWord(celW);
-          celWriter.writeWord(celH);
-          celWriter.writeBytes(compressedCelBytes);
+          // Register in celBuckets only when multi-frame linked cel deduplication is possible
+          if (needLinkedCelHash) {
+            const bucket = celBuckets.get(cachedAnalysis.hash);
+            const sigEntry: CelSignatureEntry = {
+              frameIdx,
+              px: px ?? null,
+              compressedBytes: compressedCelBytes,
+              len: cachedAnalysis.pxLen,
+              nonNullCount: cachedAnalysis.nonNullCount,
+              minX,
+              maxX,
+              minY,
+              maxY,
+            };
+            if (bucket) {
+              bucket.push(sigEntry);
+            } else {
+              celBuckets.set(cachedAnalysis.hash, [sigEntry]);
+            }
+          }
 
-          const celBytes = celWriter.getBytes();
-          new DataView(celBytes.buffer).setUint32(0, celBytes.length, true);
-          frameChunksWriter.writeBytes(celBytes);
+          // Write only the 26-byte cel header and attach compressedCelBytes directly (zero intermediate copies)
+          const celHeader = new Uint8Array(26);
+          const celHeaderView = new DataView(celHeader.buffer);
+          const celChunkTotalSize = 26 + compressedCelBytes.byteLength;
+          celHeaderView.setUint32(0, celChunkTotalSize, true);
+          celHeaderView.setUint16(4, 0x2005, true);
+          celHeaderView.setUint16(6, lIdx, true);
+          celHeaderView.setInt16(8, minX, true);
+          celHeaderView.setInt16(10, minY, true);
+          celHeaderView.setUint8(12, 255);
+          celHeaderView.setUint16(13, 2, true); // Compressed Image
+          celHeaderView.setInt16(15, 0, true); // zIndex
+          // bytes 17..21 reserved zeros
+          celHeaderView.setUint16(22, celW, true);
+          celHeaderView.setUint16(24, celH, true);
+
+          frameExtraParts.push(celHeader, compressedCelBytes);
+          frameExtraBytes += celChunkTotalSize;
           numChunksInFrame++;
+        } else if (externalCelCache && gridId !== undefined && cachedAnalysis) {
+          storeInExternalCelCache(
+            externalCelCache,
+            gridId,
+            cachedAnalysis,
+            maxExternalCacheEntries,
+            maxExternalCacheBytes
+          );
         }
       }
     }
 
-    const chunksData = frameChunksWriter.getBytes();
-    const frameHeaderWriter = new BinaryWriter(16 + chunksData.length);
-    const frameTotalBytes = 16 + chunksData.length;
+    const metaChunksData = frameChunksWriter.getBytes();
+    const frameParts: Uint8Array[] = [];
+    if (metaChunksData.byteLength > 0) {
+      frameParts.push(metaChunksData);
+    }
+    for (let p = 0; p < frameExtraParts.length; p++) {
+      frameParts.push(frameExtraParts[p]);
+    }
+    const frameTotalBytes = 16 + metaChunksData.byteLength + frameExtraBytes;
 
-    frameHeaderWriter.writeDword(frameTotalBytes);
-    frameHeaderWriter.writeWord(0xf1fa);
-    frameHeaderWriter.writeWord(numChunksInFrame > 0xffff ? 0xffff : numChunksInFrame);
-    frameHeaderWriter.writeWord(frame.duration || 100);
-    frameHeaderWriter.writeBytes(new Uint8Array(2));
-    frameHeaderWriter.writeDword(numChunksInFrame);
-    frameHeaderWriter.writeBytes(chunksData);
+    const frameHeader = new Uint8Array(16);
+    const frameHeaderView = new DataView(frameHeader.buffer);
+    frameHeaderView.setUint32(0, frameTotalBytes, true);
+    frameHeaderView.setUint16(4, 0xf1fa, true);
+    frameHeaderView.setUint16(6, numChunksInFrame > 0xffff ? 0xffff : numChunksInFrame, true);
+    frameHeaderView.setUint16(8, frame.duration || 100, true);
+    // bytes 10..11 reserved zeros
+    frameHeaderView.setUint32(12, numChunksInFrame, true);
 
-    frameBuffers.push(frameHeaderWriter.getBytes());
+    encodedFrames.push({
+      header: frameHeader,
+      parts: frameParts,
+      totalBytes: frameTotalBytes,
+    });
   }
 
   let totalFramesBytes = 0;
-  frameBuffers.forEach(b => totalFramesBytes += b.length);
+  for (let i = 0; i < encodedFrames.length; i++) {
+    totalFramesBytes += encodedFrames[i].totalBytes;
+  }
   const totalFileSize = 128 + totalFramesBytes;
 
-  const headerWriter = new BinaryWriter(128);
-  headerWriter.writeDword(totalFileSize);
-  headerWriter.writeWord(0xa5e0);
-  headerWriter.writeWord(numFrames);
-  headerWriter.writeWord(width);
-  headerWriter.writeWord(height);
-  headerWriter.writeWord(colorDepth);
-  headerWriter.writeDword(headerFlags);
-  headerWriter.writeWord(frames[0]?.duration || 100);
-  headerWriter.writeDword(0);
-  headerWriter.writeDword(0);
-  headerWriter.writeByte(effectiveTransparentIndex);
-  headerWriter.writeBytes(new Uint8Array(3));
-  headerWriter.writeWord(effectivePalette.length);
-  headerWriter.writeByte(state.pixelRatio?.width || 1);
-  headerWriter.writeByte(state.pixelRatio?.height || 1);
-  headerWriter.writeShort(state.grid?.x || 0);
-  headerWriter.writeShort(state.grid?.y || 0);
-  headerWriter.writeWord(state.grid?.width || 0);
-  headerWriter.writeWord(state.grid?.height || 0);
-  headerWriter.writeBytes(new Uint8Array(84));
+  // Single final allocation: write file header + all frames/chunks directly once
+  const output = new Uint8Array(totalFileSize);
+  const headerView = new DataView(output.buffer);
+  headerView.setUint32(0, totalFileSize, true);
+  headerView.setUint16(4, 0xa5e0, true);
+  headerView.setUint16(6, numFrames, true);
+  headerView.setUint16(8, width, true);
+  headerView.setUint16(10, height, true);
+  headerView.setUint16(12, colorDepth, true);
+  headerView.setUint32(14, headerFlags, true);
+  headerView.setUint16(18, frames[0]?.duration || 100, true);
+  headerView.setUint32(20, 0, true);
+  headerView.setUint32(24, 0, true);
+  headerView.setUint8(28, effectiveTransparentIndex);
+  // bytes 29..31 reserved zeros
+  headerView.setUint16(32, effectivePalette.length, true);
+  headerView.setUint8(34, state.pixelRatio?.width || 1);
+  headerView.setUint8(35, state.pixelRatio?.height || 1);
+  headerView.setInt16(36, state.grid?.x || 0, true);
+  headerView.setInt16(38, state.grid?.y || 0, true);
+  headerView.setUint16(40, state.grid?.width || 0, true);
+  headerView.setUint16(42, state.grid?.height || 0, true);
+  // bytes 44..127 reserved zeros
 
-  const fileWriter = new BinaryWriter(totalFileSize);
-  fileWriter.writeBytes(headerWriter.getBytes());
-  frameBuffers.forEach(fBuf => fileWriter.writeBytes(fBuf));
+  let writeOffset = 128;
+  for (let f = 0; f < encodedFrames.length; f++) {
+    const ef = encodedFrames[f];
+    output.set(ef.header, writeOffset);
+    writeOffset += ef.header.byteLength;
+    for (let p = 0; p < ef.parts.length; p++) {
+      const part = ef.parts[p];
+      output.set(part, writeOffset);
+      writeOffset += part.byteLength;
+    }
+  }
 
-  return fileWriter.getBytes();
+  return output;
 }
 
 function isPixelGridEqual(a: PixelGrid, b: PixelGrid): boolean {

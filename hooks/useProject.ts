@@ -33,6 +33,12 @@ import {
   releaseScratchRenderBuffers,
 } from '../utils';
 import { encodeAsepriteAsync } from '../utils/asepriteWorkerClient';
+import {
+  ensureProjectHydrated,
+  resolveHydratedPixelGrid,
+  startBackgroundProjectHydration,
+  releasePendingProjectBitmaps,
+} from '../utils/layerBitmapCache';
 import { saveRecentProject, getRecentProjects, loadRecentProjectState, clearAllRecents } from '../utils/storage';
 import { applyOutlineEffect, DEFAULT_OUTLINE_MATRIX } from '../utils/outline';
 import { toast } from '../components/ui/toast';
@@ -451,7 +457,7 @@ function applyPixelHistoryPatch(
 
   for (let i = 0; i < patch.layers.length; i++) {
     const lp = patch.layers[i];
-    const existing = nextLayerData[lp.layerId];
+    const existing = resolveHydratedPixelGrid(nextLayerData[lp.layerId]);
     const cloned = existing ? clonePixelGrid(existing) : createPixelGrid(totalPixels);
     const data = direction === 'before' ? lp.before : lp.after;
     applyRectPatch(cloned, baseState.width, lp.x, lp.y, lp.w, lp.h, data);
@@ -881,6 +887,61 @@ export function useProject() {
         lastSavedHistoryIndex: 0
       }]);
       setActiveProjectId(newState.id);
+
+      // If this large raster photo opened via instant ImageBitmap display, hydrate its CPU PixelGrid
+      // off the main thread in the worker and transparently swap references without dirtying history/autosave.
+      startBackgroundProjectHydration(newState, (frameIndex, layerId, placeholder, hydrated) => {
+        setProjects(prev => prev.map(p => {
+          if (p.data.id !== newState.id) return p;
+
+          let dataChanged = false;
+          let nextData = p.data;
+          const targetFrame = p.data.frames[frameIndex];
+          if (targetFrame && targetFrame.layerData[layerId] === placeholder) {
+            const nextFrames = p.data.frames.map((f, idx) =>
+              idx !== frameIndex
+                ? f
+                : { ...f, layerData: { ...f.layerData, [layerId]: hydrated } }
+            );
+            nextData = { ...p.data, frames: nextFrames };
+            dataChanged = true;
+          }
+
+          let historyChanged = false;
+          const nextHistory = p.history.map(entry => {
+            if (entry.kind !== 'snapshot' || !entry.state) return entry;
+            const snapFrame = entry.state.frames[frameIndex];
+            if (!snapFrame || snapFrame.layerData[layerId] !== placeholder) return entry;
+            historyChanged = true;
+            const nextSnapFrames = entry.state.frames.map((f, idx) =>
+              idx !== frameIndex
+                ? f
+                : { ...f, layerData: { ...f.layerData, [layerId]: hydrated } }
+            );
+            return {
+              ...entry,
+              state: { ...entry.state, frames: nextSnapFrames },
+            };
+          });
+
+          if (!dataChanged && !historyChanged) return p;
+
+          // Keep persistedDocsRef in sync so background hydration never triggers a spurious autosave
+          if (dataChanged) {
+            const prevPersisted = persistedDocsRef.current.get(newState.id);
+            if (prevPersisted && isSameDocSignature(prevPersisted, makeDocSignature(p.data))) {
+              persistedDocsRef.current.set(newState.id, makeDocSignature(nextData));
+            }
+          }
+
+          return {
+            ...p,
+            data: nextData,
+            history: historyChanged ? nextHistory : p.history,
+          };
+        }));
+      });
+
       return true;
     } catch (e) {
       console.error(e);
@@ -962,8 +1023,9 @@ export function useProject() {
   };
 
   const saveProjectAs = async () => {
-    const { activeProjectId, state } = latestRef.current;
+    const { activeProjectId, state: rawState } = latestRef.current;
     if (activeProjectId === 'home') return;
+    const state = ensureProjectHydrated(rawState);
 
     const isInIframe = window.self !== window.top;
 
@@ -1044,16 +1106,17 @@ export function useProject() {
   };
 
   const saveProject = async () => {
-    const { activeProjectId, state } = latestRef.current;
+    const { activeProjectId, state: rawState } = latestRef.current;
     if (activeProjectId === 'home') return;
-    if (!state.fileHandle) {
+    if (!rawState.fileHandle) {
         await saveProjectAs();
         return;
     }
+    const state = ensureProjectHydrated(rawState);
 
     addToRecents(state);
 
-    const fileHandle = state.fileHandle;
+    const fileHandle = state.fileHandle!;
     const name = fileHandle.name.toLowerCase();
     const isImageFile = name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg');
     const isProjectFile = name.endsWith('.aseprite') || name.endsWith('.ase') || name.endsWith('.json');
@@ -1101,6 +1164,8 @@ export function useProject() {
             });
           })
           .catch(console.warn);
+      } else {
+        releasePendingProjectBitmaps(projToClose.data);
       }
     }
     persistedDocsRef.current.delete(id);
@@ -1149,7 +1214,7 @@ export function useProject() {
 
             let nextData: ProjectState | null = null;
             if (prevEntry.kind === 'snapshot' && prevEntry.state) {
-              nextData = mergeUIState(prevEntry.state, p.data);
+              nextData = mergeUIState(ensureProjectHydrated(prevEntry.state), p.data);
             } else if (curEntry.kind === 'pixel-patch' && curEntry.patch) {
               nextData = applyPixelHistoryPatch(p.data, curEntry.patch, 'before');
             } else {
@@ -1251,8 +1316,9 @@ export function useProject() {
   };
 
   const setColorMode = (mode: ColorMode) => {
-    const { activeProjectId, state } = latestRef.current;
-    if (activeProjectId === 'home' || state.colorMode === mode) return;
+    const { activeProjectId, state: rawState } = latestRef.current;
+    if (activeProjectId === 'home' || rawState.colorMode === mode) return;
+    const state = ensureProjectHydrated(rawState);
 
     const newPalette = [...state.palette];
     const newFrames = convertFramesColorMode(
@@ -1286,8 +1352,9 @@ export function useProject() {
   };
 
   const duplicateFrame = () => {
-    const { activeProjectId, state } = latestRef.current;
+    const { activeProjectId, state: rawState } = latestRef.current;
     if (activeProjectId === 'home') return;
+    const state = ensureProjectHydrated(rawState);
     const current = state.frames[state.activeFrameIndex];
     if (!current) return;
     const newData: Record<string, PixelGrid> = {};
@@ -1306,8 +1373,9 @@ export function useProject() {
   };
 
   const duplicateSelectedFrames = () => {
-    const { activeProjectId, state } = latestRef.current;
+    const { activeProjectId, state: rawState } = latestRef.current;
     if (activeProjectId === 'home') return;
+    const state = ensureProjectHydrated(rawState);
     const selected = [...state.selectedFrameIndices].sort((a, b) => a - b);
     if (selected.length === 0) return;
 
@@ -1388,8 +1456,9 @@ export function useProject() {
   };
 
   const tweenFrames = () => {
-    const { activeProjectId, state } = latestRef.current;
+    const { activeProjectId, state: rawState } = latestRef.current;
     if (activeProjectId === 'home') return;
+    const state = ensureProjectHydrated(rawState);
     const selected = [...state.selectedFrameIndices].sort((a, b) => a - b);
     if (selected.length < 3) {
       toast.info("Select 3 or more frames to interpolate between the first and last of the selection.");
@@ -1615,8 +1684,9 @@ export function useProject() {
   };
 
   const duplicateLayer = (id: string) => {
-     const { activeProjectId, state } = latestRef.current;
+     const { activeProjectId, state: rawState } = latestRef.current;
      if (activeProjectId === 'home') return;
+     const state = ensureProjectHydrated(rawState);
      const layerIndex = state.layers.findIndex(l => l.id === id);
      if (layerIndex === -1) return;
      
@@ -1646,8 +1716,9 @@ export function useProject() {
   };
 
   const duplicateSelectedLayers = () => {
-    const { activeProjectId, state } = latestRef.current;
+    const { activeProjectId, state: rawState } = latestRef.current;
     if (activeProjectId === 'home') return;
+    const state = ensureProjectHydrated(rawState);
     const selected = [...state.selectedLayerIds];
     if (selected.length === 0) return;
 
@@ -2014,9 +2085,10 @@ export function useProject() {
   };
 
   const resizeCanvas = (newWidth: number, newHeight: number, anchor: string = 'cc') => {
-      const { activeProjectId, state } = latestRef.current;
+      const { activeProjectId, state: rawState } = latestRef.current;
       if (activeProjectId === 'home') return;
-      if (newWidth === state.width && newHeight === state.height) return;
+      if (newWidth === rawState.width && newHeight === rawState.height) return;
+      const state = ensureProjectHydrated(rawState);
 
       const oldWidth = state.width;
       const oldHeight = state.height;
@@ -2075,8 +2147,9 @@ export function useProject() {
   };
 
   const flipPixels = (axis: 'h' | 'v') => {
-      const { activeProjectId, state } = latestRef.current;
+      const { activeProjectId, state: rawState } = latestRef.current;
       if (activeProjectId === 'home') return;
+      const state = ensureProjectHydrated(rawState);
       const { frames, width, height, activeFrameIndex, selectedLayerIds, selection } = state;
       
       const box = selection 
@@ -2144,8 +2217,9 @@ export function useProject() {
   };
 
   const centerContent = () => {
-      const { activeProjectId, state } = latestRef.current;
+      const { activeProjectId, state: rawState } = latestRef.current;
       if (activeProjectId === 'home') return;
+      const state = ensureProjectHydrated(rawState);
       const { frames, width, height, activeFrameIndex, selectedLayerIds } = state;
       
       const currentFrame = frames[activeFrameIndex];
@@ -2230,8 +2304,9 @@ export function useProject() {
   };
 
   const generateOutline = () => {
-      const { activeProjectId, state } = latestRef.current;
+      const { activeProjectId, state: rawState } = latestRef.current;
       if (activeProjectId === 'home') return;
+      const state = ensureProjectHydrated(rawState);
       const { newState, actionSummary } = applyOutlineEffect(state, {
         placement: 'outside',
         matrix: DEFAULT_OUTLINE_MATRIX,
@@ -2246,8 +2321,9 @@ export function useProject() {
   };
 
   const strokeSelection = () => {
-      const { activeProjectId, state } = latestRef.current;
+      const { activeProjectId, state: rawState } = latestRef.current;
       if (activeProjectId === 'home') return;
+      const state = ensureProjectHydrated(rawState);
       const { frames, width, height, activeFrameIndex, activeLayerId, selection, primaryColor, colorMode, palette } = state;
       if (!selection || selection.size === 0) return;
 
@@ -2293,8 +2369,9 @@ export function useProject() {
   };
 
   const clearSelection = () => {
-      const { activeProjectId, state } = latestRef.current;
+      const { activeProjectId, state: rawState } = latestRef.current;
       if (activeProjectId === 'home') return;
+      const state = ensureProjectHydrated(rawState);
       const { frames, width, height, activeFrameIndex, selectedLayerIds, selection } = state;
       if (!selection || selection.size === 0) return;
 
@@ -2327,8 +2404,9 @@ export function useProject() {
   };
 
   const cropCanvas = () => {
-      const { activeProjectId, state } = latestRef.current;
+      const { activeProjectId, state: rawState } = latestRef.current;
       if (activeProjectId === 'home') return;
+      const state = ensureProjectHydrated(rawState);
       const { frames, width, height, selection } = state;
       if (!selection || selection.size === 0) return;
 
@@ -2438,9 +2516,10 @@ export function useProject() {
     colorMode?: ColorMode;
     grid?: { x: number; y: number; width: number; height: number };
   }) => {
-    const { activeProjectId, state } = latestRef.current;
+    const { activeProjectId, state: rawState } = latestRef.current;
     if (activeProjectId === 'home') return;
-    const nextColorMode = props.colorMode ?? state.colorMode;
+    const nextColorMode = props.colorMode ?? rawState.colorMode;
+    const state = nextColorMode !== rawState.colorMode ? ensureProjectHydrated(rawState) : rawState;
     const nextFrames = nextColorMode !== state.colorMode
       ? convertFramesColorMode(
           state.frames,

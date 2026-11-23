@@ -17,7 +17,7 @@ import {
   getIndex,
   floodFillInPlace,
   bresenhamEllipse,
-  getFilledEllipse,
+  forEachFilledEllipseSpan,
   rotateSelectionPixels,
   rotateSelectionMask,
   applyConvolution,
@@ -27,7 +27,13 @@ import {
   scaleSelectionMask,
   isLayerVisible,
 } from '../utils';
-import { publishLiveStroke, clearLiveStroke } from './useLiveStrokeStore';
+import { resolveHydratedPixelGrid } from '../utils/layerBitmapCache';
+import {
+  publishLiveStroke,
+  clearLiveStroke,
+  publishLiveShapePreview,
+  clearLiveShapePreview,
+} from './useLiveStrokeStore';
 
 const BLUR_KERNEL = [
   [1/9, 1/9, 1/9],
@@ -86,6 +92,16 @@ export function useCanvasTools(
   const wasUsingStartBufferRef = useRef<boolean>(false);
   const strokePathRef = useRef<Position[]>([]);
   const originRef = useRef<Position | null>(null);
+  const pendingFilledShapeRef = useRef<{
+    tool: 'filled-rect' | 'filled-ellipse';
+    originX: number;
+    originY: number;
+    targetX: number;
+    targetY: number;
+    ctrlKey: boolean;
+    colorHex: string;
+    isShading: boolean;
+  } | null>(null);
   const smudgeReservoirRef = useRef<Map<string, PixelValue>>(new Map());
   const lastSmudgePointRef = useRef<Position | null>(null);
   
@@ -131,8 +147,8 @@ export function useCanvasTools(
     const currentFrame = frames[activeFrameIndex];
     if (!currentFrame) return;
     // Store immutable reference to the starting layer grid (null if layer is still sparse).
-    // The working stroke buffer is allocated lazily on the first actual pixel write.
-    const basePixels = currentFrame.layerData[activeLayerId] ?? null;
+    // Hydrate synchronously if this large photo layer is still finishing background worker decode.
+    const basePixels = resolveHydratedPixelGrid(currentFrame.layerData[activeLayerId]);
     strokeStartDataRef.current = basePixels;
     activeStrokePixelsRef.current = null;
     strokeMetaRef.current = { projectId: id, frameIndex: activeFrameIndex, layerId: activeLayerId };
@@ -142,6 +158,8 @@ export function useCanvasTools(
     wasUsingStartBufferRef.current = false;
     strokePathRef.current = [];
     originRef.current = null;
+    pendingFilledShapeRef.current = null;
+    clearLiveShapePreview();
     lastSmudgePointRef.current = { x: pos.x, y: pos.y };
 
     if (tool === 'smudge') {
@@ -181,7 +199,8 @@ export function useCanvasTools(
         for (let i = stateRef.current.layers.length - 1; i >= 0; i--) {
             const l = stateRef.current.layers[i];
             if (!isLayerVisible(l, stateRef.current.layers)) continue;
-            const pxVal = currentFrame.layerData[l.id]?.[sampleIdx];
+            const hydratedLayer = resolveHydratedPixelGrid(currentFrame.layerData[l.id]);
+            const pxVal = hydratedLayer?.[sampleIdx];
             if (pxVal !== undefined && pxVal !== EMPTY_PIXEL) {
                 pickedHex = pixelToHex(pxVal, palette);
                 if (pickedHex) break;
@@ -198,7 +217,7 @@ export function useCanvasTools(
     }
 
     if (tool === 'bucket') {
-      const basePixels = currentFrame.layerData[activeLayerId] ?? null;
+      const basePixels = resolveHydratedPixelGrid(currentFrame.layerData[activeLayerId]);
       const activeColorHex = primaryColor;
       const activeVal = resolvePixelValue(activeColorHex);
       const isContiguous = modifiers.shift ? false : stateRef.current.fillContiguous;
@@ -245,15 +264,58 @@ export function useCanvasTools(
       return; 
     }
 
-    const isShapeTool = ['line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse'].includes(tool);
+    // Fast path for Filled Rect / Filled Ellipse:
+    // Publish a lightweight GPU vector preview during drag (zero 33MB buffer clone and zero per-pixel object allocations)
+    // and rasterize with horizontal span fills on pointerup.
+    if (tool === 'filled-rect' || tool === 'filled-ellipse') {
+      if (!strokeMetaRef.current) {
+        strokeStartDataRef.current = resolveHydratedPixelGrid(currentFrame.layerData[activeLayerId]);
+        strokeMetaRef.current = { projectId: id, frameIndex: activeFrameIndex, layerId: activeLayerId };
+      }
+      if (!originRef.current) originRef.current = { x, y };
+      let targetX = x;
+      let targetY = y;
+      if (modifiers.shift) {
+        const dx = x - originRef.current.x;
+        const dy = y - originRef.current.y;
+        const dist = Math.max(Math.abs(dx), Math.abs(dy));
+        targetX = originRef.current.x + dist * Math.sign(dx);
+        targetY = originRef.current.y + dist * Math.sign(dy);
+      }
+
+      const isShading = inkType === 'shading';
+      pendingFilledShapeRef.current = {
+        tool,
+        originX: originRef.current.x,
+        originY: originRef.current.y,
+        targetX,
+        targetY,
+        ctrlKey: modifiers.ctrl,
+        colorHex: primaryColor,
+        isShading,
+      };
+      publishLiveShapePreview({
+        projectId: id,
+        tool,
+        left: Math.min(originRef.current.x, targetX),
+        top: Math.min(originRef.current.y, targetY),
+        right: Math.max(originRef.current.x, targetX),
+        bottom: Math.max(originRef.current.y, targetY),
+        colorHex: primaryColor,
+        isShading,
+      });
+      return;
+    }
+
+    const isShapeTool = ['line', 'rect', 'ellipse'].includes(tool);
     const isPixelPerfectPencil = stateRef.current.pixelPerfect && stateRef.current.brushSize === 1 && !modifiers.shift && tool === 'pencil';
     const isFullStrokeReplay = modifiers.shift || isShapeTool || isPixelPerfectPencil;
 
-    const useStartBuffer = isFullStrokeReplay && ['pencil', 'eraser', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'blur', 'sharpen'].includes(tool);
+    const useStartBuffer = isFullStrokeReplay && ['pencil', 'eraser', 'line', 'rect', 'ellipse', 'blur', 'sharpen'].includes(tool);
     
     // Lazily allocate a single working Uint32Array copy on the first write
     if (!strokeMetaRef.current) {
-      strokeStartDataRef.current = currentFrame.layerData[activeLayerId] ?? null;
+      strokeStartDataRef.current = resolveHydratedPixelGrid(currentFrame.layerData[activeLayerId]);
       strokeMetaRef.current = { projectId: id, frameIndex: activeFrameIndex, layerId: activeLayerId };
       strokeDirtyRef.current = false;
       strokeBoundsRef.current = null;
@@ -274,7 +336,7 @@ export function useCanvasTools(
     let fullRedraw = false;
     let changed = false;
 
-    if (['pencil', 'eraser', 'smudge', 'line', 'rect', 'filled-rect', 'ellipse', 'filled-ellipse', 'blur', 'sharpen'].includes(tool)) {
+    if (['pencil', 'eraser', 'smudge', 'line', 'rect', 'ellipse', 'blur', 'sharpen'].includes(tool)) {
       if (!originRef.current) originRef.current = {x, y};
 
       let pointsToDraw: Position[] = [];
@@ -292,32 +354,21 @@ export function useCanvasTools(
 
           if (tool === 'line' || (!isShapeTool)) {
               pointsToDraw = bresenhamLine(originRef.current.x, originRef.current.y, targetX, targetY);
-          } else if (tool === 'rect' || tool === 'filled-rect') {
+          } else if (tool === 'rect') {
               const left = Math.min(originRef.current.x, targetX);
               const right = Math.max(originRef.current.x, targetX);
               const top = Math.min(originRef.current.y, targetY);
               const bottom = Math.max(originRef.current.y, targetY);
-              
-              if (tool === 'rect') {
-                  for (let cx = left; cx <= right; cx++) {
-                      pointsToDraw.push({x: cx, y: top});
-                      pointsToDraw.push({x: cx, y: bottom});
-                  }
-                  for (let cy = top + 1; cy < bottom; cy++) {
-                      pointsToDraw.push({x: left, y: cy});
-                      pointsToDraw.push({x: right, y: cy});
-                  }
-              } else {
-                  for (let cy = top; cy <= bottom; cy++) {
-                      for (let cx = left; cx <= right; cx++) {
-                          pointsToDraw.push({x: cx, y: cy});
-                      }
-                  }
+              for (let cx = left; cx <= right; cx++) {
+                  pointsToDraw.push({x: cx, y: top});
+                  pointsToDraw.push({x: cx, y: bottom});
+              }
+              for (let cy = top + 1; cy < bottom; cy++) {
+                  pointsToDraw.push({x: left, y: cy});
+                  pointsToDraw.push({x: right, y: cy});
               }
           } else if (tool === 'ellipse') {
               pointsToDraw = bresenhamEllipse(originRef.current.x, originRef.current.y, targetX, targetY);
-          } else if (tool === 'filled-ellipse') {
-              pointsToDraw = getFilledEllipse(originRef.current.x, originRef.current.y, targetX, targetY);
           }
       } else if (isFullStrokeReplay) {
           if (strokePathRef.current.length > 0) {
@@ -642,6 +693,7 @@ export function useCanvasTools(
     const finalPixels = activeStrokePixelsRef.current;
     const bounds = strokeBoundsRef.current;
     const isDirty = strokeDirtyRef.current;
+    const pendingShape = pendingFilledShapeRef.current;
 
     // Reset refs immediately so duplicate pointerUp calls are strictly idempotent
     smudgeReservoirRef.current.clear();
@@ -653,11 +705,115 @@ export function useCanvasTools(
     strokeBoundsRef.current = null;
     lastReplayIndicesRef.current.length = 0;
     wasUsingStartBufferRef.current = false;
-    const hadStroke = strokePathRef.current.length > 0 || originRef.current !== null;
+    pendingFilledShapeRef.current = null;
+    const hadStroke = strokePathRef.current.length > 0 || originRef.current !== null || pendingShape !== null;
     strokePathRef.current = [];
     originRef.current = null;
 
     clearLiveStroke();
+    clearLiveShapePreview();
+
+    // Span-based rasterization for Filled Rect / Filled Ellipse (instant even across full 4K canvases)
+    if (pendingShape) {
+      const curState = stateRef.current;
+      const { width, height, selection, symmetry, frames } = curState;
+      const targetFrameIdx = meta && meta.projectId === curState.id ? meta.frameIndex : curState.activeFrameIndex;
+      const targetLayerId = meta && meta.projectId === curState.id ? meta.layerId : curState.activeLayerId;
+      const frame = frames[targetFrameIdx];
+      if (!frame) return;
+
+      const resolvedBase = basePixels ?? resolveHydratedPixelGrid(frame.layerData[targetLayerId]);
+      const workingGrid = resolvedBase ? clonePixelGrid(resolvedBase) : createPixelGrid(width * height);
+      const activeVal = resolvePixelValue(pendingShape.colorHex);
+      const useShading = pendingShape.isShading;
+      const moveForward = !pendingShape.ctrlKey;
+
+      let dirtyMinX = width;
+      let dirtyMinY = height;
+      let dirtyMaxX = -1;
+      let dirtyMaxY = -1;
+
+      const fillSingleSpan = (sy: number, sx0: number, sx1: number) => {
+        if (sy < 0 || sy >= height) return;
+        const left = sx0 < 0 ? 0 : sx0;
+        const right = sx1 >= width ? width - 1 : sx1;
+        if (right < left) return;
+
+        if (left < dirtyMinX) dirtyMinX = left;
+        if (right > dirtyMaxX) dirtyMaxX = right;
+        if (sy < dirtyMinY) dirtyMinY = sy;
+        if (sy > dirtyMaxY) dirtyMaxY = sy;
+
+        const rowOff = sy * width;
+        if (!selection && !useShading) {
+          workingGrid.fill(activeVal, rowOff + left, rowOff + right + 1);
+          return;
+        }
+        for (let cx = left; cx <= right; cx++) {
+          const idx = rowOff + cx;
+          if (selection && !selection.has(idx)) continue;
+          if (useShading) {
+            workingGrid[idx] = getShadedValue(workingGrid[idx], moveForward);
+          } else {
+            workingGrid[idx] = activeVal;
+          }
+        }
+      };
+
+      const fillSpanWithSymmetry = (sy: number, sx0: number, sx1: number) => {
+        fillSingleSpan(sy, sx0, sx1);
+        if (symmetry.x) {
+          fillSingleSpan(sy, width - 1 - sx1, width - 1 - sx0);
+        }
+        if (symmetry.y) {
+          fillSingleSpan(height - 1 - sy, sx0, sx1);
+        }
+        if (symmetry.x && symmetry.y) {
+          fillSingleSpan(height - 1 - sy, width - 1 - sx1, width - 1 - sx0);
+        }
+      };
+
+      if (pendingShape.tool === 'filled-rect') {
+        const left = Math.min(pendingShape.originX, pendingShape.targetX);
+        const right = Math.max(pendingShape.originX, pendingShape.targetX);
+        const top = Math.min(pendingShape.originY, pendingShape.targetY);
+        const bottom = Math.max(pendingShape.originY, pendingShape.targetY);
+        for (let sy = top; sy <= bottom; sy++) {
+          fillSpanWithSymmetry(sy, left, right);
+        }
+      } else {
+        forEachFilledEllipseSpan(
+          pendingShape.originX,
+          pendingShape.originY,
+          pendingShape.targetX,
+          pendingShape.targetY,
+          fillSpanWithSymmetry
+        );
+      }
+
+      if (dirtyMaxX < dirtyMinX || dirtyMaxY < dirtyMinY) return;
+      const shapeBounds = { minX: dirtyMinX, minY: dirtyMinY, maxX: dirtyMaxX, maxY: dirtyMaxY };
+      const layerPatch = buildLayerPatch(targetLayerId, resolvedBase, workingGrid, width, height, shapeBounds);
+      if (!layerPatch) return;
+
+      const prefix = useShading ? 'Shading ' : '';
+      const actionName =
+        pendingShape.tool === 'filled-rect'
+          ? `${prefix}Filled Rectangle`
+          : `${prefix}Filled Ellipse`;
+
+      const newFrames = curState.frames.map((f, i) =>
+        i !== targetFrameIdx ? f : { ...f, layerData: { ...f.layerData, [targetLayerId]: workingGrid } }
+      );
+      const nextState = { ...curState, frames: newFrames };
+      stateRef.current = nextState;
+      updateStateRef.current(nextState, {
+        action: actionName,
+        tool: pendingShape.tool,
+        patch: { frameIndex: targetFrameIdx, layers: [layerPatch] },
+      });
+      return;
+    }
 
     if (hadStroke && isDirty && finalPixels) {
         const curState = stateRef.current;
@@ -712,7 +868,7 @@ export function useCanvasTools(
       if (i !== activeFrameIndex) return f;
       const newLayerData = { ...f.layerData };
       selectedLayerIds.forEach(layerId => {
-        const basePixels = f.layerData[layerId];
+        const basePixels = resolveHydratedPixelGrid(f.layerData[layerId]);
         if (!basePixels) return;
         const updatedPixels = clonePixelGrid(basePixels);
         selection.forEach(idx => { updatedPixels[idx] = EMPTY_PIXEL; });
@@ -758,7 +914,7 @@ export function useCanvasTools(
           if (i !== activeFrameIndex) return f;
           const newLayerData = { ...f.layerData };
           selectedLayerIds.forEach(layerId => {
-              const basePixels = f.layerData[layerId];
+              const basePixels = resolveHydratedPixelGrid(f.layerData[layerId]);
               if (!basePixels) return;
               const rotatedPixels = rotateSelectionPixels(selection, basePixels, angle, pivot, width, height, rotationAlgorithm);
               const updatedPixels = clonePixelGrid(basePixels);
@@ -804,7 +960,7 @@ export function useCanvasTools(
       if (i !== activeFrameIndex) return f;
       const newLayerData = { ...f.layerData };
       selectedLayerIds.forEach(layerId => {
-        const basePixels = f.layerData[layerId];
+        const basePixels = resolveHydratedPixelGrid(f.layerData[layerId]);
         if (!basePixels) return;
         const scaledPixels = scaleSelectionPixels(selection, basePixels, srcBox, destBox, width, height);
         const updatedPixels = clonePixelGrid(basePixels);

@@ -23,6 +23,32 @@ export const createPixelGrid = (length: number): PixelGrid => new Uint32Array(le
 export const clonePixelGrid = (grid: PixelGrid): PixelGrid => new Uint32Array(grid);
 
 /**
+ * Creates a zero-copy ImageData view directly over a little-endian RGBA PixelGrid's ArrayBuffer.
+ * Avoids allocating and copying a full 33MB scratch ImageData buffer on 4K canvases.
+ */
+export const createRgbaImageDataView = (
+  pixels: PixelGrid,
+  width: number,
+  height: number
+): ImageData | null => {
+  const totalPixels = width * height;
+  if (
+    !IS_LITTLE_ENDIAN ||
+    totalPixels <= 0 ||
+    pixels.length < totalPixels ||
+    typeof ImageData === 'undefined'
+  ) {
+    return null;
+  }
+  const view = new Uint8ClampedArray(
+    pixels.buffer as ArrayBuffer,
+    pixels.byteOffset,
+    totalPixels * 4
+  );
+  return new ImageData(view, width, height);
+};
+
+/**
  * Packs RGBA channels into a 32-bit unsigned integer matching little-endian ImageData layout (ABGR).
  * Any visible pixel (a > 0) has (val >>> 24) !== 0 and is guaranteed non-zero.
  */

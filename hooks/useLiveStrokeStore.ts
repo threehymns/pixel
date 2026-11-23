@@ -16,10 +16,24 @@ export interface LiveStrokePayload {
   fullRedraw?: boolean;
 }
 
+export interface LiveShapePreview {
+  projectId: string;
+  tool: 'filled-rect' | 'filled-ellipse';
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  colorHex: string;
+  isShading: boolean;
+}
+
 type LiveStrokeListener = (payload: LiveStrokePayload | null) => void;
+type LiveShapePreviewListener = (preview: LiveShapePreview | null) => void;
 
 let currentLiveStroke: LiveStrokePayload | null = null;
+let currentLiveShapePreview: LiveShapePreview | null = null;
 const listeners = new Set<LiveStrokeListener>();
+const shapePreviewListeners = new Set<LiveShapePreviewListener>();
 
 export const publishLiveStroke = (payload: LiveStrokePayload) => {
   currentLiveStroke = payload;
@@ -38,5 +52,25 @@ export const subscribeLiveStroke = (listener: LiveStrokeListener) => {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
+  };
+};
+
+export const publishLiveShapePreview = (preview: LiveShapePreview) => {
+  currentLiveShapePreview = preview;
+  shapePreviewListeners.forEach((listener) => listener(preview));
+};
+
+export const clearLiveShapePreview = () => {
+  if (currentLiveShapePreview === null) return;
+  currentLiveShapePreview = null;
+  shapePreviewListeners.forEach((listener) => listener(null));
+};
+
+export const getLiveShapePreview = (): LiveShapePreview | null => currentLiveShapePreview;
+
+export const subscribeLiveShapePreview = (listener: LiveShapePreviewListener) => {
+  shapePreviewListeners.add(listener);
+  return () => {
+    shapePreviewListeners.delete(listener);
   };
 };

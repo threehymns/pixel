@@ -30,6 +30,7 @@ import {
   getGroupChildren,
   isDescendant,
 } from '../utils';
+import { getPendingLayerBitmap } from '../utils/layerBitmapCache';
 import { ENTITY_COLOR_TAGS } from '../constants';
 import { CustomSlider } from './ui/slider';
 import { StudioSelect } from './ui/select';
@@ -138,6 +139,15 @@ const LayerThumbnail: React.FC<LayerThumbnailProps> = ({ pixels, palette, width,
       return;
     }
 
+    const { dstX, dstY, dstW, dstH } = computeThumbBox(width, height);
+    const pendingBmp = getPendingLayerBitmap(pixels);
+    if (pendingBmp) {
+      ctx.clearRect(0, 0, THUMB_SIZE, THUMB_SIZE);
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(pendingBmp.bitmap, dstX, dstY, dstW, dstH);
+      return;
+    }
+
     if (!thumbImgDataRef.current) {
       const imageData = ctx.createImageData(THUMB_SIZE, THUMB_SIZE);
       thumbImgDataRef.current = {
@@ -148,7 +158,6 @@ const LayerThumbnail: React.FC<LayerThumbnailProps> = ({ pixels, palette, width,
 
     const { imageData, data32 } = thumbImgDataRef.current;
     const paletteUint32 = getPackedPalette255(palette);
-    const { dstX, dstY, dstW, dstH } = computeThumbBox(width, height);
 
     downsamplePixelsToThumb(pixels, width, height, paletteUint32, data32, dstX, dstY, dstW, dstH);
     ctx.putImageData(imageData, 0, 0);
@@ -268,6 +277,15 @@ const GroupThumbnail: React.FC<GroupThumbnailProps> = ({ groupId, layers, active
       if (!pixels) continue;
       const opacity = child.opacity ?? 100;
       if (opacity <= 0) continue;
+
+      const pendingBmp = getPendingLayerBitmap(pixels);
+      if (pendingBmp) {
+        ctx.globalAlpha = opacity / 100;
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(pendingBmp.bitmap, dstX, dstY, dstW, dstH);
+        ctx.imageSmoothingEnabled = false;
+        continue;
+      }
 
       downsamplePixelsToThumb(pixels, width, height, paletteUint32, data32, dstX, dstY, dstW, dstH);
       lCtx.putImageData(imageData, 0, 0);

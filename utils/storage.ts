@@ -1,16 +1,24 @@
 import { ProjectState, RecentProject } from '../types';
 import { encodeAsepriteAsync, parseAsepriteAsync } from './asepriteWorkerClient';
+import { ensureProjectHydrated } from './layerBitmapCache';
 
 const DB_NAME = 'pixelforge_db';
 const DB_VERSION = 1;
 const STORE_RECENTS = 'recents_meta';
 const STORE_BLOBS = 'project_blobs';
 const MAX_RECENTS = 10;
+const MAX_RECENTS_TOTAL_BYTES = 80 * 1024 * 1024; // 80 MB total IndexedDB budget across recents
+const MIN_RETAINED_RECENTS = 2;
+
+interface StoredRecentMeta extends RecentProject {
+  byteLength?: number;
+}
 
 interface StoredBlobRecord {
   id: string;
   title: string;
   asepriteBinary: Uint8Array;
+  byteLength?: number;
   updatedAt: number;
   extra?: {
     paletteLibrary?: any[];
@@ -87,40 +95,43 @@ const activeSaveByProject = new Map<string, Promise<RecentProject>>();
 const queuedSaveByProject = new Map<string, ProjectState>();
 
 async function performSaveRecentProject(project: ProjectState): Promise<RecentProject> {
-  const metadata: RecentProject = {
-    id: project.id,
-    title: project.title,
-    width: project.width,
-    height: project.height,
+  const hydratedProject = ensureProjectHydrated(project);
+  const metadata: StoredRecentMeta = {
+    id: hydratedProject.id,
+    title: hydratedProject.title,
+    width: hydratedProject.width,
+    height: hydratedProject.height,
     timestamp: Date.now()
   };
 
   try {
-    // Compress to .aseprite binary off the main thread using fast deflate level 1 for autosave
-    const asepriteBinary = await encodeAsepriteAsync(project, { compressionLevel: 1 });
+    // Compress to .aseprite binary off the main thread (uses native CompressionStream for large cels)
+    const asepriteBinary = await encodeAsepriteAsync(hydratedProject, { compressionLevel: 1 });
+    metadata.byteLength = asepriteBinary.byteLength;
 
     const blobRecord: StoredBlobRecord = {
-      id: project.id,
-      title: project.title,
+      id: hydratedProject.id,
+      title: hydratedProject.title,
       asepriteBinary,
+      byteLength: asepriteBinary.byteLength,
       updatedAt: metadata.timestamp,
       extra: {
-        paletteLibrary: project.paletteLibrary,
-        activePaletteId: project.activePaletteId,
-        primaryColor: project.primaryColor,
-        secondaryColor: project.secondaryColor,
-        symmetry: project.symmetry,
-        inkType: project.inkType,
-        shades: project.shades,
-        tool: project.tool,
-        brushSize: project.brushSize,
-        brushShape: project.brushShape,
-        zoom: project.zoom,
-        activeLayerId: project.activeLayerId,
-        activeFrameIndex: project.activeFrameIndex,
-        originalLayerIds: project.layers.map(l => l.id),
-        originalFrameIds: project.frames.map(f => f.id),
-        colorMode: project.colorMode
+        paletteLibrary: hydratedProject.paletteLibrary,
+        activePaletteId: hydratedProject.activePaletteId,
+        primaryColor: hydratedProject.primaryColor,
+        secondaryColor: hydratedProject.secondaryColor,
+        symmetry: hydratedProject.symmetry,
+        inkType: hydratedProject.inkType,
+        shades: hydratedProject.shades,
+        tool: hydratedProject.tool,
+        brushSize: hydratedProject.brushSize,
+        brushShape: hydratedProject.brushShape,
+        zoom: hydratedProject.zoom,
+        activeLayerId: hydratedProject.activeLayerId,
+        activeFrameIndex: hydratedProject.activeFrameIndex,
+        originalLayerIds: hydratedProject.layers.map(l => l.id),
+        originalFrameIds: hydratedProject.frames.map(f => f.id),
+        colorMode: hydratedProject.colorMode
       }
     };
 
@@ -134,16 +145,23 @@ async function performSaveRecentProject(project: ProjectState): Promise<RecentPr
         recentsStore.put(metadata);
         blobsStore.put(blobRecord);
 
-        // Fetch all recents to prune excess
+        // Fetch all recents to prune by both count (MAX_RECENTS) and total byte budget
         const getAllReq = recentsStore.getAll();
         getAllReq.onsuccess = () => {
-          const allRecents: RecentProject[] = getAllReq.result || [];
-          if (allRecents.length > MAX_RECENTS) {
-            allRecents.sort((a, b) => b.timestamp - a.timestamp);
-            const toRemove = allRecents.slice(MAX_RECENTS);
-            for (const item of toRemove) {
+          const allRecents: StoredRecentMeta[] = getAllReq.result || [];
+          allRecents.sort((a, b) => b.timestamp - a.timestamp);
+          let cumulativeBytes = 0;
+          for (let i = 0; i < allRecents.length; i++) {
+            const item = allRecents[i];
+            const itemBytes = item.byteLength ?? 0;
+            const exceedsCount = i >= MAX_RECENTS;
+            const exceedsBytes =
+              i >= MIN_RETAINED_RECENTS && cumulativeBytes + itemBytes > MAX_RECENTS_TOTAL_BYTES;
+            if (exceedsCount || exceedsBytes) {
               recentsStore.delete(item.id);
               blobsStore.delete(item.id);
+            } else {
+              cumulativeBytes += itemBytes;
             }
           }
         };
@@ -269,12 +287,12 @@ export async function loadRecentProjectState(id: string): Promise<ProjectState |
   }
 
   try {
-    // Decompress and parse the .aseprite binary off the main thread
+    // Decompress and parse the .aseprite binary off the main thread (transfer owned slice directly)
     const copiedBuffer = record.asepriteBinary.buffer.slice(
       record.asepriteBinary.byteOffset,
       record.asepriteBinary.byteOffset + record.asepriteBinary.byteLength
     );
-    const parsed = await parseAsepriteAsync(copiedBuffer, record.title);
+    const parsed = await parseAsepriteAsync(copiedBuffer, record.title, { transfer: true });
 
     // Ensure the original project ID and title are preserved
     parsed.id = record.id;

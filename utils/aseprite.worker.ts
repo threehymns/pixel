@@ -1,6 +1,7 @@
 import {
   encodeAseprite,
   parseAseprite,
+  precompressLargeCelsInCache,
   AsepriteEncodeInput,
   AsepriteCompressionLevel,
   CachedEncodedCel,
@@ -8,6 +9,7 @@ import {
 import { isLittleEndian } from './pixelBuffer';
 
 const WORKER_MAX_CEL_CACHE_ENTRIES = 48;
+const WORKER_MAX_CEL_CACHE_BYTES = 96 * 1024 * 1024; // 96 MB byte cap to avoid 500MB-1GB worker bloat on 4K photos
 const workerCelCache = new Map<number, CachedEncodedCel>();
 
 type WorkerRequest =
@@ -34,19 +36,23 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
   const msg = event.data;
   try {
     if (msg.type === 'encode') {
-      const encoded = encodeAseprite(msg.payload, {
+      const encodeOpts = {
         compressionLevel: msg.compressionLevel,
         frameGridIds: msg.frameGridIds,
         externalCelCache: workerCelCache,
         maxExternalCacheEntries: WORKER_MAX_CEL_CACHE_ENTRIES,
-      });
+        maxExternalCacheBytes: WORKER_MAX_CEL_CACHE_BYTES,
+      };
+      await precompressLargeCelsInCache(msg.payload, encodeOpts);
+      const encoded = encodeAseprite(msg.payload, encodeOpts);
       // Slice to an exact ArrayBuffer so it can be transferred with zero copy
       const exactBuffer =
         encoded.byteOffset === 0 && encoded.byteLength === encoded.buffer.byteLength
           ? (encoded.buffer as ArrayBuffer)
           : encoded.slice().buffer;
+      const cachedGridIds = Array.from(workerCelCache.keys());
       (self as unknown as Worker).postMessage(
-        { id: msg.id, ok: true, buffer: exactBuffer },
+        { id: msg.id, ok: true, buffer: exactBuffer, cachedGridIds },
         [exactBuffer]
       );
     } else if (msg.type === 'parse') {
